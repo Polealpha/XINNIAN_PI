@@ -9,6 +9,7 @@ import re
 import subprocess
 import base64
 import hashlib
+import secrets
 from collections import deque
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -32,6 +33,9 @@ from .schemas import (
     DeviceInfoResponse,
     DeviceHeartbeatRequest,
     DeviceHeartbeatResponse,
+    DeviceClaimRequest,
+    DeviceClaimResponse,
+    DeviceClaimStatusResponse,
     ClientSessionHeartbeatRequest,
     ClientSessionHeartbeatResponse,
     DeviceStatusResponse,
@@ -39,6 +43,9 @@ from .schemas import (
     EngineSignalPullRequest,
     EngineSignalPullResponse,
     EngineSignalRequest,
+    OwnerEnrollmentRequest,
+    OwnerEnrollmentResponse,
+    OwnerStatusResponse,
     EmotionEventRequest,
     EmotionEventResponse,
     LoginEmailRequest,
@@ -752,10 +759,24 @@ def _update_device_status(
         UPDATE devices
         SET last_seen_ms = COALESCE(?, last_seen_ms),
             status_json = COALESCE(?, status_json),
+            onboarding_state = COALESCE(?, onboarding_state),
+            identity_state = COALESCE(?, identity_state),
+            identity_version = COALESCE(?, identity_version),
+            owner_last_seen_ms = COALESCE(?, owner_last_seen_ms),
             updated_at = ?
         WHERE user_id = ? AND device_id = ?
         """,
-        (last_seen_ms, status_json, now_ms, user_id, device_id),
+        (
+            last_seen_ms,
+            status_json,
+            (status or {}).get("onboarding_state") if isinstance(status, dict) else None,
+            (status or {}).get("identity_state") if isinstance(status, dict) else None,
+            (status or {}).get("embedding_version") if isinstance(status, dict) else None,
+            last_seen_ms if isinstance(status, dict) and bool(status.get("owner_recognized")) else None,
+            now_ms,
+            user_id,
+            device_id,
+        ),
     )
     conn.commit()
 
@@ -779,13 +800,178 @@ def _update_devices_by_device_id(
             ssid = COALESCE(?, ssid),
             last_seen_ms = COALESCE(?, last_seen_ms),
             status_json = COALESCE(?, status_json),
+            onboarding_state = COALESCE(?, onboarding_state),
+            identity_state = COALESCE(?, identity_state),
+            identity_version = COALESCE(?, identity_version),
+            owner_last_seen_ms = COALESCE(?, owner_last_seen_ms),
             updated_at = ?
         WHERE device_id = ?
         """,
-        (device_ip, device_mac, ssid, last_seen_ms, status_json, now_ms, device_id),
+        (
+            device_ip,
+            device_mac,
+            ssid,
+            last_seen_ms,
+            status_json,
+            (status or {}).get("onboarding_state") if isinstance(status, dict) else None,
+            (status or {}).get("identity_state") if isinstance(status, dict) else None,
+            (status or {}).get("embedding_version") if isinstance(status, dict) else None,
+            last_seen_ms if isinstance(status, dict) and bool(status.get("owner_recognized")) else None,
+            now_ms,
+            device_id,
+        ),
     )
     conn.commit()
     return int(cur.rowcount or 0)
+
+
+def _create_claim_session(conn: Connection, user_id: int, device_id: str) -> Dict:
+    now_ms = int(time.time() * 1000)
+    expires_at_ms = now_ms + (10 * 60 * 1000)
+    claim_token = secrets.token_urlsafe(24)
+    conn.execute(
+        """
+        UPDATE device_claim_sessions
+        SET is_active = 0, updated_at = ?
+        WHERE device_id = ?
+        """,
+        (now_ms, device_id),
+    )
+    conn.execute(
+        """
+        INSERT INTO device_claim_sessions (
+            user_id, device_id, claim_token, expires_at_ms,
+            claimed_at_ms, claimed_user_id, is_active, created_at, updated_at
+        )
+        VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?)
+        """,
+        (user_id, device_id, claim_token, expires_at_ms, now_ms, user_id, now_ms, now_ms),
+    )
+    conn.commit()
+    row = conn.execute(
+        """
+        SELECT * FROM device_claim_sessions
+        WHERE claim_token = ?
+        """,
+        (claim_token,),
+    ).fetchone()
+    return dict(row) if row else {}
+
+
+def _get_active_claim_session(conn: Connection, device_id: str) -> Dict:
+    now_ms = int(time.time() * 1000)
+    row = conn.execute(
+        """
+        SELECT * FROM device_claim_sessions
+        WHERE device_id = ? AND is_active = 1 AND expires_at_ms > ?
+        ORDER BY created_at DESC
+        LIMIT 1
+        """,
+        (device_id, now_ms),
+    ).fetchone()
+    return dict(row) if row else {}
+
+
+def _get_claim_session_by_token(conn: Connection, claim_token: str) -> Dict:
+    now_ms = int(time.time() * 1000)
+    row = conn.execute(
+        """
+        SELECT * FROM device_claim_sessions
+        WHERE claim_token = ? AND is_active = 1 AND expires_at_ms > ?
+        ORDER BY created_at DESC
+        LIMIT 1
+        """,
+        (claim_token, now_ms),
+    ).fetchone()
+    return dict(row) if row else {}
+
+
+def _upsert_owner_profile(conn: Connection, user_id: int, payload: OwnerEnrollmentRequest) -> Dict:
+    now_ms = int(time.time() * 1000)
+    existing = conn.execute(
+        """
+        SELECT * FROM device_owner_profiles
+        WHERE user_id = ? AND device_id = ?
+        """,
+        (user_id, payload.device_id),
+    ).fetchone()
+    params = (
+        payload.owner_label,
+        payload.embedding_version,
+        int(payload.enrolled_at_ms),
+        now_ms,
+        1,
+        int(payload.sample_count),
+        float(payload.similarity_threshold),
+        payload.embedding_backend,
+        now_ms,
+        user_id,
+        payload.device_id,
+    )
+    if existing:
+        conn.execute(
+            """
+            UPDATE device_owner_profiles
+            SET owner_label = ?, embedding_version = ?, enrolled_at_ms = ?,
+                last_sync_ms = ?, recognition_enabled = ?, sample_count = ?,
+                similarity_threshold = ?, embedding_backend = ?, updated_at = ?
+            WHERE user_id = ? AND device_id = ?
+            """,
+            params,
+        )
+    else:
+        conn.execute(
+            """
+            INSERT INTO device_owner_profiles (
+                owner_label, embedding_version, enrolled_at_ms, last_sync_ms,
+                recognition_enabled, sample_count, similarity_threshold, embedding_backend,
+                created_at, user_id, device_id, updated_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                payload.owner_label,
+                payload.embedding_version,
+                int(payload.enrolled_at_ms),
+                now_ms,
+                1,
+                int(payload.sample_count),
+                float(payload.similarity_threshold),
+                payload.embedding_backend,
+                now_ms,
+                user_id,
+                payload.device_id,
+                now_ms,
+            ),
+        )
+    conn.execute(
+        """
+        UPDATE devices
+        SET identity_state = ?, identity_version = ?, owner_last_seen_ms = ?, updated_at = ?
+        WHERE user_id = ? AND device_id = ?
+        """,
+        ("ready", payload.embedding_version, now_ms, now_ms, user_id, payload.device_id),
+    )
+    conn.commit()
+    row = conn.execute(
+        """
+        SELECT * FROM device_owner_profiles
+        WHERE user_id = ? AND device_id = ?
+        """,
+        (user_id, payload.device_id),
+    ).fetchone()
+    return dict(row) if row else {}
+
+
+def _get_owner_profile(conn: Connection, user_id: int, device_id: str) -> Dict:
+    row = conn.execute(
+        """
+        SELECT * FROM device_owner_profiles
+        WHERE user_id = ? AND device_id = ?
+        """,
+        (user_id, device_id),
+    ).fetchone()
+    return dict(row) if row else {}
 
 
 def _fetch_device_status(device_ip: str, timeout_sec: float = 2.0) -> Dict:
@@ -1325,6 +1511,106 @@ def device_heartbeat(
         missing_profile=bool(strategy["missing_profile"]),
         last_switch_reason=strategy["last_switch_reason"],
         profiles=profile_payload,
+    )
+
+
+@app.post("/api/device/claim", response_model=DeviceClaimResponse)
+def device_claim(
+    payload: DeviceClaimRequest,
+    credentials: HTTPAuthorizationCredentials = Depends(bearer_scheme),
+    conn: Connection = Depends(get_db),
+) -> DeviceClaimResponse:
+    user = _parse_access_token(credentials, conn)
+    device = _upsert_device(
+        conn,
+        int(user["id"]),
+        payload.device_id,
+        (payload.device_ip or "").strip() or None,
+        (payload.ssid or "").strip() or None,
+        (payload.device_mac or "").strip() or None,
+    )
+    claim = _create_claim_session(conn, int(user["id"]), payload.device_id)
+    return DeviceClaimResponse(
+        ok=True,
+        device_id=payload.device_id,
+        claim_token=str(claim.get("claim_token") or ""),
+        expires_at_ms=int(claim.get("expires_at_ms") or 0),
+        onboarding_state=str(device.get("onboarding_state") or "") or None,
+        identity_state=str(device.get("identity_state") or "") or None,
+    )
+
+
+@app.get("/api/device/claim/status", response_model=DeviceClaimStatusResponse)
+def device_claim_status(
+    device_id: str,
+    credentials: HTTPAuthorizationCredentials = Depends(bearer_scheme),
+    conn: Connection = Depends(get_db),
+) -> DeviceClaimStatusResponse:
+    user = _parse_access_token(credentials, conn)
+    device = _get_device(conn, int(user["id"]), device_id)
+    owner = _get_device_owner(conn, device_id)
+    claim = _get_active_claim_session(conn, device_id)
+    selected = device or owner
+    return DeviceClaimStatusResponse(
+        ok=True,
+        device_id=device_id,
+        claimed=bool(owner),
+        claimed_user_id=int(owner.get("user_id") or 0) if owner else None,
+        onboarding_state=(str(selected.get("onboarding_state") or "").strip() or None) if selected else None,
+        identity_state=(str(selected.get("identity_state") or "").strip() or None) if selected else None,
+        claim_active=bool(claim),
+        expires_at_ms=int(claim.get("expires_at_ms") or 0) if claim else None,
+    )
+
+
+@app.post("/api/device/owner/enrollment", response_model=OwnerEnrollmentResponse)
+def owner_enrollment(
+    payload: OwnerEnrollmentRequest,
+    credentials: HTTPAuthorizationCredentials = Depends(bearer_scheme),
+    conn: Connection = Depends(get_db),
+) -> OwnerEnrollmentResponse:
+    user_id: Optional[int] = None
+    if credentials is not None:
+        try:
+            user = _parse_access_token(credentials, conn)
+            user_id = int(user["id"])
+        except HTTPException:
+            user_id = None
+    if user_id is None:
+        claim = _get_claim_session_by_token(conn, payload.claim_token)
+        if not claim:
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid claim token")
+        user_id = int(claim["claimed_user_id"])
+    owner = _get_device_owner(conn, payload.device_id)
+    if owner and int(owner.get("user_id") or 0) != int(user_id):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Device owned by another user")
+    _upsert_device(conn, int(user_id), payload.device_id)
+    _upsert_owner_profile(conn, int(user_id), payload)
+    return OwnerEnrollmentResponse(
+        ok=True,
+        device_id=payload.device_id,
+        embedding_version=payload.embedding_version,
+        identity_state="ready",
+    )
+
+
+@app.get("/api/device/owner/status", response_model=OwnerStatusResponse)
+def owner_status(
+    device_id: str,
+    credentials: HTTPAuthorizationCredentials = Depends(bearer_scheme),
+    conn: Connection = Depends(get_db),
+) -> OwnerStatusResponse:
+    user = _parse_access_token(credentials, conn)
+    profile = _get_owner_profile(conn, int(user["id"]), device_id)
+    return OwnerStatusResponse(
+        ok=True,
+        device_id=device_id,
+        enrolled=bool(profile),
+        owner_label=(str(profile.get("owner_label") or "").strip() or None) if profile else None,
+        embedding_version=(str(profile.get("embedding_version") or "").strip() or None) if profile else None,
+        recognition_enabled=bool(int(profile.get("recognition_enabled") or 0)) if profile else True,
+        last_sync_ms=int(profile.get("last_sync_ms") or 0) if profile else None,
+        enrolled_at_ms=int(profile.get("enrolled_at_ms") or 0) if profile else None,
     )
 
 

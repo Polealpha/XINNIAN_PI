@@ -151,6 +151,62 @@ class DeviceHeartbeatResponse(BaseModel):
     profiles: list[dict] = Field(default_factory=list)
 
 
+class DeviceClaimRequest(BaseModel):
+    device_id: str
+    device_ip: Optional[str] = None
+    device_mac: Optional[str] = None
+    ssid: Optional[str] = None
+
+
+class DeviceClaimResponse(BaseModel):
+    ok: bool
+    device_id: str
+    claim_token: str
+    expires_at_ms: int
+    onboarding_state: Optional[str] = None
+    identity_state: Optional[str] = None
+
+
+class DeviceClaimStatusResponse(BaseModel):
+    ok: bool
+    device_id: str
+    claimed: bool
+    claimed_user_id: Optional[int] = None
+    onboarding_state: Optional[str] = None
+    identity_state: Optional[str] = None
+    claim_active: bool = False
+    expires_at_ms: Optional[int] = None
+
+
+class OwnerEnrollmentRequest(BaseModel):
+    device_id: str
+    claim_token: str = ""
+    owner_label: str = "owner"
+    embedding_version: str
+    sample_count: int = 0
+    similarity_threshold: float = 0.0
+    enrolled_at_ms: int
+    embedding_backend: str = "face-hist-v1"
+
+
+class OwnerEnrollmentResponse(BaseModel):
+    ok: bool
+    device_id: str
+    embedding_version: str
+    identity_state: str
+
+
+class OwnerStatusResponse(BaseModel):
+    ok: bool
+    device_id: str
+    enrolled: bool
+    owner_label: Optional[str] = None
+    embedding_version: Optional[str] = None
+    recognition_enabled: bool = True
+    last_sync_ms: Optional[int] = None
+    enrolled_at_ms: Optional[int] = None
+
+
 class ClientSessionHeartbeatRequest(BaseModel):
     client_type: str
     client_id: str

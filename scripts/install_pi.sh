@@ -93,6 +93,9 @@ env "${PIP_ENV[@]}" python -m pip install -r "${ROOT_DIR}/requirements-pi.txt"
 if [[ -f "${ROOT_DIR}/requirements-pi-optional.txt" ]]; then
   echo "[install] optional python packages are kept separate; install manually when enabling cloud providers or PCA9685 extras."
 fi
+if [[ -f "${ROOT_DIR}/scripts/fetch_identity_models.py" ]]; then
+  env "${PIP_ENV[@]}" python "${ROOT_DIR}/scripts/fetch_identity_models.py" || echo "[install] skip identity model download"
+fi
 
 if [[ ! -f "${ENV_FILE}" ]]; then
   sudo tee "${ENV_FILE}" >/dev/null <<'EOF'

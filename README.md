@@ -45,10 +45,32 @@ python server_backend/run_server.py
 - `GET /status`
 - `GET /risk`
 - `GET /events?limit=50`
+- `GET /onboarding/state`
+- `GET /onboarding/networks`
+- `POST /onboarding/wifi`
+- `POST /onboarding/reset`
+- `GET /camera/preview.jpg`
+- `GET /owner/status`
+- `POST /owner/enrollment/start`
+- `POST /owner/enrollment/reset`
 - `POST /signal`
 - `POST /care/manual`
 - `POST /speak`
 - `GET /summary`
+
+## Backend API additions
+
+- `POST /api/device/claim`
+- `GET /api/device/claim/status`
+- `POST /api/device/owner/enrollment`
+- `GET /api/device/owner/status`
+
+## Video and onboarding flow
+
+- There is no backend video relay. The Pi captures frames locally through `picamera2` or OpenCV and only exposes a local JPEG preview endpoint.
+- First-time Wi-Fi setup is now Pi-local: when `wlan0` has no working Wi-Fi, the Pi can start a temporary hotspot and accept Wi-Fi credentials through the local onboarding API.
+- After the Pi joins the home network, the desktop or mobile client should authenticate against the backend, call `/api/device/claim`, then call the Pi-local owner enrollment API with the returned `claim_token`.
+- The Pi stores the owner embedding locally under `/var/lib/emotion-pi/identity/`; the backend stores only claim and owner metadata.
 
 ## Hardware bring-up
 

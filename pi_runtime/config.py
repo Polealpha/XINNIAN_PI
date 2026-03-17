@@ -19,6 +19,39 @@ class DeviceConfig:
 
 
 @dataclass
+class BackendSyncConfig:
+    enabled: bool = False
+    base_url: str = ""
+    heartbeat_interval_sec: int = 15
+    timeout_sec: int = 5
+
+
+@dataclass
+class OnboardingConfig:
+    enabled: bool = True
+    hotspot_ssid: str = "EmotionPi-Setup"
+    hotspot_password: str = "emotionpi123"
+    hotspot_connection_name: str = "emotion-pi-onboarding"
+    wifi_interface: str = "wlan0"
+    state_file: str = "/var/lib/emotion-pi/onboarding_state.json"
+
+
+@dataclass
+class IdentityConfig:
+    enabled: bool = True
+    storage_dir: str = "/var/lib/emotion-pi/identity"
+    models_dir: str = "models/identity"
+    detector_model_path: str = "models/identity/face_detection_yunet_2023mar.onnx"
+    recognizer_model_path: str = "models/identity/face_recognition_sface_2021dec.onnx"
+    recognition_interval_ms: int = 750
+    enrollment_min_samples: int = 8
+    enrollment_target_samples: int = 10
+    enrollment_max_samples: int = 12
+    enrollment_sample_interval_ms: int = 700
+    similarity_threshold: float = 0.36
+
+
+@dataclass
 class AudioCaptureConfig:
     enabled: bool = True
     sample_rate: int = 16000
@@ -72,6 +105,19 @@ class PanServoConfig:
 
 
 @dataclass
+class TiltServoConfig:
+    enabled: bool = False
+    driver: str = "mock"
+    gpio_pin: Optional[int] = None
+    min_angle: int = -35
+    max_angle: int = 35
+    center_angle: int = 0
+    pca9685_channel: Optional[int] = None
+    pulse_min_us: int = 500
+    pulse_max_us: int = 2500
+
+
+@dataclass
 class Pca9685Config:
     enabled: bool = False
     address: int = 0x40
@@ -84,6 +130,7 @@ class HardwareConfig:
     speaker_command: List[str] = field(default_factory=lambda: ["aplay", "-q"])
     status_led_gpio: Optional[int] = None
     pan_servo: PanServoConfig = field(default_factory=PanServoConfig)
+    tilt_servo: TiltServoConfig = field(default_factory=TiltServoConfig)
     pca9685: Pca9685Config = field(default_factory=Pca9685Config)
 
 
@@ -91,6 +138,9 @@ class HardwareConfig:
 class PiRuntimeConfig:
     service: ServiceConfig = field(default_factory=ServiceConfig)
     device: DeviceConfig = field(default_factory=DeviceConfig)
+    backend: BackendSyncConfig = field(default_factory=BackendSyncConfig)
+    onboarding: OnboardingConfig = field(default_factory=OnboardingConfig)
+    identity: IdentityConfig = field(default_factory=IdentityConfig)
     audio: AudioCaptureConfig = field(default_factory=AudioCaptureConfig)
     camera: CameraCaptureConfig = field(default_factory=CameraCaptureConfig)
     hardware: HardwareConfig = field(default_factory=HardwareConfig)
@@ -99,22 +149,30 @@ class PiRuntimeConfig:
     def from_dict(cls, data: dict) -> "PiRuntimeConfig":
         service = ServiceConfig(**(data.get("service") or {}))
         device = DeviceConfig(**(data.get("device") or {}))
+        backend = BackendSyncConfig(**(data.get("backend") or {}))
+        onboarding = OnboardingConfig(**(data.get("onboarding") or {}))
+        identity = IdentityConfig(**(data.get("identity") or {}))
         audio = AudioCaptureConfig(**(data.get("audio") or {}))
         camera = CameraCaptureConfig(**(data.get("camera") or {}))
 
         hardware_raw = data.get("hardware") or {}
         pan_servo = PanServoConfig(**(hardware_raw.get("pan_servo") or {}))
+        tilt_servo = TiltServoConfig(**(hardware_raw.get("tilt_servo") or {}))
         pca9685 = Pca9685Config(**(hardware_raw.get("pca9685") or {}))
         hardware = HardwareConfig(
             driver=str(hardware_raw.get("driver", "mock") or "mock"),
             speaker_command=list(hardware_raw.get("speaker_command") or ["aplay", "-q"]),
             status_led_gpio=hardware_raw.get("status_led_gpio"),
             pan_servo=pan_servo,
+            tilt_servo=tilt_servo,
             pca9685=pca9685,
         )
         return cls(
             service=service,
             device=device,
+            backend=backend,
+            onboarding=onboarding,
+            identity=identity,
             audio=audio,
             camera=camera,
             hardware=hardware,

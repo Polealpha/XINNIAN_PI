@@ -6,7 +6,7 @@ from contextlib import asynccontextmanager
 from typing import Optional
 
 import uvicorn
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException, Response
 from pydantic import BaseModel, Field
 
 from engine.core.types import UserSignal
@@ -26,6 +26,16 @@ class SignalRequest(BaseModel):
 
 class SpeakRequest(BaseModel):
     text: str
+
+
+class WifiRequest(BaseModel):
+    ssid: str
+    password: str = ""
+
+
+class EnrollmentRequest(BaseModel):
+    owner_label: str = "owner"
+    claim_token: str = ""
 
 
 def build_app(pi_config_path: str, engine_config_path: str) -> FastAPI:
@@ -51,7 +61,7 @@ def build_app(pi_config_path: str, engine_config_path: str) -> FastAPI:
     @app.get("/status")
     def status() -> dict:
         assert runtime is not None
-        return runtime.get_status().__dict__
+        return runtime.get_status_payload()
 
     @app.get("/risk")
     def risk() -> dict:
@@ -96,6 +106,58 @@ def build_app(pi_config_path: str, engine_config_path: str) -> FastAPI:
             )
         )
         return {"ok": True}
+
+    @app.get("/onboarding/state")
+    def onboarding_state() -> dict:
+        assert runtime is not None
+        return runtime.get_onboarding_state()
+
+    @app.get("/onboarding/networks")
+    def onboarding_networks() -> dict:
+        assert runtime is not None
+        return {"networks": runtime.scan_networks()}
+
+    @app.post("/onboarding/wifi")
+    def onboarding_wifi(payload: WifiRequest) -> dict:
+        assert runtime is not None
+        try:
+            return {"ok": True, "state": runtime.configure_wifi(payload.ssid, payload.password)}
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.post("/onboarding/reset")
+    def onboarding_reset() -> dict:
+        assert runtime is not None
+        return {"ok": True, "state": runtime.reset_onboarding()}
+
+    @app.get("/camera/preview.jpg")
+    def preview() -> Response:
+        assert runtime is not None
+        content = runtime.get_preview_jpeg()
+        if not content:
+            raise HTTPException(status_code=503, detail="preview unavailable")
+        return Response(content=content, media_type="image/jpeg")
+
+    @app.get("/owner/status")
+    def owner_status() -> dict:
+        assert runtime is not None
+        return runtime.get_owner_status()
+
+    @app.post("/owner/enrollment/start")
+    def owner_enrollment_start(payload: EnrollmentRequest) -> dict:
+        assert runtime is not None
+        try:
+            return {"ok": True, "state": runtime.start_owner_enrollment(payload.owner_label, payload.claim_token)}
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.post("/owner/enrollment/reset")
+    def owner_enrollment_reset() -> dict:
+        assert runtime is not None
+        try:
+            return {"ok": True, "state": runtime.reset_owner_profile()}
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     return app
 

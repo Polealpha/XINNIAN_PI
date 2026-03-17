@@ -27,9 +27,20 @@ from engine.trigger.trigger_manager import TriggerDecision, TriggerManager
 from engine.tts.tts_engine import TtsEngine
 from engine.vision.face_detector import FaceDetector
 from engine.vision.face_tracker import FaceTracker
+from engine.vision.vision_types import FaceDet
 
+from .backend_sync import BackendSyncClient
 from .config import PiRuntimeConfig, load_pi_config
 from .hardware import BaseHardware, build_hardware
+from .identity import OwnerIdentityManager
+from .onboarding import OnboardingManager
+
+try:
+    import cv2  # type: ignore
+    import numpy as np  # type: ignore
+except Exception:  # pragma: no cover
+    cv2 = None
+    np = None
 
 logger = logging.getLogger(__name__)
 
@@ -56,9 +67,18 @@ class PiEmotionRuntime:
         self._llm: Optional[LLMResponder] = None
         self._tts = TtsEngine()
         self._hardware: BaseHardware = build_hardware(self.pi_config.hardware)
+        self._onboarding = OnboardingManager(self.pi_config.onboarding)
 
         self._face_detector = FaceDetector(asdict(self.engine_config.face_tracking)) if self.pi_config.camera.enabled else None
         self._face_tracker = FaceTracker(asdict(self.engine_config.face_tracking)) if self.pi_config.camera.enabled else None
+        self._identity = OwnerIdentityManager(self.pi_config.identity) if self.pi_config.identity.enabled else None
+        self._backend_sync = BackendSyncClient(
+            self.pi_config.backend,
+            self.pi_config.device.device_id,
+            self.get_status_payload,
+            self._get_pending_owner_sync,
+            self._mark_owner_sync_complete,
+        )
 
         self._audio_seq = 0
         self._video_seq = 0
@@ -92,6 +112,22 @@ class PiEmotionRuntime:
         self._summary_events: List[Dict[str, object]] = []
         self._last_summary_payload: Dict[str, object] = {"summary": "", "highlights": [], "count": 0}
         self._summary_last_date: Optional[str] = None
+        self._last_pan_turn = 0.0
+        self._last_tilt_turn = 0.0
+        self._last_pan_angle = float(self.pi_config.hardware.pan_servo.center_angle)
+        self._last_tilt_angle = float(self.pi_config.hardware.tilt_servo.center_angle)
+        self._preview_lock = threading.Lock()
+        self._latest_preview_jpeg: bytes = b""
+        self._latest_preview_ts_ms = 0
+        self._identity_state: Dict[str, object] = self._identity.get_status() if self._identity else {
+            "identity_state": "disabled",
+            "owner_recognized": False,
+            "owner_confidence": 0.0,
+            "recognition_label": "disabled",
+            "enrollment_active": False,
+        }
+        self._tracking_target = "none"
+        self._last_status_ts_ms = 0
 
         self._rms_mean = 0.0
         self._rms_m2 = 0.0
@@ -102,6 +138,10 @@ class PiEmotionRuntime:
             return
         self._running = True
         self._stop.clear()
+        self._onboarding.ensure_bootstrap_mode()
+        if self._backend_sync.enabled:
+            self.on_event(self._backend_sync.enqueue_event)
+            self._backend_sync.start()
         if self.pi_config.audio.enabled:
             self._threads.append(threading.Thread(target=self._audio_loop, name="pi-audio", daemon=True))
         if self.pi_config.camera.enabled:
@@ -116,6 +156,7 @@ class PiEmotionRuntime:
         for thread in list(self._threads):
             thread.join(timeout=2.0)
         self._threads.clear()
+        self._backend_sync.stop()
         self._hardware.close()
 
     def _ensure_llm(self) -> Optional[LLMResponder]:
@@ -146,6 +187,68 @@ class PiEmotionRuntime:
                 "control_local": True,
             },
         )
+
+    def get_status_payload(self) -> Dict[str, object]:
+        status = self.get_status()
+        onboarding = self._onboarding.get_state()
+        identity_state = dict(self._identity_state)
+        payload = {
+            **status.__dict__,
+            "timestamp_ms": self._now_ms(),
+            "device_id": self.pi_config.device.device_id,
+            "scene": self.pi_config.device.scene,
+            "ssid": onboarding.get("connected_ssid"),
+            "onboarding_state": onboarding.get("mode"),
+            "identity_state": identity_state.get("identity_state"),
+            "owner_recognized": bool(identity_state.get("owner_recognized")),
+            "owner_confidence": float(identity_state.get("owner_confidence", 0.0) or 0.0),
+            "tracking_target": self._tracking_target,
+            "pan_angle": round(float(self._last_pan_angle), 2),
+            "tilt_angle": round(float(self._last_tilt_angle), 2),
+            "recognition_label": identity_state.get("recognition_label"),
+            "embedding_version": identity_state.get("embedding_version"),
+            "enrollment_active": bool(identity_state.get("enrollment_active")),
+        }
+        self._last_status_ts_ms = int(payload["timestamp_ms"])
+        return payload
+
+    def get_preview_jpeg(self) -> bytes:
+        with self._preview_lock:
+            return bytes(self._latest_preview_jpeg)
+
+    def get_onboarding_state(self) -> Dict[str, object]:
+        state = self._onboarding.get_state()
+        state["identity_state"] = self._identity_state.get("identity_state")
+        return state
+
+    def scan_networks(self) -> List[Dict[str, object]]:
+        return self._onboarding.scan_networks()
+
+    def configure_wifi(self, ssid: str, password: str) -> Dict[str, object]:
+        return self._onboarding.configure_wifi(ssid, password)
+
+    def reset_onboarding(self) -> Dict[str, object]:
+        return self._onboarding.reset()
+
+    def start_owner_enrollment(self, owner_label: str = "owner", claim_token: str = "") -> Dict[str, object]:
+        if self._identity is None:
+            raise RuntimeError("identity disabled")
+        status = self._identity.start_enrollment(owner_label, claim_token)
+        self._identity_state = dict(status)
+        return status
+
+    def get_owner_status(self) -> Dict[str, object]:
+        if self._identity is None:
+            return dict(self._identity_state)
+        self._identity_state = self._identity.get_status()
+        return dict(self._identity_state)
+
+    def reset_owner_profile(self) -> Dict[str, object]:
+        if self._identity is None:
+            raise RuntimeError("identity disabled")
+        status = self._identity.reset_owner()
+        self._identity_state = dict(status)
+        return status
 
     def get_risk_snapshot(self) -> Dict[str, object]:
         return {
@@ -400,29 +503,54 @@ class PiEmotionRuntime:
         if self._mode == "privacy":
             return
         self._last_video_ts = frame.timestamp_ms
+        frame_bgr = self._frame_to_bgr(frame)
+        self._update_preview(frame_bgr, frame.timestamp_ms)
         det = self._face_detector.detect(frame) if self._face_detector and self._face_detector.ready else None
-        if det and det.found:
+        target_det = det if det and det.found else None
+
+        if self._identity is not None and frame_bgr is not None:
+            identity_result = self._identity.process_frame(frame_bgr, frame.timestamp_ms)
+            self._identity_state = {k: v for k, v in identity_result.items() if k != "tracking_bbox"}
+            tracking_bbox = identity_result.get("tracking_bbox")
+            if isinstance(tracking_bbox, tuple) and len(tracking_bbox) == 4:
+                target_det = self._target_det_from_bbox(tracking_bbox, frame.width, frame.height)
+                self._tracking_target = "owner" if bool(self._identity_state.get("owner_recognized")) else "largest_face"
+            else:
+                self._tracking_target = "none"
+            for event in self._identity.pop_events():
+                self._emit(str(event.get("type") or "OwnerState"), frame.timestamp_ms, dict(event.get("payload") or {}))
+
+        if target_det and target_det.found:
             self._face_missing_ms = 0
             self._last_face_present = True
-            turn, dbg = self._face_tracker.update(det, frame.width, frame.timestamp_ms) if self._face_tracker else (None, {})
-            if turn is not None:
-                self._hardware.set_pan_turn(turn)
+            pan_turn, tilt_turn, dbg = (
+                self._face_tracker.update(target_det, frame.width, frame.height, frame.timestamp_ms)
+                if self._face_tracker
+                else (None, None, {})
+            )
+            if pan_turn is not None or tilt_turn is not None:
+                self._apply_pan_tilt(
+                    self._last_pan_turn if pan_turn is None else pan_turn,
+                    self._last_tilt_turn if tilt_turn is None else tilt_turn,
+                )
             ex_smooth = abs(float(dbg.get("ex_smooth", 0.0)))
             dead_zone = float(dbg.get("dead_zone", 0.08))
             attention_drop = max(0.0, min(1.0, (ex_smooth - dead_zone) / max(0.01, 1.0 - dead_zone)))
-            face_area = float(det.area_ratio or 0.0)
+            face_area = float(target_det.area_ratio or 0.0)
             face_size_penalty = 0.0 if face_area >= 0.06 else max(0.0, min(1.0, (0.06 - face_area) / 0.06))
             self._last_v_raw = max(0.0, min(1.0, 0.65 * attention_drop + 0.35 * face_size_penalty))
             self._last_v_sub = {
                 "face_ok": 1.0,
                 "attention_drop": round(attention_drop, 3),
                 "face_area_ratio": round(face_area, 4),
+                "tracking_target": self._tracking_target,
                 "expression_class_id": 0,
                 "expression_confidence": 0.0,
             }
         else:
             self._face_missing_ms += int(1000 / max(1, self.pi_config.camera.fps))
             self._last_face_present = False
+            self._tracking_target = "none"
             grace_ms = int(self.engine_config.video.face_missing_grace_sec * 1000)
             self._last_v_raw = max(0.0, min(1.0, self._face_missing_ms / max(grace_ms * 2, 1)))
             self._last_v_sub = {
@@ -663,6 +791,72 @@ class PiEmotionRuntime:
 
     def _emit(self, event_type: str, timestamp_ms: int, payload: dict) -> None:
         self._event_bus.emit(Event(type=event_type, timestamp_ms=timestamp_ms, payload=payload))
+
+    def _frame_to_bgr(self, frame: VideoFrame):
+        if np is None or frame.format.lower() != "bgr":
+            return None
+        try:
+            return np.frombuffer(frame.data, dtype=np.uint8).reshape((frame.height, frame.width, 3))
+        except Exception:
+            return None
+
+    def _update_preview(self, frame_bgr, timestamp_ms: int) -> None:
+        if frame_bgr is None or cv2 is None:
+            return
+        try:
+            ok, encoded = cv2.imencode(".jpg", frame_bgr, [int(cv2.IMWRITE_JPEG_QUALITY), 80])
+            if not ok:
+                return
+            with self._preview_lock:
+                self._latest_preview_jpeg = encoded.tobytes()
+                self._latest_preview_ts_ms = int(timestamp_ms)
+        except Exception:
+            return
+
+    def _target_det_from_bbox(self, bbox, frame_w: int, frame_h: int) -> FaceDet:
+        x, y, w, h = [int(v) for v in bbox]
+        area_ratio = (max(1, w) * max(1, h)) / float(max(1, frame_w * frame_h))
+        return FaceDet(
+            found=True,
+            bbox=(x, y, w, h),
+            score=1.0,
+            cx=float(x + (w * 0.5)),
+            cy=float(y + (h * 0.5)),
+            area_ratio=float(area_ratio),
+        )
+
+    def _apply_pan_tilt(self, pan_turn: float, tilt_turn: float) -> None:
+        self._hardware.set_pan_tilt(float(pan_turn), float(tilt_turn))
+        self._last_pan_turn = float(pan_turn)
+        self._last_tilt_turn = float(tilt_turn)
+        self._last_pan_angle = self._servo_angle_from_turn(
+            float(pan_turn),
+            self.pi_config.hardware.pan_servo.center_angle,
+            self.pi_config.hardware.pan_servo.min_angle,
+            self.pi_config.hardware.pan_servo.max_angle,
+        )
+        self._last_tilt_angle = self._servo_angle_from_turn(
+            float(tilt_turn),
+            self.pi_config.hardware.tilt_servo.center_angle,
+            self.pi_config.hardware.tilt_servo.min_angle,
+            self.pi_config.hardware.tilt_servo.max_angle,
+        )
+
+    def _servo_angle_from_turn(self, turn: float, center: float, min_angle: float, max_angle: float) -> float:
+        span = max(abs(float(min_angle)), abs(float(max_angle)))
+        angle = float(center) + (float(turn) * span)
+        return max(float(min_angle), min(float(max_angle), angle))
+
+    def _get_pending_owner_sync(self) -> Optional[Dict[str, object]]:
+        if self._identity is None:
+            return None
+        return self._identity.get_pending_sync()
+
+    def _mark_owner_sync_complete(self, embedding_version: str) -> None:
+        if self._identity is None:
+            return
+        self._identity.mark_sync_complete(embedding_version)
+        self._identity_state = self._identity.get_status()
 
     @staticmethod
     def _now_ms() -> int:

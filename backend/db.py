@@ -137,6 +137,10 @@ def init_db() -> None:
         _ensure_column(conn, "devices", "last_seen_ms", "INTEGER")
         _ensure_column(conn, "devices", "status_json", "TEXT")
         _ensure_column(conn, "devices", "updated_at", "INTEGER NOT NULL DEFAULT 0")
+        _ensure_column(conn, "devices", "onboarding_state", "TEXT")
+        _ensure_column(conn, "devices", "identity_state", "TEXT")
+        _ensure_column(conn, "devices", "identity_version", "TEXT")
+        _ensure_column(conn, "devices", "owner_last_seen_ms", "INTEGER")
         cursor.execute(
             """
             CREATE TABLE IF NOT EXISTS wifi_profiles (
@@ -180,6 +184,50 @@ def init_db() -> None:
         _ensure_column(conn, "client_sessions", "last_seen_ms", "INTEGER NOT NULL DEFAULT 0")
         _ensure_column(conn, "client_sessions", "is_active", "INTEGER NOT NULL DEFAULT 1")
         _ensure_column(conn, "client_sessions", "updated_at", "INTEGER NOT NULL DEFAULT 0")
+        cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS device_claim_sessions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                device_id TEXT NOT NULL,
+                claim_token TEXT UNIQUE NOT NULL,
+                expires_at_ms INTEGER NOT NULL,
+                claimed_at_ms INTEGER NOT NULL,
+                claimed_user_id INTEGER NOT NULL,
+                is_active INTEGER NOT NULL DEFAULT 1,
+                created_at INTEGER NOT NULL,
+                updated_at INTEGER NOT NULL,
+                FOREIGN KEY(user_id) REFERENCES users(id)
+            )
+            """
+        )
+        _ensure_column(conn, "device_claim_sessions", "is_active", "INTEGER NOT NULL DEFAULT 1")
+        _ensure_column(conn, "device_claim_sessions", "updated_at", "INTEGER NOT NULL DEFAULT 0")
+        cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS device_owner_profiles (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                device_id TEXT NOT NULL,
+                owner_label TEXT NOT NULL,
+                embedding_version TEXT NOT NULL,
+                enrolled_at_ms INTEGER NOT NULL,
+                last_sync_ms INTEGER NOT NULL,
+                recognition_enabled INTEGER NOT NULL DEFAULT 1,
+                sample_count INTEGER NOT NULL DEFAULT 0,
+                similarity_threshold REAL NOT NULL DEFAULT 0,
+                embedding_backend TEXT NOT NULL DEFAULT 'face-hist-v1',
+                created_at INTEGER NOT NULL,
+                updated_at INTEGER NOT NULL,
+                UNIQUE(user_id, device_id),
+                FOREIGN KEY(user_id) REFERENCES users(id)
+            )
+            """
+        )
+        _ensure_column(conn, "device_owner_profiles", "recognition_enabled", "INTEGER NOT NULL DEFAULT 1")
+        _ensure_column(conn, "device_owner_profiles", "sample_count", "INTEGER NOT NULL DEFAULT 0")
+        _ensure_column(conn, "device_owner_profiles", "similarity_threshold", "REAL NOT NULL DEFAULT 0")
+        _ensure_column(conn, "device_owner_profiles", "embedding_backend", "TEXT NOT NULL DEFAULT 'face-hist-v1'")
         conn.commit()
     finally:
         conn.close()
