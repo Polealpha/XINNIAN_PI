@@ -60,8 +60,7 @@ from .schemas import (
     TokenResponse,
     UserResponse,
 )
-from .settings import ACCESS_TOKEN_EXPIRE_SEC, ALLOWED_ORIGINS, AUTH_SECRET_KEY
-from .provisioning import run_provisioning
+from .settings import ACCESS_TOKEN_EXPIRE_SEC, ALLOWED_ORIGINS, AUTH_SECRET_KEY, DEVICE_PROVISIONING_ENABLED
 
 app = FastAPI(title="Auth Backend", version="0.1.0")
 UPLOAD_ROOT = Path(__file__).resolve().parent / "uploads"
@@ -236,6 +235,18 @@ def _is_local_request(request: Request) -> bool:
         return False
     host = str(request.client.host or "")
     return host in {"127.0.0.1", "::1", "localhost"}
+
+
+def _ensure_device_provisioning_enabled() -> None:
+    if DEVICE_PROVISIONING_ENABLED:
+        return
+    raise HTTPException(
+        status_code=status.HTTP_410_GONE,
+        detail=(
+            "Legacy BLE/ESP provisioning is disabled in the Raspberry Pi deployment. "
+            "Configure Wi-Fi directly on Raspberry Pi OS or enable DEVICE_PROVISIONING_ENABLED explicitly."
+        ),
+    )
 
 
 def _init_llm() -> None:
@@ -1211,6 +1222,7 @@ def device_provision(
     credentials: HTTPAuthorizationCredentials = Depends(bearer_scheme),
     conn: Connection = Depends(get_db),
 ) -> ProvisionResponse:
+    _ensure_device_provisioning_enabled()
     user = _parse_access_token(credentials, conn)
     _set_user_configured(conn, int(user["id"]), True)
     _upsert_device(
@@ -1238,6 +1250,9 @@ def device_provision_execute(
     credentials: HTTPAuthorizationCredentials = Depends(bearer_scheme),
     conn: Connection = Depends(get_db),
 ) -> ProvisionExecuteResponse:
+    _ensure_device_provisioning_enabled()
+    from .provisioning import run_provisioning
+
     user = _parse_access_token(credentials, conn)
     result = run_provisioning(
         transport=payload.transport,

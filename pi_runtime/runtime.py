@@ -133,7 +133,8 @@ class PiEmotionRuntime:
             health={
                 "audio_ok": now_ms - self._last_audio_ts < 5000,
                 "video_ok": now_ms - self._last_video_ts < 5000 if self.pi_config.camera.enabled else False,
-                "esp_connected": True,
+                "hardware_ok": True,
+                "control_local": True,
             },
         )
 

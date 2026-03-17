@@ -42,4 +42,5 @@ uvicorn backend.main:app --reload --host 0.0.0.0 --port 8000
 - Tokens are JWT (access + refresh).
 - Refresh tokens are stored in SQLite (hashed) so logout can revoke.
 - Change `AUTH_SECRET_KEY` in production.
-- BLE provisioning requires Python deps: `protobuf`, `cryptography`, `bleak`.
+- Raspberry Pi deployment disables legacy BLE / ESP provisioning by default.
+- To re-enable the old provisioning path deliberately, set `DEVICE_PROVISIONING_ENABLED=1` and install any extra deps you still need, such as `bleak`.

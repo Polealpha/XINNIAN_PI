@@ -4,6 +4,6 @@ python-jose>=3.3.0
 passlib>=1.7.4
 openai==1.6.1
 httpx>=0.23.0,<0.28
+python-multipart>=0.0.9
 protobuf>=4.21.0
 cryptography>=41.0.0
-bleak>=0.21.1

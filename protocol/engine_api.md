@@ -105,7 +105,7 @@ LLM online search behavior:
   "cooldown_remaining_ms": 0,
   "daily_trigger_count": 0,
   "last_event_ts_ms": 0,
-  "health": {"audio_ok": true, "video_ok": true, "esp_connected": true}
+  "health": {"audio_ok": true, "video_ok": true, "hardware_ok": true, "control_local": true}
 }
 ```
 

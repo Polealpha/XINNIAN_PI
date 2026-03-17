@@ -316,7 +316,8 @@ class EmotionEngine:
         health = {
             "audio_ok": now - self._last_audio_ts < self._health_timeout_ms,
             "video_ok": now - self._last_video_ts < self._health_timeout_ms,
-            "esp_connected": True,
+            "hardware_ok": True,
+            "control_local": True,
         }
         return EngineStatus(
             mode=self._mode,

@@ -114,7 +114,7 @@ class ProvisionRequest(BaseModel):
     password: str
     device_ip: Optional[str] = None
     device_mac: Optional[str] = None
-    transport: str = "ble"
+    transport: str = "direct"
     service_name: Optional[str] = None
     pop: Optional[str] = None
     qr_payload: Optional[str] = None
@@ -130,7 +130,7 @@ class ProvisionExecuteRequest(BaseModel):
     ssid: str
     password: str
     device_ip: Optional[str] = None
-    transport: str = "ble"
+    transport: str = "direct"
     service_name: Optional[str] = None
     pop: Optional[str] = None
     qr_payload: Optional[str] = None
