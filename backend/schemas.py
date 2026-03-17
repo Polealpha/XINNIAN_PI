@@ -40,6 +40,8 @@ class LoginResponse(BaseModel):
     refresh_token: str
     user_id: int
     is_configured: bool
+    activation_required: bool = False
+    activation_path: str = "/activate"
 
 
 class UserResponse(BaseModel):
@@ -387,3 +389,60 @@ class AssistantBridgeSendRequest(BaseModel):
     surface: str = "wecom"
     session_key: Optional[str] = None
     metadata: dict = Field(default_factory=dict)
+
+
+class ActivationProfileResponse(BaseModel):
+    ok: bool
+    is_configured: bool
+    activation_required: bool
+    preferred_name: Optional[str] = None
+    role_label: Optional[str] = None
+    relation_to_robot: Optional[str] = None
+    pronouns: Optional[str] = None
+    identity_summary: Optional[str] = None
+    onboarding_notes: Optional[str] = None
+    voice_intro_summary: Optional[str] = None
+    activation_version: str = "v1"
+    completed_at_ms: Optional[int] = None
+    preferred_mode: str = "cli"
+    preferred_code_model: str = ""
+
+
+class ActivationCompleteRequest(BaseModel):
+    preferred_name: str
+    role_label: str = "owner"
+    relation_to_robot: str = "primary_user"
+    pronouns: str = ""
+    identity_summary: str = ""
+    onboarding_notes: str = ""
+    voice_intro_summary: str = ""
+    profile: dict = Field(default_factory=dict)
+    activation_version: str = "v1"
+
+
+class ActivationIdentityInferRequest(BaseModel):
+    transcript: str
+    surface: str = "robot"
+    observed_name: str = ""
+    context: dict = Field(default_factory=dict)
+
+
+class ActivationIdentityInferResponse(BaseModel):
+    ok: bool
+    preferred_name: str = ""
+    role_label: str = "owner"
+    relation_to_robot: str = "unknown"
+    pronouns: str = ""
+    identity_summary: str = ""
+    onboarding_notes: str = ""
+    voice_intro_summary: str = ""
+    confidence: float = 0.0
+    raw_json: dict = Field(default_factory=dict)
+
+
+class ActivationPromptPackResponse(BaseModel):
+    ok: bool
+    system_prompt: str
+    extraction_prompt: str
+    preferred_mode: str = "cli"
+    preferred_code_model: str = ""

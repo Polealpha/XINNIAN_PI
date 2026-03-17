@@ -230,6 +230,30 @@ def init_db() -> None:
         _ensure_column(conn, "device_owner_profiles", "sample_count", "INTEGER NOT NULL DEFAULT 0")
         _ensure_column(conn, "device_owner_profiles", "similarity_threshold", "REAL NOT NULL DEFAULT 0")
         _ensure_column(conn, "device_owner_profiles", "embedding_backend", "TEXT NOT NULL DEFAULT 'face-hist-v1'")
+        cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS user_activation_profiles (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL UNIQUE,
+                preferred_name TEXT,
+                role_label TEXT,
+                relation_to_robot TEXT,
+                pronouns TEXT,
+                identity_summary TEXT,
+                onboarding_notes TEXT,
+                voice_intro_summary TEXT,
+                profile_json TEXT NOT NULL DEFAULT '{}',
+                activation_version TEXT NOT NULL DEFAULT 'v1',
+                completed_at_ms INTEGER,
+                updated_at INTEGER NOT NULL,
+                created_at INTEGER NOT NULL,
+                FOREIGN KEY(user_id) REFERENCES users(id)
+            )
+            """
+        )
+        _ensure_column(conn, "user_activation_profiles", "voice_intro_summary", "TEXT")
+        _ensure_column(conn, "user_activation_profiles", "profile_json", "TEXT NOT NULL DEFAULT '{}'")
+        _ensure_column(conn, "user_activation_profiles", "activation_version", "TEXT NOT NULL DEFAULT 'v1'")
         conn.commit()
     finally:
         conn.close()

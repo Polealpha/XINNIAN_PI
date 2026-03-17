@@ -23,6 +23,12 @@ That combination caused persona drift, memory drift, tool drift, and mixed chat 
 
 - Added `POST /api/assistant/send` as the main assistant entry.
 - Added `POST /api/assistant/bridge/send` for trusted local bridges such as WeCom.
+- Added first-login activation endpoints and a minimal activation page:
+  - `GET /activate`
+  - `GET /api/activation/state`
+  - `POST /api/activation/identity/infer`
+  - `POST /api/activation/complete`
+  - `GET /api/activation/prompt-pack`
 - Added session-aware chat mirroring via `surface` and `session_key`.
 - Added workspace-backed todos and searchable memory under the OpenClaw workspace.
 - Added explicit desktop and robot actions:
@@ -46,8 +52,23 @@ That combination caused persona drift, memory drift, tool drift, and mixed chat 
 - Mobile: `mobile:<user_id>`
 - WeCom: `wecom:<sender_id>`
 - Robot: `robot:<device_id>`
+- Activation inference: `activation:<user_id>:infer:<timestamp>`
 
 The backend mirrors recent messages for UI use, but OpenClaw remains the live conversation engine.
+
+## Activation and identity strategy
+
+- First login no longer drops directly into unconstrained chat.
+- The system now asks the user to confirm a durable identity card before treating onboarding facts as long-term memory.
+- Voice or transcript-based identity inference uses a dedicated strict-JSON extraction prompt, separate from the user's normal chat session.
+- The activation profile is persisted in backend storage and mirrored into the OpenClaw workspace memory so later conversations can recall it without mixing it into unrelated session histories.
+
+## Preferred runtime defaults
+
+- Preferred operating mode: `cli`
+- Preferred high-tier model hint: `gpt-5.4`
+
+This is a product-side preference used by prompts and activation flows. The actual OpenClaw runtime model is still controlled by OpenClaw's provider/model configuration and auth state.
 
 ## Memory and todos
 

@@ -22,5 +22,6 @@ def test_init_db_creates_identity_tables(tmp_path, monkeypatch):
         tables = {row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()}
         assert "device_claim_sessions" in tables
         assert "device_owner_profiles" in tables
+        assert "user_activation_profiles" in tables
     finally:
         conn.close()

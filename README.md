@@ -61,6 +61,11 @@ python server_backend/run_server.py
 
 ## Backend API additions
 
+- `GET /activate`
+- `GET /api/activation/state`
+- `POST /api/activation/complete`
+- `POST /api/activation/identity/infer`
+- `GET /api/activation/prompt-pack`
 - `POST /api/device/claim`
 - `GET /api/device/claim/status`
 - `POST /api/device/owner/enrollment`
@@ -80,6 +85,7 @@ python server_backend/run_server.py
 - First-time Wi-Fi setup is now Pi-local: when `wlan0` has no working Wi-Fi, the Pi can start a temporary hotspot and accept Wi-Fi credentials through the local onboarding API.
 - After the Pi joins the home network, the desktop or mobile client should authenticate against the backend, call `/api/device/claim`, then call the Pi-local owner enrollment API with the returned `claim_token`.
 - The Pi stores the owner embedding locally under `/var/lib/emotion-pi/identity/`; the backend stores only claim and owner metadata.
+- First-time user activation is now backend-led: after login, the client should open `/activate` or call the activation APIs so the system can confirm who the person is before treating normal chat as durable identity data.
 
 ## Hardware bring-up
 
@@ -87,6 +93,7 @@ python server_backend/run_server.py
 - Migration summary: `docs/raspberry_pi_zero2w_migration.md`
 - Engine design: `docs/engine_design.md`
 - OpenClaw software integration: `docs/openclaw_integration.md`
+- Activation and identity prompting: `docs/activation_identity.md`
 
 ## Notes
 

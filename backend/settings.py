@@ -37,3 +37,5 @@ DESKTOP_APP_ALLOWLIST_JSON = _env(
     "DESKTOP_APP_ALLOWLIST_JSON",
     '{"notepad":["notepad"],"calc":["calc"],"explorer":["explorer"],"vscode":["code"],"chrome":["cmd","/c","start","chrome"],"edge":["cmd","/c","start","msedge"]}',
 )
+OPENCLAW_PREFERRED_MODE = _env("OPENCLAW_PREFERRED_MODE", "cli")
+OPENCLAW_PREFERRED_CODE_MODEL = _env("OPENCLAW_PREFERRED_CODE_MODEL", "gpt-5.4")

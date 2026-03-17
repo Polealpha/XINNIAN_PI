@@ -16,7 +16,7 @@ from typing import Any, Dict, List, Optional
 
 from fastapi import Depends, FastAPI, File, HTTPException, Request, UploadFile, status, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse
+from fastapi.responses import HTMLResponse, StreamingResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from fastapi.staticfiles import StaticFiles
 from sqlite3 import Connection
@@ -24,11 +24,17 @@ import httpx
 from cryptography.fernet import Fernet, InvalidToken
 
 from . import auth
+from .activation_prompts import ACTIVATION_SYSTEM_PROMPT, IDENTITY_EXTRACTION_PROMPT
 from .assistant_service import AssistantService, build_session_key, normalize_surface
 from .db import get_db, init_db
 from .openclaw_gateway import OpenClawGatewayError
 from .schemas import (
     AssistantBridgeSendRequest,
+    ActivationCompleteRequest,
+    ActivationIdentityInferRequest,
+    ActivationIdentityInferResponse,
+    ActivationProfileResponse,
+    ActivationPromptPackResponse,
     AssistantMemorySearchResponse,
     AssistantSendRequest,
     AssistantSendResponse,
@@ -75,7 +81,15 @@ from .schemas import (
     TokenResponse,
     UserResponse,
 )
-from .settings import ACCESS_TOKEN_EXPIRE_SEC, ALLOWED_ORIGINS, ASSISTANT_BRIDGE_TOKEN, ASSISTANT_BRIDGE_USER_ID, AUTH_SECRET_KEY
+from .settings import (
+    ACCESS_TOKEN_EXPIRE_SEC,
+    ALLOWED_ORIGINS,
+    ASSISTANT_BRIDGE_TOKEN,
+    ASSISTANT_BRIDGE_USER_ID,
+    AUTH_SECRET_KEY,
+    OPENCLAW_PREFERRED_CODE_MODEL,
+    OPENCLAW_PREFERRED_MODE,
+)
 
 app = FastAPI(title="Auth Backend", version="0.1.0")
 UPLOAD_ROOT = Path(__file__).resolve().parent / "uploads"
@@ -322,6 +336,417 @@ def _get_default_user_id(conn: Connection) -> Optional[int]:
 def _set_user_configured(conn: Connection, user_id: int, value: bool) -> None:
     conn.execute("UPDATE users SET is_configured = ? WHERE id = ?", (1 if value else 0, user_id))
     conn.commit()
+
+
+def _get_activation_profile(conn: Connection, user_id: int) -> Dict[str, object]:
+    row = conn.execute(
+        """
+        SELECT *
+        FROM user_activation_profiles
+        WHERE user_id = ?
+        """,
+        (int(user_id),),
+    ).fetchone()
+    if not row:
+        return {}
+    payload = dict(row)
+    try:
+        profile_json = json.loads(str(payload.get("profile_json") or "{}"))
+    except Exception:
+        profile_json = {}
+    if not isinstance(profile_json, dict):
+        profile_json = {}
+    merged = dict(profile_json)
+    merged.update(
+        {
+            "preferred_name": str(payload.get("preferred_name") or "").strip() or None,
+            "role_label": str(payload.get("role_label") or "").strip() or None,
+            "relation_to_robot": str(payload.get("relation_to_robot") or "").strip() or None,
+            "pronouns": str(payload.get("pronouns") or "").strip() or None,
+            "identity_summary": str(payload.get("identity_summary") or "").strip() or None,
+            "onboarding_notes": str(payload.get("onboarding_notes") or "").strip() or None,
+            "voice_intro_summary": str(payload.get("voice_intro_summary") or "").strip() or None,
+            "activation_version": str(payload.get("activation_version") or "v1"),
+            "completed_at_ms": int(payload.get("completed_at_ms") or 0) or None,
+        }
+    )
+    return merged
+
+
+def _upsert_activation_profile(conn: Connection, user_id: int, payload: Dict[str, object]) -> Dict[str, object]:
+    now_ms = int(time.time() * 1000)
+    profile_json = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+    preferred_name = str(payload.get("preferred_name") or "").strip()
+    role_label = str(payload.get("role_label") or "owner").strip() or "owner"
+    relation_to_robot = str(payload.get("relation_to_robot") or "primary_user").strip() or "primary_user"
+    pronouns = str(payload.get("pronouns") or "").strip()
+    identity_summary = str(payload.get("identity_summary") or "").strip()
+    onboarding_notes = str(payload.get("onboarding_notes") or "").strip()
+    voice_intro_summary = str(payload.get("voice_intro_summary") or "").strip()
+    activation_version = str(payload.get("activation_version") or "v1").strip() or "v1"
+    completed_at_ms = int(payload.get("completed_at_ms") or 0) or None
+    conn.execute(
+        """
+        INSERT INTO user_activation_profiles (
+            user_id,
+            preferred_name,
+            role_label,
+            relation_to_robot,
+            pronouns,
+            identity_summary,
+            onboarding_notes,
+            voice_intro_summary,
+            profile_json,
+            activation_version,
+            completed_at_ms,
+            updated_at,
+            created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(user_id) DO UPDATE SET
+            preferred_name = excluded.preferred_name,
+            role_label = excluded.role_label,
+            relation_to_robot = excluded.relation_to_robot,
+            pronouns = excluded.pronouns,
+            identity_summary = excluded.identity_summary,
+            onboarding_notes = excluded.onboarding_notes,
+            voice_intro_summary = excluded.voice_intro_summary,
+            profile_json = excluded.profile_json,
+            activation_version = excluded.activation_version,
+            completed_at_ms = excluded.completed_at_ms,
+            updated_at = excluded.updated_at
+        """,
+        (
+            int(user_id),
+            preferred_name or None,
+            role_label,
+            relation_to_robot,
+            pronouns or None,
+            identity_summary or None,
+            onboarding_notes or None,
+            voice_intro_summary or None,
+            profile_json,
+            activation_version,
+            completed_at_ms,
+            now_ms,
+            now_ms,
+        ),
+    )
+    conn.commit()
+    return _get_activation_profile(conn, user_id)
+
+
+def _activation_response(user: Dict[str, object], profile: Dict[str, object]) -> ActivationProfileResponse:
+    is_configured = bool(user.get("is_configured", 0))
+    preferred_name = str(profile.get("preferred_name") or "").strip() or None
+    role_label = str(profile.get("role_label") or "").strip() or None
+    relation_to_robot = str(profile.get("relation_to_robot") or "").strip() or None
+    pronouns = str(profile.get("pronouns") or "").strip() or None
+    identity_summary = str(profile.get("identity_summary") or "").strip() or None
+    onboarding_notes = str(profile.get("onboarding_notes") or "").strip() or None
+    voice_intro_summary = str(profile.get("voice_intro_summary") or "").strip() or None
+    return ActivationProfileResponse(
+        ok=True,
+        is_configured=is_configured,
+        activation_required=not is_configured,
+        preferred_name=preferred_name,
+        role_label=role_label,
+        relation_to_robot=relation_to_robot,
+        pronouns=pronouns,
+        identity_summary=identity_summary,
+        onboarding_notes=onboarding_notes,
+        voice_intro_summary=voice_intro_summary,
+        activation_version=str(profile.get("activation_version") or "v1"),
+        completed_at_ms=int(profile.get("completed_at_ms") or 0) or None,
+        preferred_mode=OPENCLAW_PREFERRED_MODE,
+        preferred_code_model=OPENCLAW_PREFERRED_CODE_MODEL,
+    )
+
+
+def _extract_json_block(text: str) -> Dict[str, object]:
+    raw = str(text or "").strip()
+    if not raw:
+        return {}
+    try:
+        parsed = json.loads(raw)
+        return parsed if isinstance(parsed, dict) else {}
+    except Exception:
+        pass
+    start = raw.find("{")
+    end = raw.rfind("}")
+    if start < 0 or end <= start:
+        return {}
+    candidate = raw[start : end + 1]
+    try:
+        parsed = json.loads(candidate)
+        return parsed if isinstance(parsed, dict) else {}
+    except Exception:
+        return {}
+
+
+def _activation_page_html() -> str:
+    return f"""<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>首次激活</title>
+  <style>
+    :root {{
+      color-scheme: light;
+      --bg: #f3efe7;
+      --card: #fffaf1;
+      --ink: #1c2a1f;
+      --muted: #5c6b60;
+      --line: #d7cdbb;
+      --accent: #2e7d5b;
+      --accent-2: #b85c38;
+    }}
+    body {{
+      margin: 0;
+      font-family: "Microsoft YaHei UI", "PingFang SC", sans-serif;
+      background:
+        radial-gradient(circle at top right, rgba(46,125,91,0.12), transparent 28%),
+        radial-gradient(circle at bottom left, rgba(184,92,56,0.14), transparent 26%),
+        var(--bg);
+      color: var(--ink);
+    }}
+    main {{
+      max-width: 980px;
+      margin: 32px auto;
+      padding: 0 20px 40px;
+    }}
+    h1 {{
+      font-size: 32px;
+      margin: 0 0 8px;
+    }}
+    p {{
+      color: var(--muted);
+      line-height: 1.6;
+    }}
+    .grid {{
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+      gap: 18px;
+    }}
+    .card {{
+      background: var(--card);
+      border: 1px solid var(--line);
+      border-radius: 18px;
+      padding: 18px;
+      box-shadow: 0 10px 30px rgba(20, 32, 24, 0.06);
+    }}
+    label {{
+      display: block;
+      font-size: 13px;
+      color: var(--muted);
+      margin: 10px 0 6px;
+    }}
+    input, textarea, select {{
+      width: 100%;
+      box-sizing: border-box;
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      padding: 10px 12px;
+      font: inherit;
+      background: white;
+      color: var(--ink);
+    }}
+    textarea {{
+      min-height: 112px;
+      resize: vertical;
+    }}
+    .row {{
+      display: flex;
+      gap: 10px;
+      flex-wrap: wrap;
+      margin-top: 14px;
+    }}
+    button {{
+      border: 0;
+      border-radius: 999px;
+      padding: 11px 16px;
+      font: inherit;
+      cursor: pointer;
+      background: var(--accent);
+      color: white;
+    }}
+    button.secondary {{
+      background: var(--accent-2);
+    }}
+    pre {{
+      margin: 0;
+      white-space: pre-wrap;
+      word-break: break-word;
+      background: #172018;
+      color: #eaf5ee;
+      padding: 14px;
+      border-radius: 14px;
+      min-height: 140px;
+    }}
+    .hint {{
+      font-size: 12px;
+      color: var(--muted);
+      margin-top: 8px;
+    }}
+  </style>
+</head>
+<body>
+  <main>
+    <h1>首次激活与身份确认</h1>
+    <p>第一次登录后，先确认“这个人是谁、和机器人是什么关系、机器人应该如何理解与服务他/她”。这一步会沉淀成长期身份卡，不直接混进普通聊天上下文。</p>
+    <div class="grid">
+      <section class="card">
+        <label>Bearer Token</label>
+        <input id="token" placeholder="粘贴登录返回的 token，或使用 ?token=..." />
+        <div class="hint" id="modeHint">默认模式：{OPENCLAW_PREFERRED_MODE}；默认模型偏好：{OPENCLAW_PREFERRED_CODE_MODEL}</div>
+
+        <label>首段语音 / 首次对话记录</label>
+        <textarea id="transcript" placeholder="例如：你好，我叫小北，是这个机器人的主人，你可以叫我小北。"></textarea>
+        <label>观察到的名字（可选）</label>
+        <input id="observed_name" placeholder="如 ASR 或联系人资料里已有名字" />
+        <div class="row">
+          <button id="loadBtn" type="button">读取当前状态</button>
+          <button id="inferBtn" class="secondary" type="button">从首段语音推断身份</button>
+        </div>
+      </section>
+
+      <section class="card">
+        <label>称呼</label>
+        <input id="preferred_name" />
+        <label>角色</label>
+        <select id="role_label">
+          <option value="owner">owner</option>
+          <option value="family">family</option>
+          <option value="caregiver">caregiver</option>
+          <option value="guest">guest</option>
+          <option value="operator">operator</option>
+          <option value="admin">admin</option>
+          <option value="patient">patient</option>
+          <option value="unknown">unknown</option>
+        </select>
+        <label>与机器人关系</label>
+        <select id="relation_to_robot">
+          <option value="primary_user">primary_user</option>
+          <option value="family_member">family_member</option>
+          <option value="caregiver">caregiver</option>
+          <option value="visitor">visitor</option>
+          <option value="maintainer">maintainer</option>
+          <option value="observer">observer</option>
+          <option value="unknown">unknown</option>
+        </select>
+        <label>代词 / 称谓偏好</label>
+        <input id="pronouns" />
+        <label>身份摘要</label>
+        <textarea id="identity_summary"></textarea>
+        <label>激活备注</label>
+        <textarea id="onboarding_notes"></textarea>
+        <label>首次语音摘要</label>
+        <textarea id="voice_intro_summary"></textarea>
+        <div class="row">
+          <button id="saveBtn" type="button">完成激活</button>
+        </div>
+      </section>
+    </div>
+
+    <section class="card" style="margin-top:18px">
+      <label>调试输出</label>
+      <pre id="output">等待操作...</pre>
+    </section>
+  </main>
+  <script>
+    const q = (id) => document.getElementById(id);
+    const output = q("output");
+    const tokenInput = q("token");
+    const qsToken = new URLSearchParams(window.location.search).get("token") || "";
+    tokenInput.value = localStorage.getItem("activationToken") || qsToken;
+
+    function headers() {{
+      const token = (tokenInput.value || "").trim();
+      if (!token) throw new Error("请先提供 Bearer token");
+      localStorage.setItem("activationToken", token);
+      return {{
+        "Authorization": `Bearer ${{token}}`,
+        "Content-Type": "application/json"
+      }};
+    }}
+
+    function fillForm(data) {{
+      q("preferred_name").value = data.preferred_name || "";
+      q("role_label").value = data.role_label || "owner";
+      q("relation_to_robot").value = data.relation_to_robot || "primary_user";
+      q("pronouns").value = data.pronouns || "";
+      q("identity_summary").value = data.identity_summary || "";
+      q("onboarding_notes").value = data.onboarding_notes || "";
+      q("voice_intro_summary").value = data.voice_intro_summary || "";
+    }}
+
+    async function fetchJson(url, options) {{
+      const res = await fetch(url, options);
+      const data = await res.json().catch(() => ({{ ok: false, detail: "invalid json" }}));
+      if (!res.ok) {{
+        throw new Error(data.detail || JSON.stringify(data));
+      }}
+      return data;
+    }}
+
+    async function loadState() {{
+      const [state, prompts] = await Promise.all([
+        fetchJson("/api/activation/state", {{ headers: headers() }}),
+        fetchJson("/api/activation/prompt-pack", {{ headers: headers() }})
+      ]);
+      fillForm(state);
+      q("modeHint").textContent = `默认模式：${{prompts.preferred_mode}}；默认模型偏好：${{prompts.preferred_code_model}}`;
+      output.textContent = JSON.stringify(state, null, 2);
+    }}
+
+    async function inferIdentity() {{
+      const payload = {{
+        transcript: q("transcript").value,
+        observed_name: q("observed_name").value,
+        surface: "robot",
+        context: {{
+          entrypoint: "activation_page"
+        }}
+      }};
+      const data = await fetchJson("/api/activation/identity/infer", {{
+        method: "POST",
+        headers: headers(),
+        body: JSON.stringify(payload)
+      }});
+      fillForm(data);
+      output.textContent = JSON.stringify(data, null, 2);
+    }}
+
+    async function completeActivation() {{
+      const payload = {{
+        preferred_name: q("preferred_name").value,
+        role_label: q("role_label").value,
+        relation_to_robot: q("relation_to_robot").value,
+        pronouns: q("pronouns").value,
+        identity_summary: q("identity_summary").value,
+        onboarding_notes: q("onboarding_notes").value,
+        voice_intro_summary: q("voice_intro_summary").value,
+        profile: {{
+          source: "activation_page"
+        }},
+        activation_version: "v1"
+      }};
+      const data = await fetchJson("/api/activation/complete", {{
+        method: "POST",
+        headers: headers(),
+        body: JSON.stringify(payload)
+      }});
+      output.textContent = JSON.stringify(data, null, 2);
+    }}
+
+    q("loadBtn").addEventListener("click", () => loadState().catch((err) => output.textContent = String(err)));
+    q("inferBtn").addEventListener("click", () => inferIdentity().catch((err) => output.textContent = String(err)));
+    q("saveBtn").addEventListener("click", () => completeActivation().catch((err) => output.textContent = String(err)));
+
+    loadState().catch((err) => output.textContent = `等待 token 或接口可用：${{err}}`);
+  </script>
+</body>
+</html>"""
 
 
 def _list_emotion_events(
@@ -1223,7 +1648,14 @@ def login_api(payload: LoginEmailRequest, conn: Connection = Depends(get_db)) ->
         refresh_token=refresh["token"],
         user_id=int(user["id"]),
         is_configured=bool(user.get("is_configured", 0)),
+        activation_required=not bool(user.get("is_configured", 0)),
+        activation_path="/activate",
     )
+
+
+@app.get("/activate", response_class=HTMLResponse)
+def activation_page() -> HTMLResponse:
+    return HTMLResponse(_activation_page_html())
 
 
 @app.get("/api/auth/me", response_model=UserResponse)
@@ -1233,6 +1665,125 @@ def me_api(
 ) -> UserResponse:
     user = _parse_access_token(credentials, conn)
     return UserResponse(id=user["id"], username=user["username"], created_at=user["created_at"])
+
+
+@app.get("/api/activation/state", response_model=ActivationProfileResponse)
+def activation_state(
+    credentials: HTTPAuthorizationCredentials = Depends(bearer_scheme),
+    conn: Connection = Depends(get_db),
+) -> ActivationProfileResponse:
+    user = _parse_access_token(credentials, conn)
+    profile = _get_activation_profile(conn, int(user["id"]))
+    return _activation_response(user, profile)
+
+
+@app.post("/api/activation/complete", response_model=ActivationProfileResponse)
+def activation_complete(
+    payload: ActivationCompleteRequest,
+    credentials: HTTPAuthorizationCredentials = Depends(bearer_scheme),
+    conn: Connection = Depends(get_db),
+) -> ActivationProfileResponse:
+    user = _parse_access_token(credentials, conn)
+    preferred_name = str(payload.preferred_name or "").strip()
+    if not preferred_name:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="preferred_name is required")
+    now_ms = int(time.time() * 1000)
+    summary = str(payload.identity_summary or "").strip()
+    if not summary:
+        summary = f"{preferred_name} 是当前机器人的主要使用者，后续应按已确认身份持续服务。"
+    profile_payload = {
+        "preferred_name": preferred_name,
+        "role_label": str(payload.role_label or "owner").strip() or "owner",
+        "relation_to_robot": str(payload.relation_to_robot or "primary_user").strip() or "primary_user",
+        "pronouns": str(payload.pronouns or "").strip(),
+        "identity_summary": summary,
+        "onboarding_notes": str(payload.onboarding_notes or "").strip(),
+        "voice_intro_summary": str(payload.voice_intro_summary or "").strip(),
+        "activation_version": str(payload.activation_version or "v1").strip() or "v1",
+        "completed_at_ms": now_ms,
+        "profile": payload.profile or {},
+    }
+    profile = _upsert_activation_profile(conn, int(user["id"]), profile_payload)
+    _set_user_configured(conn, int(user["id"]), True)
+    assistant_service.store.append_memory(
+        int(user["id"]),
+        title="activation_profile",
+        content=(
+            f"首次激活完成。称呼：{preferred_name}；角色：{profile_payload['role_label']}；"
+            f"关系：{profile_payload['relation_to_robot']}；摘要：{summary}"
+        ),
+        tags=["activation", "identity", "profile"],
+    )
+    updated_user = _get_user_by_id(conn, int(user["id"]))
+    return _activation_response(updated_user, profile)
+
+
+@app.post("/api/activation/identity/infer", response_model=ActivationIdentityInferResponse)
+async def activation_identity_infer(
+    payload: ActivationIdentityInferRequest,
+    credentials: HTTPAuthorizationCredentials = Depends(bearer_scheme),
+    conn: Connection = Depends(get_db),
+) -> ActivationIdentityInferResponse:
+    user = _parse_access_token(credentials, conn)
+    transcript = str(payload.transcript or "").strip()
+    if not transcript:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="transcript is required")
+    inference_input = {
+        "transcript": transcript,
+        "surface": str(payload.surface or "robot").strip() or "robot",
+        "observed_name": str(payload.observed_name or "").strip(),
+        "context": payload.context or {},
+    }
+    session_key = f"activation:{int(user['id'])}:infer:{int(time.time() * 1000)}"
+    prompt = (
+        f"{ACTIVATION_SYSTEM_PROMPT}\n\n"
+        f"{IDENTITY_EXTRACTION_PROMPT}\n\n"
+        f"输入数据：{json.dumps(inference_input, ensure_ascii=False)}"
+    )
+    try:
+        raw = await assistant_service.gateway.send_message(session_key, prompt)
+    except OpenClawGatewayError as exc:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc)) from exc
+    parsed = _extract_json_block(raw)
+    preferred_name = str(parsed.get("preferred_name") or "").strip()
+    if not preferred_name and inference_input["observed_name"]:
+        preferred_name = str(inference_input["observed_name"]).strip()
+    role_label = str(parsed.get("role_label") or "unknown").strip() or "unknown"
+    relation_to_robot = str(parsed.get("relation_to_robot") or "unknown").strip() or "unknown"
+    pronouns = str(parsed.get("pronouns") or "").strip()
+    identity_summary = str(parsed.get("identity_summary") or "").strip()
+    onboarding_notes = str(parsed.get("onboarding_notes") or "").strip()
+    voice_intro_summary = str(parsed.get("voice_intro_summary") or "").strip()
+    confidence = float(parsed.get("confidence") or 0.0)
+    if not onboarding_notes and not confidence:
+        onboarding_notes = "待确认：请在首次激活页再次确认身份信息。"
+    return ActivationIdentityInferResponse(
+        ok=True,
+        preferred_name=preferred_name,
+        role_label=role_label,
+        relation_to_robot=relation_to_robot,
+        pronouns=pronouns,
+        identity_summary=identity_summary,
+        onboarding_notes=onboarding_notes,
+        voice_intro_summary=voice_intro_summary,
+        confidence=max(0.0, min(1.0, confidence)),
+        raw_json=parsed or {"raw_text": raw},
+    )
+
+
+@app.get("/api/activation/prompt-pack", response_model=ActivationPromptPackResponse)
+def activation_prompt_pack(
+    credentials: HTTPAuthorizationCredentials = Depends(bearer_scheme),
+    conn: Connection = Depends(get_db),
+) -> ActivationPromptPackResponse:
+    _parse_access_token(credentials, conn)
+    return ActivationPromptPackResponse(
+        ok=True,
+        system_prompt=ACTIVATION_SYSTEM_PROMPT,
+        extraction_prompt=IDENTITY_EXTRACTION_PROMPT,
+        preferred_mode=OPENCLAW_PREFERRED_MODE,
+        preferred_code_model=OPENCLAW_PREFERRED_CODE_MODEL,
+    )
 
 
 @app.get("/api/user/profile", response_model=ProfileResponse)
