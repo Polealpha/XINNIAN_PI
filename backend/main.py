@@ -483,6 +483,70 @@ def _extract_json_block(text: str) -> Dict[str, object]:
         return {}
 
 
+def _heuristic_activation_identity(transcript: str, observed_name: str = "") -> Dict[str, object]:
+    raw = str(transcript or "").strip()
+    lowered = raw.lower()
+    preferred_name = str(observed_name or "").strip()
+    patterns = [
+        r"我叫([^\s，。,.!！?？]{1,12})",
+        r"我是([^\s，。,.!！?？]{1,12})",
+        r"你可以叫我([^\s，。,.!！?？]{1,12})",
+        r"叫我([^\s，。,.!！?？]{1,12})就行",
+    ]
+    for pattern in patterns:
+        match = re.search(pattern, raw)
+        if match:
+            preferred_name = str(match.group(1) or "").strip("，。,.!！?？ ")
+            if preferred_name:
+                break
+    role_label = "unknown"
+    relation = "unknown"
+    if any(token in raw for token in ["主人", "owner"]):
+        role_label = "owner"
+        relation = "primary_user"
+    elif any(token in raw for token in ["家人", "妈妈", "爸爸", "姐姐", "哥哥", "妹妹", "弟弟", "family"]):
+        role_label = "family"
+        relation = "family_member"
+    elif any(token in raw for token in ["护工", "照护", "护理", "caregiver"]):
+        role_label = "caregiver"
+        relation = "caregiver"
+    elif any(token in lowered for token in ["admin", "管理员", "调试", "维护", "operator"]):
+        role_label = "operator" if "operator" in lowered or "调试" in raw else "admin"
+        relation = "maintainer"
+    elif any(token in raw for token in ["病人", "患者"]):
+        role_label = "patient"
+        relation = "primary_user"
+    summary = ""
+    if preferred_name:
+        summary = f"{preferred_name} 是当前与机器人首次确认身份的用户。"
+    if role_label == "owner":
+        summary = f"{preferred_name or '该用户'} 是机器人的主人，后续应优先按主人身份服务。"
+    elif role_label == "family":
+        summary = f"{preferred_name or '该用户'} 是与机器人相关的家庭成员，后续应按家庭成员身份理解。"
+    elif role_label == "caregiver":
+        summary = f"{preferred_name or '该用户'} 是照护相关人员，后续应按照护者身份支持。"
+    elif role_label in {"operator", "admin"}:
+        summary = f"{preferred_name or '该用户'} 更像是设备操作或维护人员，不应默认视作主人。"
+    notes = "待确认：本结果由本地规则保守推断，建议在激活页人工确认。"
+    voice_intro = raw[:80]
+    confidence = 0.28
+    if preferred_name:
+        confidence += 0.18
+    if role_label != "unknown":
+        confidence += 0.24
+    return {
+        "preferred_name": preferred_name,
+        "role_label": role_label,
+        "relation_to_robot": relation,
+        "pronouns": "",
+        "identity_summary": summary[:80],
+        "onboarding_notes": notes[:120],
+        "voice_intro_summary": voice_intro,
+        "confidence": max(0.0, min(0.75, confidence)),
+        "heuristic": True,
+    }
+
+
 def _activation_page_html() -> str:
     return f"""<!doctype html>
 <html lang="zh-CN">
@@ -1742,9 +1806,13 @@ async def activation_identity_infer(
     )
     try:
         raw = await assistant_service.gateway.send_message(session_key, prompt)
-    except OpenClawGatewayError as exc:
-        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc)) from exc
-    parsed = _extract_json_block(raw)
+        parsed = _extract_json_block(raw)
+    except OpenClawGatewayError:
+        raw = ""
+        parsed = _heuristic_activation_identity(
+            transcript=transcript,
+            observed_name=str(inference_input["observed_name"]),
+        )
     preferred_name = str(parsed.get("preferred_name") or "").strip()
     if not preferred_name and inference_input["observed_name"]:
         preferred_name = str(inference_input["observed_name"]).strip()

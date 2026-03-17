@@ -10,6 +10,7 @@ import backend.auth as auth
 import backend.db as db
 import backend.main as main
 from backend.assistant_store import AssistantWorkspaceStore
+from backend.openclaw_gateway import OpenClawGatewayError
 
 
 def test_activation_endpoints_and_login_state(tmp_path, monkeypatch):
@@ -112,3 +113,44 @@ def test_activation_endpoints_and_login_state(tmp_path, monkeypatch):
     memory_path = workspace_dir / "assistant_data" / "users" / "1" / "memory.md"
     assert memory_path.exists()
     assert "首次激活完成" in memory_path.read_text(encoding="utf-8")
+
+
+def test_activation_identity_infer_falls_back_to_heuristics(tmp_path, monkeypatch):
+    db_path = tmp_path / "auth.db"
+    workspace_dir = tmp_path / "workspace"
+    monkeypatch.setattr(db, "DB_PATH", str(db_path))
+    monkeypatch.setattr(main.assistant_service, "store", AssistantWorkspaceStore(str(workspace_dir)))
+
+    async def broken_send_message(session_key: str, text: str) -> str:
+        raise OpenClawGatewayError("OpenClaw state dir not found; set OPENCLAW_STATE_DIR")
+
+    monkeypatch.setattr(main.assistant_service.gateway, "send_message", broken_send_message)
+    db.init_db()
+
+    password = "secret123"
+    conn = sqlite3.connect(str(db_path))
+    try:
+        conn.execute(
+            "INSERT INTO users (username, password_hash, created_at, is_configured) VALUES (?, ?, ?, 0)",
+            ("fallback@example.com", auth.hash_password(password), int(time.time())),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    token = auth.create_access_token(1, "fallback@example.com")["token"]
+    headers = {"Authorization": f"Bearer {token}"}
+
+    with TestClient(main.app) as client:
+        inferred = client.post(
+            "/api/activation/identity/infer",
+            headers=headers,
+            json={"transcript": "你好，我叫小北，是这个机器人的主人。", "surface": "robot"},
+        )
+        assert inferred.status_code == 200
+        payload = inferred.json()
+        assert payload["preferred_name"] == "小北"
+        assert payload["role_label"] == "owner"
+        assert payload["relation_to_robot"] == "primary_user"
+        assert payload["confidence"] > 0.3
+        assert "待确认" in payload["onboarding_notes"]
