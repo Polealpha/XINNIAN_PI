@@ -291,6 +291,24 @@ class PiEmotionRuntime:
             text = str(payload.get("text", "") or "")
             if text:
                 self._hardware.speak(self._tts, text)
+            return
+        if signal.type == "pan_tilt":
+            payload = signal.payload if isinstance(signal.payload, dict) else {}
+            pan = float(payload.get("pan", self._last_pan_turn) or 0.0)
+            tilt = float(payload.get("tilt", self._last_tilt_turn) or 0.0)
+            self.set_manual_pan_tilt(pan, tilt)
+
+    def set_manual_pan_tilt(self, pan: float, tilt: float) -> Dict[str, object]:
+        pan = max(-1.0, min(1.0, float(pan)))
+        tilt = max(-1.0, min(1.0, float(tilt)))
+        self._apply_pan_tilt(pan, tilt)
+        return {
+            "ok": True,
+            "pan": round(float(self._last_pan_turn), 3),
+            "tilt": round(float(self._last_tilt_turn), 3),
+            "pan_angle": round(float(self._last_pan_angle), 2),
+            "tilt_angle": round(float(self._last_tilt_angle), 2),
+        }
 
     def manual_care(self, context_text: str = "") -> Dict[str, object]:
         timestamp_ms = self._now_ms()

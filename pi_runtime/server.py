@@ -28,6 +28,11 @@ class SpeakRequest(BaseModel):
     text: str
 
 
+class PanTiltRequest(BaseModel):
+    pan: float = 0.0
+    tilt: float = 0.0
+
+
 class WifiRequest(BaseModel):
     ssid: str
     password: str = ""
@@ -106,6 +111,11 @@ def build_app(pi_config_path: str, engine_config_path: str) -> FastAPI:
             )
         )
         return {"ok": True}
+
+    @app.post("/pan_tilt")
+    def pan_tilt(payload: PanTiltRequest) -> dict:
+        assert runtime is not None
+        return runtime.set_manual_pan_tilt(payload.pan, payload.tilt)
 
     @app.get("/onboarding/state")
     def onboarding_state() -> dict:

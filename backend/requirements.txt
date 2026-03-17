@@ -7,3 +7,4 @@ httpx>=0.23.0,<0.28
 python-multipart>=0.0.9
 protobuf>=4.21.0
 cryptography>=41.0.0
+websockets>=12.0

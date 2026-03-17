@@ -56,6 +56,7 @@ python server_backend/run_server.py
 - `POST /signal`
 - `POST /care/manual`
 - `POST /speak`
+- `POST /pan_tilt`
 - `GET /summary`
 
 ## Backend API additions
@@ -64,6 +65,14 @@ python server_backend/run_server.py
 - `GET /api/device/claim/status`
 - `POST /api/device/owner/enrollment`
 - `GET /api/device/owner/status`
+- `POST /api/assistant/send`
+- `POST /api/assistant/bridge/send`
+- `GET /api/assistant/session/status`
+- `POST /api/assistant/session/reset`
+- `GET /api/assistant/todos`
+- `POST /api/assistant/todos`
+- `PATCH /api/assistant/todos/{id}`
+- `GET /api/assistant/memory/search`
 
 ## Video and onboarding flow
 
@@ -77,6 +86,7 @@ python server_backend/run_server.py
 - Wiring and power guide: `docs/pi_hardware_wiring.md`
 - Migration summary: `docs/raspberry_pi_zero2w_migration.md`
 - Engine design: `docs/engine_design.md`
+- OpenClaw software integration: `docs/openclaw_integration.md`
 
 ## Notes
 

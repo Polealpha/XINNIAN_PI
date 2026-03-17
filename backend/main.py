@@ -24,8 +24,20 @@ import httpx
 from cryptography.fernet import Fernet, InvalidToken
 
 from . import auth
+from .assistant_service import AssistantService, build_session_key, normalize_surface
 from .db import get_db, init_db
+from .openclaw_gateway import OpenClawGatewayError
 from .schemas import (
+    AssistantBridgeSendRequest,
+    AssistantMemorySearchResponse,
+    AssistantSendRequest,
+    AssistantSendResponse,
+    AssistantSessionResetRequest,
+    AssistantSessionStatusResponse,
+    AssistantTodoCreateRequest,
+    AssistantTodoItem,
+    AssistantTodoListResponse,
+    AssistantTodoUpdateRequest,
     CareRequest,
     CareResponse,
     DailySummaryRequest,
@@ -63,7 +75,7 @@ from .schemas import (
     TokenResponse,
     UserResponse,
 )
-from .settings import ACCESS_TOKEN_EXPIRE_SEC, ALLOWED_ORIGINS, AUTH_SECRET_KEY
+from .settings import ACCESS_TOKEN_EXPIRE_SEC, ALLOWED_ORIGINS, ASSISTANT_BRIDGE_TOKEN, ASSISTANT_BRIDGE_USER_ID, AUTH_SECRET_KEY
 
 app = FastAPI(title="Auth Backend", version="0.1.0")
 UPLOAD_ROOT = Path(__file__).resolve().parent / "uploads"
@@ -172,6 +184,7 @@ class EventManager:
 
 
 event_manager = EventManager()
+assistant_service = AssistantService()
 
 
 @app.on_event("startup")
@@ -359,16 +372,27 @@ def _insert_emotion_event(conn: Connection, user_id: int, payload: EmotionEventR
     return int(cur.lastrowid)
 
 
-def _list_chat_messages(conn: Connection, user_id: int, limit: int) -> List[Dict]:
-    cur = conn.execute(
-        """
-        SELECT * FROM chat_messages
-        WHERE user_id = ?
-        ORDER BY timestamp_ms ASC
-        LIMIT ?
-        """,
-        (user_id, limit),
-    )
+def _list_chat_messages(
+    conn: Connection,
+    user_id: int,
+    limit: int,
+    session_key: Optional[str] = None,
+    surface: Optional[str] = None,
+) -> List[Dict]:
+    query = [
+        "SELECT * FROM chat_messages",
+        "WHERE user_id = ?",
+    ]
+    params: List[Any] = [user_id]
+    if session_key:
+        query.append("AND session_key = ?")
+        params.append(str(session_key))
+    elif surface:
+        query.append("AND surface = ?")
+        params.append(str(surface))
+    query.append("ORDER BY timestamp_ms ASC LIMIT ?")
+    params.append(limit)
+    cur = conn.execute("\n".join(query), params)
     rows = [dict(row) for row in cur.fetchall()]
     for row in rows:
         attachments_raw = row.get("attachments_json", "[]")
@@ -380,6 +404,8 @@ def _list_chat_messages(conn: Connection, user_id: int, limit: int) -> List[Dict
             attachments = []
         row["attachments"] = attachments
         row["content_type"] = str(row.get("content_type") or "text")
+        row["surface"] = str(row.get("surface") or "desktop")
+        row["session_key"] = str(row.get("session_key") or "").strip() or None
     return rows
 
 
@@ -391,8 +417,8 @@ def _insert_chat_message(conn: Connection, user_id: int, payload: ChatMessageReq
         attachments_json = "[]"
     cur = conn.execute(
         """
-        INSERT INTO chat_messages (user_id, sender, text, content_type, attachments_json, timestamp_ms)
-        VALUES (?, ?, ?, ?, ?, ?)
+        INSERT INTO chat_messages (user_id, sender, text, content_type, attachments_json, timestamp_ms, surface, session_key)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             user_id,
@@ -401,10 +427,25 @@ def _insert_chat_message(conn: Connection, user_id: int, payload: ChatMessageReq
             str(payload.content_type or "text"),
             attachments_json,
             payload.timestamp_ms,
+            str(payload.surface or "desktop"),
+            str(payload.session_key or "").strip() or None,
         ),
     )
     conn.commit()
     return int(cur.lastrowid)
+
+
+def _chat_response_from_row(row: Dict[str, object]) -> ChatMessageResponse:
+    return ChatMessageResponse(
+        id=int(row["id"]),
+        sender=str(row.get("sender") or ""),
+        text=str(row.get("text") or ""),
+        content_type=str(row.get("content_type") or "text"),
+        attachments=row.get("attachments") if isinstance(row.get("attachments"), list) else [],
+        timestamp_ms=int(row.get("timestamp_ms") or 0),
+        surface=str(row.get("surface") or "desktop"),
+        session_key=str(row.get("session_key") or "").strip() or None,
+    )
 
 
 def _usage_date_key(ts_ms: Optional[int] = None) -> str:
@@ -1104,6 +1145,16 @@ def _parse_access_token(
     user = _get_user_by_id(conn, user_id)
     if not user:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User not found")
+    return user
+
+
+def _bridge_user_from_request(request: Request, conn: Connection) -> Dict:
+    token = str(request.headers.get("x-assistant-bridge-token") or "").strip()
+    if not token or token != ASSISTANT_BRIDGE_TOKEN:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid bridge token")
+    user = _get_user_by_id(conn, int(ASSISTANT_BRIDGE_USER_ID))
+    if not user:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Bridge user not found")
     return user
 
 
@@ -1884,22 +1935,16 @@ def device_status(
 @app.get("/api/chat/history", response_model=List[ChatMessageResponse])
 def chat_history(
     limit: int = 100,
+    surface: str = "desktop",
+    session_key: Optional[str] = None,
     credentials: HTTPAuthorizationCredentials = Depends(bearer_scheme),
     conn: Connection = Depends(get_db),
 ) -> List[ChatMessageResponse]:
     user = _parse_access_token(credentials, conn)
-    rows = _list_chat_messages(conn, int(user["id"]), limit)
-    return [
-        ChatMessageResponse(
-            id=row["id"],
-            sender=row["sender"],
-            text=row["text"],
-            content_type=str(row.get("content_type") or "text"),
-            attachments=row.get("attachments") if isinstance(row.get("attachments"), list) else [],
-            timestamp_ms=row["timestamp_ms"],
-        )
-        for row in rows
-    ]
+    resolved_surface = normalize_surface(surface)
+    resolved_session_key = session_key or build_session_key(resolved_surface, int(user["id"]))
+    rows = _list_chat_messages(conn, int(user["id"]), limit, session_key=resolved_session_key)
+    return [_chat_response_from_row(row) for row in rows]
 
 
 @app.post("/api/chat/history", response_model=ChatMessageResponse)
@@ -1909,6 +1954,9 @@ async def chat_history_add(
     conn: Connection = Depends(get_db),
 ) -> ChatMessageResponse:
     user = _parse_access_token(credentials, conn)
+    if not payload.session_key:
+        payload.session_key = build_session_key(normalize_surface(payload.surface), int(user["id"]))
+    payload.surface = normalize_surface(payload.surface)
     msg_id = _insert_chat_message(conn, int(user["id"]), payload)
     response = ChatMessageResponse(
         id=msg_id,
@@ -1917,6 +1965,8 @@ async def chat_history_add(
         content_type=str(payload.content_type or "text"),
         attachments=payload.attachments or [],
         timestamp_ms=payload.timestamp_ms,
+        surface=payload.surface,
+        session_key=payload.session_key,
     )
     await event_manager.broadcast(
         {
@@ -1973,6 +2023,235 @@ async def chat_upload(
             "size": size,
         },
     }
+
+
+async def _assistant_send_impl(
+    conn: Connection,
+    user_id: int,
+    payload: AssistantSendRequest,
+) -> AssistantSendResponse:
+    raw_text = str(payload.text or "").strip()
+    if not raw_text:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="text is required")
+    response_payload = await assistant_service.send_message(
+        conn,
+        user_id=int(user_id),
+        text=raw_text,
+        surface=payload.surface,
+        session_key=payload.session_key,
+        device_id=payload.device_id,
+        sender_id=payload.sender_id,
+        attachments=payload.attachments or [],
+        metadata=payload.metadata or {},
+    )
+    user_message = ChatMessageRequest(
+        sender="user",
+        text=raw_text,
+        content_type="text",
+        attachments=payload.attachments or [],
+        timestamp_ms=int(response_payload["timestamp_ms"]) - 1,
+        surface=str(response_payload["surface"]),
+        session_key=str(response_payload["session_key"]),
+    )
+    bot_text = _sanitize_outbound_bot_text(str(response_payload.get("text") or ""))[0] or "我在。"
+    bot_message = ChatMessageRequest(
+        sender="assistant",
+        text=bot_text,
+        content_type="text",
+        attachments=[],
+        timestamp_ms=int(response_payload["timestamp_ms"]),
+        surface=str(response_payload["surface"]),
+        session_key=str(response_payload["session_key"]),
+    )
+    user_id_int = int(user_id)
+    user_msg_id = _insert_chat_message(conn, user_id_int, user_message)
+    bot_msg_id = _insert_chat_message(conn, user_id_int, bot_message)
+    await event_manager.broadcast(
+        {
+            "type": "ChatMessage",
+            "timestamp_ms": user_message.timestamp_ms,
+            "payload": {
+                "id": user_msg_id,
+                "sender": user_message.sender,
+                "text": user_message.text,
+                "content_type": user_message.content_type,
+                "attachments": user_message.attachments,
+                "timestamp_ms": user_message.timestamp_ms,
+                "surface": user_message.surface,
+                "session_key": user_message.session_key,
+            },
+        }
+    )
+    await event_manager.broadcast(
+        {
+            "type": "ChatMessage",
+            "timestamp_ms": bot_message.timestamp_ms,
+            "payload": {
+                "id": bot_msg_id,
+                "sender": bot_message.sender,
+                "text": bot_message.text,
+                "content_type": bot_message.content_type,
+                "attachments": [],
+                "timestamp_ms": bot_message.timestamp_ms,
+                "surface": bot_message.surface,
+                "session_key": bot_message.session_key,
+            },
+        }
+    )
+    return AssistantSendResponse(
+        ok=True,
+        surface=str(response_payload["surface"]),
+        session_key=str(response_payload["session_key"]),
+        text=bot_text,
+        tool_results=response_payload.get("tool_results") or [],
+        timestamp_ms=int(response_payload["timestamp_ms"]),
+    )
+
+
+@app.post("/api/assistant/send", response_model=AssistantSendResponse)
+async def assistant_send(
+    payload: AssistantSendRequest,
+    credentials: HTTPAuthorizationCredentials = Depends(bearer_scheme),
+    conn: Connection = Depends(get_db),
+) -> AssistantSendResponse:
+    user = _parse_access_token(credentials, conn)
+    try:
+        return await _assistant_send_impl(conn, int(user["id"]), payload)
+    except OpenClawGatewayError as exc:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+
+
+@app.post("/api/assistant/bridge/send", response_model=AssistantSendResponse)
+async def assistant_bridge_send(
+    payload: AssistantBridgeSendRequest,
+    request: Request,
+    conn: Connection = Depends(get_db),
+) -> AssistantSendResponse:
+    user = _bridge_user_from_request(request, conn)
+    bridge_payload = AssistantSendRequest(
+        text=payload.text,
+        surface=payload.surface,
+        session_key=payload.session_key,
+        sender_id=payload.sender_id,
+        metadata=payload.metadata,
+    )
+    try:
+        return await _assistant_send_impl(conn, int(user["id"]), bridge_payload)
+    except OpenClawGatewayError as exc:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+
+
+@app.get("/api/assistant/session/status", response_model=AssistantSessionStatusResponse)
+def assistant_session_status(
+    surface: str = "desktop",
+    session_key: Optional[str] = None,
+    device_id: Optional[str] = None,
+    sender_id: Optional[str] = None,
+    limit: int = 30,
+    credentials: HTTPAuthorizationCredentials = Depends(bearer_scheme),
+    conn: Connection = Depends(get_db),
+) -> AssistantSessionStatusResponse:
+    user = _parse_access_token(credentials, conn)
+    status_payload = assistant_service.get_session_status(
+        conn,
+        user_id=int(user["id"]),
+        surface=surface,
+        session_key=session_key,
+        device_id=device_id,
+        sender_id=sender_id,
+    )
+    rows = _list_chat_messages(conn, int(user["id"]), max(1, min(int(limit), 100)), session_key=str(status_payload["session_key"]))
+    history = [_chat_response_from_row(row) for row in rows]
+    return AssistantSessionStatusResponse(
+        ok=True,
+        surface=str(status_payload["surface"]),
+        session_key=str(status_payload["session_key"]),
+        last_message_ts_ms=status_payload.get("last_message_ts_ms"),
+        message_count=int(status_payload.get("message_count") or 0),
+        history=history,
+    )
+
+
+@app.post("/api/assistant/session/reset")
+async def assistant_session_reset(
+    payload: AssistantSessionResetRequest,
+    credentials: HTTPAuthorizationCredentials = Depends(bearer_scheme),
+    conn: Connection = Depends(get_db),
+) -> Dict[str, object]:
+    user = _parse_access_token(credentials, conn)
+    try:
+        data = await assistant_service.reset_session(
+            int(user["id"]),
+            surface=payload.surface,
+            session_key=payload.session_key,
+            device_id=payload.device_id,
+            sender_id=payload.sender_id,
+        )
+    except OpenClawGatewayError as exc:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc)) from exc
+    return {"ok": True, **data}
+
+
+@app.get("/api/assistant/todos", response_model=AssistantTodoListResponse)
+def assistant_todos(
+    state: Optional[str] = None,
+    credentials: HTTPAuthorizationCredentials = Depends(bearer_scheme),
+    conn: Connection = Depends(get_db),
+) -> AssistantTodoListResponse:
+    user = _parse_access_token(credentials, conn)
+    items = [AssistantTodoItem(**item) for item in assistant_service.list_todos(int(user["id"]), state=state)]
+    return AssistantTodoListResponse(ok=True, items=items)
+
+
+@app.post("/api/assistant/todos", response_model=AssistantTodoItem)
+def assistant_todos_create(
+    payload: AssistantTodoCreateRequest,
+    credentials: HTTPAuthorizationCredentials = Depends(bearer_scheme),
+    conn: Connection = Depends(get_db),
+) -> AssistantTodoItem:
+    user = _parse_access_token(credentials, conn)
+    item = assistant_service.create_todo(
+        int(user["id"]),
+        title=payload.title,
+        details=payload.details,
+        due_at_ms=payload.due_at_ms,
+        tags=payload.tags,
+    )
+    return AssistantTodoItem(**item)
+
+
+@app.patch("/api/assistant/todos/{todo_id}", response_model=AssistantTodoItem)
+def assistant_todos_patch(
+    todo_id: str,
+    payload: AssistantTodoUpdateRequest,
+    credentials: HTTPAuthorizationCredentials = Depends(bearer_scheme),
+    conn: Connection = Depends(get_db),
+) -> AssistantTodoItem:
+    user = _parse_access_token(credentials, conn)
+    try:
+        item = assistant_service.update_todo(int(user["id"]), todo_id, payload.model_dump())
+    except KeyError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    return AssistantTodoItem(**item)
+
+
+@app.get("/api/assistant/memory/search", response_model=AssistantMemorySearchResponse)
+def assistant_memory_search(
+    q: str,
+    limit: int = 10,
+    credentials: HTTPAuthorizationCredentials = Depends(bearer_scheme),
+    conn: Connection = Depends(get_db),
+) -> AssistantMemorySearchResponse:
+    user = _parse_access_token(credentials, conn)
+    return AssistantMemorySearchResponse(
+        ok=True,
+        query=q,
+        results=assistant_service.search_memory(int(user["id"]), q, limit=max(1, min(int(limit), 20))),
+    )
 
 
 def _require_bearer(credentials: Optional[HTTPAuthorizationCredentials]) -> None:
@@ -2143,41 +2422,34 @@ def _sse(event: str, payload: Dict[str, object]) -> str:
 
 
 @app.post("/api/llm/care", response_model=CareResponse)
-def llm_care(
+async def llm_care(
     payload: CareRequest,
     credentials: HTTPAuthorizationCredentials = Depends(bearer_scheme),
     conn: Connection = Depends(get_db),
 ) -> CareResponse:
     user = _parse_access_token(credentials, conn)
-    llm = _ensure_llm_loaded()
-
-    if not llm:
-        return CareResponse(text="我在这里陪着你。", followup_question="", style="warm")
-
     context = _build_care_context(payload)
-    context = _inject_tooling_budget(context, conn, int(user["id"]))
-    reply = llm.generate_care_reply(context)
-    llm_meta = dict(getattr(llm, "last_meta", {}) or {})
-    if bool(llm_meta.get("online_search_used")):
-        online_reason = str(llm_meta.get("online_search_reason", "") or "")
-        emotion_delta = 1 if online_reason == "emotion_linked_search_enabled" else 0
-        _bump_tool_usage_daily(
+    assistant_prompt = (
+        "请基于以下情绪上下文，用中文给出一句温和、简洁、可执行的回应，"
+        "优先接住情绪，再给一个轻建议，最多一个问题。\n"
+        f"{json.dumps(context, ensure_ascii=False)}"
+    )
+    try:
+        assistant_reply = await assistant_service.send_message(
             conn,
-            int(user["id"]),
-            _usage_date_key(),
-            web_search_delta=1,
-            emotion_auto_delta=emotion_delta,
+            user_id=int(user["id"]),
+            text=assistant_prompt,
+            surface="desktop",
+            session_key=f"desktop:{int(user['id'])}:care",
+            metadata={"entrypoint": "llm_care", "current_emotion": payload.current_emotion},
         )
-
-    if not reply:
-        return CareResponse(text="我在这里陪着你。", followup_question="", style="warm")
-    safe_text, rewritten = _sanitize_outbound_bot_text(str(reply.get("text", "")))
-    if rewritten and isinstance(getattr(llm, "last_meta", None), dict):
-        llm.last_meta["online_search_reason"] = "function_call_blocked_and_rewritten"
+    except Exception:
+        assistant_reply = {"text": "我在这里陪着你。"}
+    safe_text, _rewritten = _sanitize_outbound_bot_text(str(assistant_reply.get("text") or ""))
     return CareResponse(
         text=safe_text or "我在这里陪着你。",
-        followup_question=str(reply.get("followup_question", "")),
-        style=str(reply.get("style", "warm")),
+        followup_question="",
+        style="warm",
     )
 
 
@@ -2188,80 +2460,39 @@ async def llm_care_stream(
     conn: Connection = Depends(get_db),
 ):
     user = _parse_access_token(credentials, conn)
-    llm = _ensure_llm_loaded()
     context = _build_care_context(payload)
-    context = _inject_tooling_budget(context, conn, int(user["id"]))
-    stream_iter = None
-    if llm:
-        stream_iter = llm.stream_care_text(context)
-        llm_meta = dict(getattr(llm, "last_meta", {}) or {})
-        if bool(llm_meta.get("online_search_used")):
-            online_reason = str(llm_meta.get("online_search_reason", "") or "")
-            emotion_delta = 1 if online_reason == "emotion_linked_search_enabled" else 0
-            _bump_tool_usage_daily(
-                conn,
-                int(user["id"]),
-                _usage_date_key(),
-                web_search_delta=1,
-                emotion_auto_delta=emotion_delta,
-            )
+    assistant_prompt = (
+        "请基于以下情绪上下文，用中文给出一句温和、简洁、可执行的回应，"
+        "优先接住情绪，再给一个轻建议，最多一个问题。\n"
+        f"{json.dumps(context, ensure_ascii=False)}"
+    )
+    try:
+        assistant_reply = await assistant_service.send_message(
+            conn,
+            user_id=int(user["id"]),
+            text=assistant_prompt,
+            surface="desktop",
+            session_key=f"desktop:{int(user['id'])}:care",
+            metadata={"entrypoint": "llm_care_stream", "current_emotion": payload.current_emotion},
+        )
+        final_text = _sanitize_outbound_bot_text(str(assistant_reply.get("text") or ""))[0] or "我在这里陪着你。"
+    except Exception:
+        final_text = "我在这里陪着你。"
 
     async def event_stream():
         try:
             yield _sse("start", {"ok": True})
-            full_text = ""
             sent_text = ""
-            last_emit_ms = int(time.time() * 1000)
-
-            if not llm:
-                fallback = "我在这里陪着你。"
-                for char in fallback:
-                    sent_text += char
-                    yield _sse("delta", {"text": char})
-                yield _sse(
-                    "done",
-                    {
-                        "text": sent_text,
-                        "followup_question": "",
-                        "style": "warm",
-                    },
-                )
-                return
-
-            for piece in stream_iter or ():
-                if not piece:
-                    now_ms = int(time.time() * 1000)
-                    if now_ms - last_emit_ms > 1800:
-                        yield _sse("ping", {"ts_ms": now_ms})
-                        await asyncio.sleep(0)
-                    continue
-                full_text += piece
-                normalized = full_text.replace("\\n", " ")
-                clipped = normalized[:100]
-                if len(clipped) <= len(sent_text):
-                    continue
-                delta = clipped[len(sent_text) :]
-                sent_text = clipped
+            for char in final_text[:100]:
+                delta = char
+                sent_text += delta
                 yield _sse("delta", {"text": delta})
-                last_emit_ms = int(time.time() * 1000)
                 await asyncio.sleep(0)
-                if len(sent_text) >= 100:
-                    break
-
-            final_text = sent_text.strip()
-            if not final_text:
-                fallback_reply = llm.generate_care_reply(context) if llm else None
-                final_text = str((fallback_reply or {}).get("text", "")).strip()[:100]
-            if not final_text:
-                final_text = "我在这里陪着你。"
-            final_text, _rewritten = _sanitize_outbound_bot_text(final_text)
-            if not final_text:
-                final_text = "我在这里陪着你。"
 
             yield _sse(
                 "done",
                 {
-                    "text": final_text,
+                    "text": sent_text or final_text,
                     "followup_question": "",
                     "style": "warm",
                 },
@@ -2281,30 +2512,34 @@ async def llm_care_stream(
 
 
 @app.post("/api/llm/daily_summary", response_model=DailySummaryResponse)
-def llm_daily_summary(
+async def llm_daily_summary(
     payload: DailySummaryRequest,
     credentials: HTTPAuthorizationCredentials = Depends(bearer_scheme),
+    conn: Connection = Depends(get_db),
 ) -> DailySummaryResponse:
-    _require_bearer(credentials)
-    llm = _ensure_llm_loaded()
-
+    user = _parse_access_token(credentials, conn)
     fallback_summary = "今天没有记录到明显情绪事件。需要的话，随时可以和我聊聊。"
     fallback_highlights = [
         "暂无明显触发事件",
         "整体状态较平稳",
         "需要时可随时记录感受",
     ]
-
-    if not llm:
+    try:
+        summary_text = await assistant_service.gateway.send_message(
+            f"desktop:{int(user['id'])}:daily-summary",
+            "请根据以下事件生成今天的情绪总结。第一行给 summary，后面 3 行每行一个 highlight。\n"
+            f"{json.dumps(payload.events, ensure_ascii=False)}",
+        )
+    except Exception:
+        summary_text = ""
+    if not summary_text.strip():
         return DailySummaryResponse(summary=fallback_summary, highlights=fallback_highlights)
-
-    reply = llm.generate_daily_summary({"events": payload.events})
-    if not reply:
-        return DailySummaryResponse(summary=fallback_summary, highlights=fallback_highlights)
-
+    lines = [line.strip("- ").strip() for line in summary_text.splitlines() if line.strip()]
+    summary = lines[0] if lines else fallback_summary
+    highlights = lines[1:4] if len(lines) > 1 else fallback_highlights
     return DailySummaryResponse(
-        summary=str(reply.get("summary", "")),
-        highlights=list(reply.get("highlights", [])),
+        summary=summary,
+        highlights=highlights or fallback_highlights,
     )
 
 def _row_to_event(row: Dict) -> Dict:

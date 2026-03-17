@@ -88,6 +88,8 @@ def init_db() -> None:
         )
         _ensure_column(conn, "chat_messages", "content_type", "TEXT NOT NULL DEFAULT 'text'")
         _ensure_column(conn, "chat_messages", "attachments_json", "TEXT NOT NULL DEFAULT '[]'")
+        _ensure_column(conn, "chat_messages", "surface", "TEXT NOT NULL DEFAULT 'desktop'")
+        _ensure_column(conn, "chat_messages", "session_key", "TEXT")
         _dedupe_chat_messages(conn)
         cursor.execute(
             """

@@ -230,6 +230,8 @@ class ChatMessageRequest(BaseModel):
     content_type: str = "text"
     attachments: list[dict] = Field(default_factory=list)
     timestamp_ms: int
+    surface: str = "desktop"
+    session_key: Optional[str] = None
 
 
 class ChatMessageResponse(BaseModel):
@@ -239,6 +241,8 @@ class ChatMessageResponse(BaseModel):
     content_type: str = "text"
     attachments: list[dict] = Field(default_factory=list)
     timestamp_ms: int
+    surface: str = "desktop"
+    session_key: Optional[str] = None
 
 
 class CareHistoryItem(BaseModel):
@@ -296,3 +300,90 @@ class EngineSignalPullRequest(BaseModel):
 
 class EngineSignalPullResponse(BaseModel):
     signals: list[EngineSignal]
+
+
+class AssistantSendRequest(BaseModel):
+    text: str
+    surface: str = "desktop"
+    session_key: Optional[str] = None
+    device_id: Optional[str] = None
+    sender_id: Optional[str] = None
+    attachments: list[dict] = Field(default_factory=list)
+    metadata: dict = Field(default_factory=dict)
+
+
+class AssistantToolResult(BaseModel):
+    name: str
+    ok: bool = True
+    detail: str = ""
+    data: dict = Field(default_factory=dict)
+
+
+class AssistantSendResponse(BaseModel):
+    ok: bool
+    surface: str
+    session_key: str
+    text: str
+    tool_results: list[AssistantToolResult] = Field(default_factory=list)
+    timestamp_ms: int
+
+
+class AssistantSessionStatusResponse(BaseModel):
+    ok: bool
+    surface: str
+    session_key: str
+    last_message_ts_ms: Optional[int] = None
+    message_count: int = 0
+    history: list[ChatMessageResponse] = Field(default_factory=list)
+
+
+class AssistantSessionResetRequest(BaseModel):
+    surface: str = "desktop"
+    session_key: Optional[str] = None
+    device_id: Optional[str] = None
+    sender_id: Optional[str] = None
+
+
+class AssistantTodoItem(BaseModel):
+    id: str
+    title: str
+    details: str = ""
+    state: str = "open"
+    created_at_ms: int
+    updated_at_ms: int
+    due_at_ms: Optional[int] = None
+    tags: list[str] = Field(default_factory=list)
+
+
+class AssistantTodoCreateRequest(BaseModel):
+    title: str
+    details: str = ""
+    due_at_ms: Optional[int] = None
+    tags: list[str] = Field(default_factory=list)
+
+
+class AssistantTodoUpdateRequest(BaseModel):
+    title: Optional[str] = None
+    details: Optional[str] = None
+    state: Optional[str] = None
+    due_at_ms: Optional[int] = None
+    tags: Optional[list[str]] = None
+
+
+class AssistantTodoListResponse(BaseModel):
+    ok: bool
+    items: list[AssistantTodoItem] = Field(default_factory=list)
+
+
+class AssistantMemorySearchResponse(BaseModel):
+    ok: bool
+    query: str
+    results: list[dict] = Field(default_factory=list)
+
+
+class AssistantBridgeSendRequest(BaseModel):
+    sender_id: str
+    text: str
+    surface: str = "wecom"
+    session_key: Optional[str] = None
+    metadata: dict = Field(default_factory=dict)
