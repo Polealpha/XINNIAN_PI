@@ -1,0 +1,6 @@
+﻿# tag: keyword1,keyword2,...
+fatigue:累,疲惫,好累,困,没精神,撑不住
+work_stress:加班,压力,任务,需求,deadline,绩效,老板,客户
+anger:烦,生气,火大,气死,崩溃,烦躁
+lonely:孤独,没人,一个人,想聊天,想说说
+anxiety:焦虑,紧张,不安,担心,害怕

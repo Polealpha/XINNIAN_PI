@@ -1,0 +1,200 @@
+{
+  "modes": {
+    "privacy_default": false,
+    "dnd_default": false
+  },
+  "video": {
+    "fps_target": 2,
+    "roi_size": 160,
+    "risk_smoothing_sec": 4,
+    "face_missing_grace_sec": 10,
+    "face_missing_decay_sec": 5,
+    "pitch_down_thr": 10.0,
+    "pitch_span": 20.0,
+    "gaze_thr": 0.45,
+    "gaze_span": 0.35,
+    "w_fatigue": 0.6,
+    "w_attention": 0.4,
+    "expression_enabled": false,
+    "expression_backend": "disabled",
+    "expression_model_path": "",
+    "expression_model_url": "",
+    "expression_mp_model_path": "",
+    "expression_mp_model_url": "",
+    "expression_allow_center_fallback": false,
+    "expression_min_confidence": 0.25,
+    "w_expression": 0.2
+  },
+  "audio": {
+    "sample_rate": 16000,
+    "frame_ms": 20,
+    "ring_buffer_minutes": 20,
+    "vad_enabled": true
+  },
+  "trigger": {
+    "V_threshold": 0.7,
+    "V_sustain_sec": 90,
+    "A_threshold": 0.7,
+    "A_sustain_sec": 80,
+    "conj_threshold": 0.65,
+    "conj_sustain_sec": 30,
+    "peak_threshold": 0.85,
+    "peak_window_sec": 300,
+    "peak_min_gap_sec": 30,
+    "peak_count": 3,
+    "cooldown_min": 15,
+    "daily_trigger_limit": 5,
+    "rollback_sec": 60,
+    "alpha_v": 0.2,
+    "alpha_a": 0.3,
+    "a_decay_sec": 5
+  },
+  "fusion": {
+    "wV": 0.45,
+    "wA": 0.35,
+    "wT": 0.2,
+    "care_threshold": 0.7
+  },
+  "asr": {
+    "enabled": true,
+    "engine": "dashscope",
+    "language": "zh",
+    "max_sec": 12,
+    "model_path": "",
+    "model_name": "small",
+    "device": "cpu",
+    "compute_type": "int8",
+    "beam_size": 5,
+    "vad_filter": true,
+    "api_key": "",
+    "api_key_env": "DASHSCOPE_API_KEY",
+    "base_websocket_api_url": "wss://dashscope.aliyuncs.com/api-ws/v1/inference",
+    "model": "paraformer-realtime-v2",
+    "semantic_punctuation_enabled": true
+  },
+  "llm": {
+    "enabled": true,
+    "call_mode": "client_direct",
+    "provider": "ark",
+    "timeout_ms": 15000,
+    "fallback_templates": true,
+    "daily_limit": 5,
+    "api_key": "",
+    "api_key_env": "ARK_API_KEY",
+    "base_url": "https://ark.cn-beijing.volces.com/api/v3",
+    "model": "doubao-seed-2-0-mini-260215",
+    "temperature": 0.75,
+    "top_p": 0.9,
+    "max_completion_tokens": 256,
+    "chat_history_messages": 6,
+    "response_format": "json_object",
+    "web_search_enabled": false,
+    "web_search_daily_limit": 3,
+    "web_search_high_value_only": true,
+    "web_search_news_default": false,
+    "web_search_timeout_ms": 8000,
+    "web_search_model": "doubao-seed-2-0-mini-260215",
+    "news_fallback_provider": "google_news_rss",
+    "emotion_linked_search_enabled": false,
+    "emotion_linked_search_risk_threshold": 0.82,
+    "emotion_linked_search_daily_cap": 0,
+    "online_search_enabled": false,
+    "online_search_mode": "auto",
+    "online_search_timeout_ms": 8000,
+    "online_search_model": "doubao-seed-2-0-mini-260215",
+    "online_search_require_supported_tool": false,
+    "tooling_enabled": false,
+    "tool_routing_mode": "rules_first",
+    "local_tools_enabled": false,
+    "local_tools_allowlist": [
+      "datetime",
+      "weather",
+      "news_headline"
+    ],
+    "weather_provider": "open_meteo",
+    "fx_provider": "frankfurter",
+    "stock_provider": "sina",
+    "alphavantage_api_key": "",
+    "system_tooling_enabled": false,
+    "system_tool_mode": "allowlist_direct",
+    "system_tool_allowlist_apps": [],
+    "system_tool_allowlist_actions": [],
+    "system_prompt_path": "engine/llm/prompts/care_prompt.md",
+    "summary_prompt_path": "engine/llm/prompts/daily_summary_prompt.md"
+  },
+  "runtime": {
+    "risk_update_interval_ms": 500
+  },
+  "face_tracking": {
+    "enabled": true,
+    "target_fps": 2,
+    "detector": "haar",
+    "min_face_area_ratio": 0.02,
+    "max_face_area_ratio": 0.6,
+    "dead_zone": 0.08,
+    "ema_alpha": 0.3,
+    "kp": 0.6,
+    "turn_max": 0.6,
+    "send_hz": 4,
+    "ui_emit_hz": 4,
+    "cmd_duration_ms": 250,
+    "lost_frames_stop": 5,
+    "multi_face_policy": "largest",
+    "scene_behavior": {
+      "desk": {
+        "base": 0.0
+      },
+      "home": {
+        "base": 0.0
+      }
+    }
+  },
+  "summary": {
+    "enabled": true,
+    "daily_time": "22:30"
+  },
+  "policy": {
+    "scene": "desk",
+    "history_window_sec": 1200,
+    "legacy_multimodal_trigger_enabled": false,
+    "care_delivery_strategy": "policy",
+    "thresholds": {
+      "nudge": 0.6,
+      "care": 0.7,
+      "guard": 0.9,
+      "nudge_V": 0.65,
+      "nudge_A": 0.7
+    },
+    "sustained_low_activity": {
+      "silence_min_sec": 900,
+      "V_thr": 0.6,
+      "attention_thr": 0.6
+    },
+    "peak_to_silence": {
+      "peak_z": 3.0,
+      "peak_window_sec": 30,
+      "silence_after_peak_sec": 45,
+      "max_gap_sec": 120
+    },
+    "expression_distress": {
+      "enabled": false,
+      "min_confidence": 0.45,
+      "negative_ids": [
+        3,
+        4,
+        5,
+        6,
+        7
+      ],
+      "nudge_thr": 0.4,
+      "care_thr": 0.62,
+      "hold_sec": 2.0
+    },
+    "expression_non_neutral_trigger": {
+      "enabled": false,
+      "min_confidence": 0.35,
+      "hold_sec": 0.8,
+      "cooldown_sec": 5.0
+    }
+  }
+}
