@@ -108,43 +108,6 @@ class EmotionEventResponse(BaseModel):
     source: Optional[str] = None
 
 
-class ProvisionRequest(BaseModel):
-    device_id: str
-    ssid: str
-    password: str
-    device_ip: Optional[str] = None
-    device_mac: Optional[str] = None
-    transport: str = "direct"
-    service_name: Optional[str] = None
-    pop: Optional[str] = None
-    qr_payload: Optional[str] = None
-
-
-class ProvisionResponse(BaseModel):
-    ok: bool
-    is_configured: bool
-
-
-class ProvisionExecuteRequest(BaseModel):
-    device_id: str
-    ssid: str
-    password: str
-    device_ip: Optional[str] = None
-    transport: str = "direct"
-    service_name: Optional[str] = None
-    pop: Optional[str] = None
-    qr_payload: Optional[str] = None
-    timeout_sec: int = 120
-
-
-class ProvisionExecuteResponse(BaseModel):
-    ok: bool
-    is_configured: bool
-    device_ip: Optional[str] = None
-    message: Optional[str] = None
-    logs: Optional[str] = None
-
-
 class DeviceInfoResponse(BaseModel):
     device_id: str
     device_ip: Optional[str] = None

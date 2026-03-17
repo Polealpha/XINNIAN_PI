@@ -4,6 +4,8 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 VENV_DIR="${ROOT_DIR}/.venv"
 ENV_FILE="/etc/default/emotion-pi"
+SERVICE_USER="${SUDO_USER:-${USER}}"
+SERVICE_GROUP="${SERVICE_USER}"
 
 echo "[install] project root: ${ROOT_DIR}"
 
@@ -20,6 +22,15 @@ pkg_has_candidate() {
   local candidate
   candidate="$(LC_ALL=C apt-cache policy "$1" | awk '/Candidate:/ {print $2; exit}')"
   [[ -n "${candidate}" && "${candidate}" != "(none)" ]]
+}
+
+ensure_env_key() {
+  local key="$1"
+  local value="$2"
+  if sudo grep -q "^${key}=" "${ENV_FILE}" 2>/dev/null; then
+    return
+  fi
+  echo "${key}=${value}" | sudo tee -a "${ENV_FILE}" >/dev/null
 }
 
 "${APT_SUDO[@]}" apt-get update
@@ -85,6 +96,11 @@ fi
 
 if [[ ! -f "${ENV_FILE}" ]]; then
   sudo tee "${ENV_FILE}" >/dev/null <<'EOF'
+PI_RUNTIME_CONFIG=config/pi_zero2w.headless.json
+ENGINE_CONFIG_PATH=config/engine_config.json
+OMP_NUM_THREADS=1
+OPENBLAS_NUM_THREADS=1
+NUMEXPR_NUM_THREADS=1
 ARK_API_KEY=
 DASHSCOPE_API_KEY=
 AUTH_SECRET_KEY=change-this-secret
@@ -92,11 +108,18 @@ AUTH_CORS_ORIGINS=*
 AUTH_DB_PATH=/var/lib/emotion-pi/auth.db
 EOF
 fi
+ensure_env_key "PI_RUNTIME_CONFIG" "config/pi_zero2w.headless.json"
+ensure_env_key "ENGINE_CONFIG_PATH" "config/engine_config.json"
+ensure_env_key "OMP_NUM_THREADS" "1"
+ensure_env_key "OPENBLAS_NUM_THREADS" "1"
+ensure_env_key "NUMEXPR_NUM_THREADS" "1"
 
-sudo install -d /var/lib/emotion-pi
+sudo install -d -o "${SERVICE_USER}" -g "${SERVICE_GROUP}" /var/lib/emotion-pi
+sudo chown -R "${SERVICE_USER}:${SERVICE_GROUP}" /var/lib/emotion-pi
+sudo usermod -a -G audio,video,i2c,gpio "${SERVICE_USER}" || true
 
-sed "s#__PROJECT_ROOT__#${ROOT_DIR}#g" "${ROOT_DIR}/systemd/emotion-pi.service" | sudo tee /etc/systemd/system/emotion-pi.service >/dev/null
-sed "s#__PROJECT_ROOT__#${ROOT_DIR}#g" "${ROOT_DIR}/systemd/emotion-backend.service" | sudo tee /etc/systemd/system/emotion-backend.service >/dev/null
+sed -e "s#__PROJECT_ROOT__#${ROOT_DIR}#g" -e "s#__SERVICE_USER__#${SERVICE_USER}#g" "${ROOT_DIR}/systemd/emotion-pi.service" | sudo tee /etc/systemd/system/emotion-pi.service >/dev/null
+sed -e "s#__PROJECT_ROOT__#${ROOT_DIR}#g" -e "s#__SERVICE_USER__#${SERVICE_USER}#g" "${ROOT_DIR}/systemd/emotion-backend.service" | sudo tee /etc/systemd/system/emotion-backend.service >/dev/null
 
 sudo systemctl daemon-reload
 sudo systemctl enable emotion-pi.service

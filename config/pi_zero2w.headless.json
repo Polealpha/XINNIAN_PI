@@ -1,0 +1,63 @@
+{
+  "service": {
+    "host": "0.0.0.0",
+    "port": 8090
+  },
+  "device": {
+    "device_id": "polealpha-zero2w",
+    "scene": "desk"
+  },
+  "audio": {
+    "enabled": false,
+    "sample_rate": 16000,
+    "channels": 1,
+    "frame_ms": 20,
+    "command": [
+      "arecord",
+      "-q",
+      "-D",
+      "default",
+      "-f",
+      "S16_LE",
+      "-r",
+      "16000",
+      "-c",
+      "1",
+      "-t",
+      "raw"
+    ],
+    "restart_backoff_sec": 2.0
+  },
+  "camera": {
+    "enabled": false,
+    "backend": "picamera2",
+    "device_index": 0,
+    "width": 320,
+    "height": 240,
+    "fps": 2
+  },
+  "hardware": {
+    "driver": "mock",
+    "speaker_command": [
+      "aplay",
+      "-q"
+    ],
+    "status_led_gpio": null,
+    "pan_servo": {
+      "enabled": false,
+      "driver": "mock",
+      "gpio_pin": null,
+      "min_angle": -65,
+      "max_angle": 65,
+      "center_angle": 0,
+      "pca9685_channel": null,
+      "pulse_min_us": 500,
+      "pulse_max_us": 2500
+    },
+    "pca9685": {
+      "enabled": false,
+      "address": 64,
+      "frequency": 50
+    }
+  }
+}

@@ -45,10 +45,6 @@ from .schemas import (
     LoginRequest,
     LoginResponse,
     LogoutRequest,
-    ProvisionRequest,
-    ProvisionResponse,
-    ProvisionExecuteRequest,
-    ProvisionExecuteResponse,
     ProfileResponse,
     ProfileUpdateRequest,
     RealtimeScoresResponse,
@@ -60,7 +56,7 @@ from .schemas import (
     TokenResponse,
     UserResponse,
 )
-from .settings import ACCESS_TOKEN_EXPIRE_SEC, ALLOWED_ORIGINS, AUTH_SECRET_KEY, DEVICE_PROVISIONING_ENABLED
+from .settings import ACCESS_TOKEN_EXPIRE_SEC, ALLOWED_ORIGINS, AUTH_SECRET_KEY
 
 app = FastAPI(title="Auth Backend", version="0.1.0")
 UPLOAD_ROOT = Path(__file__).resolve().parent / "uploads"
@@ -86,6 +82,8 @@ app.add_middleware(
 bearer_scheme = HTTPBearer(auto_error=False)
 _llm = None
 _llm_config = None
+_llm_init_attempted = False
+_llm_init_lock = threading.Lock()
 HEARTBEAT_STALE_MS = 30000
 CLIENT_SESSION_STALE_MS = 45000
 _RUNTIME_BOOT_TS = int(time.time() * 1000)
@@ -172,7 +170,6 @@ event_manager = EventManager()
 @app.on_event("startup")
 def _startup() -> None:
     init_db()
-    _init_llm()
     _ensure_signal_state()
 
 
@@ -237,30 +234,25 @@ def _is_local_request(request: Request) -> bool:
     return host in {"127.0.0.1", "::1", "localhost"}
 
 
-def _ensure_device_provisioning_enabled() -> None:
-    if DEVICE_PROVISIONING_ENABLED:
-        return
-    raise HTTPException(
-        status_code=status.HTTP_410_GONE,
-        detail=(
-            "Legacy BLE/ESP provisioning is disabled in the Raspberry Pi deployment. "
-            "Configure Wi-Fi directly on Raspberry Pi OS or enable DEVICE_PROVISIONING_ENABLED explicitly."
-        ),
-    )
+def _ensure_llm_loaded():
+    global _llm, _llm_config, _llm_init_attempted
+    if _llm_init_attempted:
+        return _llm
+    with _llm_init_lock:
+        if _llm_init_attempted:
+            return _llm
+        try:
+            from engine.core.config import load_engine_config
+            from engine.llm.llm_responder import LLMResponder
 
-
-def _init_llm() -> None:
-    global _llm, _llm_config
-    try:
-        from engine.core.config import load_engine_config
-        from engine.llm.llm_responder import LLMResponder
-
-        config = load_engine_config("config/engine_config.json")
-        _llm = LLMResponder(config.llm)
-        _llm_config = config.llm
-    except Exception:
-        _llm = None
-        _llm_config = None
+            config = load_engine_config("config/engine_config.json")
+            _llm = LLMResponder(config.llm)
+            _llm_config = config.llm
+        except Exception:
+            _llm = None
+            _llm_config = None
+        _llm_init_attempted = True
+        return _llm
 
 
 def _get_user_by_username(conn: Connection, username: str) -> Dict:
@@ -1216,81 +1208,6 @@ def emotion_history_add(
     return EmotionEventResponse(**data)
 
 
-@app.post("/api/device/provision", response_model=ProvisionResponse)
-def device_provision(
-    payload: ProvisionRequest,
-    credentials: HTTPAuthorizationCredentials = Depends(bearer_scheme),
-    conn: Connection = Depends(get_db),
-) -> ProvisionResponse:
-    _ensure_device_provisioning_enabled()
-    user = _parse_access_token(credentials, conn)
-    _set_user_configured(conn, int(user["id"]), True)
-    _upsert_device(
-        conn,
-        int(user["id"]),
-        payload.device_id,
-        device_ip=payload.device_ip,
-        ssid=payload.ssid,
-        device_mac=(payload.device_mac or "").strip() or None,
-    )
-    _upsert_wifi_profile(
-        conn,
-        int(user["id"]),
-        payload.device_id,
-        payload.ssid,
-        payload.password,
-        payload.transport or "mobile",
-    )
-    return ProvisionResponse(ok=True, is_configured=True)
-
-
-@app.post("/api/device/provision/execute", response_model=ProvisionExecuteResponse)
-def device_provision_execute(
-    payload: ProvisionExecuteRequest,
-    credentials: HTTPAuthorizationCredentials = Depends(bearer_scheme),
-    conn: Connection = Depends(get_db),
-) -> ProvisionExecuteResponse:
-    _ensure_device_provisioning_enabled()
-    from .provisioning import run_provisioning
-
-    user = _parse_access_token(credentials, conn)
-    result = run_provisioning(
-        transport=payload.transport,
-        ssid=payload.ssid,
-        password=payload.password,
-        service_name=payload.service_name,
-        pop=payload.pop,
-        qr_payload=payload.qr_payload,
-        timeout_sec=payload.timeout_sec,
-    )
-    is_configured = False
-    if result.ok:
-        is_configured = True
-        _set_user_configured(conn, int(user["id"]), True)
-        _upsert_device(
-            conn,
-            int(user["id"]),
-            payload.device_id,
-            device_ip=payload.device_ip,
-            ssid=payload.ssid,
-        )
-        _upsert_wifi_profile(
-            conn,
-            int(user["id"]),
-            payload.device_id,
-            payload.ssid,
-            payload.password,
-            payload.transport or "desktop",
-        )
-    return ProvisionExecuteResponse(
-        ok=result.ok,
-        is_configured=is_configured,
-        device_ip=payload.device_ip,
-        message=result.message,
-        logs=None if result.ok else result.logs,
-    )
-
-
 @app.post("/api/client/session/heartbeat", response_model=ClientSessionHeartbeatResponse)
 def client_session_heartbeat(
     payload: ClientSessionHeartbeatRequest,
@@ -1904,6 +1821,7 @@ def _inject_tooling_budget(
     conn: Connection,
     user_id: int,
 ) -> Dict[str, object]:
+    _ensure_llm_loaded()
     date_key = _usage_date_key()
     usage = _get_tool_usage_daily(conn, user_id, date_key)
     web_limit = int(getattr(_llm_config, "web_search_daily_limit", 5) if _llm_config else 5)
@@ -1945,14 +1863,15 @@ def llm_care(
     conn: Connection = Depends(get_db),
 ) -> CareResponse:
     user = _parse_access_token(credentials, conn)
+    llm = _ensure_llm_loaded()
 
-    if not _llm:
+    if not llm:
         return CareResponse(text="我在这里陪着你。", followup_question="", style="warm")
 
     context = _build_care_context(payload)
     context = _inject_tooling_budget(context, conn, int(user["id"]))
-    reply = _llm.generate_care_reply(context)
-    llm_meta = dict(getattr(_llm, "last_meta", {}) or {})
+    reply = llm.generate_care_reply(context)
+    llm_meta = dict(getattr(llm, "last_meta", {}) or {})
     if bool(llm_meta.get("online_search_used")):
         online_reason = str(llm_meta.get("online_search_reason", "") or "")
         emotion_delta = 1 if online_reason == "emotion_linked_search_enabled" else 0
@@ -1967,8 +1886,8 @@ def llm_care(
     if not reply:
         return CareResponse(text="我在这里陪着你。", followup_question="", style="warm")
     safe_text, rewritten = _sanitize_outbound_bot_text(str(reply.get("text", "")))
-    if rewritten and _llm and isinstance(getattr(_llm, "last_meta", None), dict):
-        _llm.last_meta["online_search_reason"] = "function_call_blocked_and_rewritten"
+    if rewritten and isinstance(getattr(llm, "last_meta", None), dict):
+        llm.last_meta["online_search_reason"] = "function_call_blocked_and_rewritten"
     return CareResponse(
         text=safe_text or "我在这里陪着你。",
         followup_question=str(reply.get("followup_question", "")),
@@ -1983,12 +1902,13 @@ async def llm_care_stream(
     conn: Connection = Depends(get_db),
 ):
     user = _parse_access_token(credentials, conn)
+    llm = _ensure_llm_loaded()
     context = _build_care_context(payload)
     context = _inject_tooling_budget(context, conn, int(user["id"]))
     stream_iter = None
-    if _llm:
-        stream_iter = _llm.stream_care_text(context)
-        llm_meta = dict(getattr(_llm, "last_meta", {}) or {})
+    if llm:
+        stream_iter = llm.stream_care_text(context)
+        llm_meta = dict(getattr(llm, "last_meta", {}) or {})
         if bool(llm_meta.get("online_search_used")):
             online_reason = str(llm_meta.get("online_search_reason", "") or "")
             emotion_delta = 1 if online_reason == "emotion_linked_search_enabled" else 0
@@ -2007,7 +1927,7 @@ async def llm_care_stream(
             sent_text = ""
             last_emit_ms = int(time.time() * 1000)
 
-            if not _llm:
+            if not llm:
                 fallback = "我在这里陪着你。"
                 for char in fallback:
                     sent_text += char
@@ -2044,7 +1964,7 @@ async def llm_care_stream(
 
             final_text = sent_text.strip()
             if not final_text:
-                fallback_reply = _llm.generate_care_reply(context) if _llm else None
+                fallback_reply = llm.generate_care_reply(context) if llm else None
                 final_text = str((fallback_reply or {}).get("text", "")).strip()[:100]
             if not final_text:
                 final_text = "我在这里陪着你。"
@@ -2080,6 +2000,7 @@ def llm_daily_summary(
     credentials: HTTPAuthorizationCredentials = Depends(bearer_scheme),
 ) -> DailySummaryResponse:
     _require_bearer(credentials)
+    llm = _ensure_llm_loaded()
 
     fallback_summary = "今天没有记录到明显情绪事件。需要的话，随时可以和我聊聊。"
     fallback_highlights = [
@@ -2088,10 +2009,10 @@ def llm_daily_summary(
         "需要时可随时记录感受",
     ]
 
-    if not _llm:
+    if not llm:
         return DailySummaryResponse(summary=fallback_summary, highlights=fallback_highlights)
 
-    reply = _llm.generate_daily_summary({"events": payload.events})
+    reply = llm.generate_daily_summary({"events": payload.events})
     if not reply:
         return DailySummaryResponse(summary=fallback_summary, highlights=fallback_highlights)
 

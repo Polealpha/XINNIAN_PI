@@ -49,17 +49,16 @@ class PiEmotionRuntime:
         self._acoustic_risk = AcousticRiskScorer()
         self._trigger_manager = TriggerManager(self.engine_config.trigger, self.engine_config.video)
         self._fusion = FusionScorer(self.engine_config.fusion)
-        self._asr = AsrModule(self.engine_config.asr)
+        self._asr = AsrModule(self.engine_config.asr) if self.pi_config.audio.enabled else None
         engine_root = Path(__file__).resolve().parents[1] / "engine"
         self._text_risk = TextRiskScorer(str(engine_root / "nlp" / "lexicon_zh.txt"))
         self._care_policy = CarePolicy(str(engine_root / "policy" / "templates_zh.json"))
-        self._llm = LLMResponder(self.engine_config.llm)
-        self._summarizer = DailySummarizer(self._llm)
+        self._llm: Optional[LLMResponder] = None
         self._tts = TtsEngine()
         self._hardware: BaseHardware = build_hardware(self.pi_config.hardware)
 
-        self._face_detector = FaceDetector(asdict(self.engine_config.face_tracking))
-        self._face_tracker = FaceTracker(asdict(self.engine_config.face_tracking))
+        self._face_detector = FaceDetector(asdict(self.engine_config.face_tracking)) if self.pi_config.camera.enabled else None
+        self._face_tracker = FaceTracker(asdict(self.engine_config.face_tracking)) if self.pi_config.camera.enabled else None
 
         self._audio_seq = 0
         self._video_seq = 0
@@ -118,6 +117,16 @@ class PiEmotionRuntime:
             thread.join(timeout=2.0)
         self._threads.clear()
         self._hardware.close()
+
+    def _ensure_llm(self) -> Optional[LLMResponder]:
+        if self._llm is not None:
+            return self._llm
+        try:
+            self._llm = LLMResponder(self.engine_config.llm)
+        except Exception as exc:
+            logger.warning("llm init failed: %s", exc)
+            self._llm = None
+        return self._llm
 
     def get_status(self) -> EngineStatus:
         now_ms = self._now_ms()
@@ -194,8 +203,9 @@ class PiEmotionRuntime:
         text = "我在。要不要先慢一点，和我说说现在最卡住你的那件事？"
         followup = ""
         style = "warm"
-        if self._llm and self._llm.enabled:
-            reply = self._llm.generate_care_reply(payload) or {}
+        llm = self._ensure_llm()
+        if llm and llm.enabled:
+            reply = llm.generate_care_reply(payload) or {}
             text = str(reply.get("text", text) or text).strip()
             followup = str(reply.get("followup_question", "") or "").strip()
             style = str(reply.get("style", "warm") or "warm").strip()
@@ -390,11 +400,11 @@ class PiEmotionRuntime:
         if self._mode == "privacy":
             return
         self._last_video_ts = frame.timestamp_ms
-        det = self._face_detector.detect(frame) if self._face_detector.ready else None
+        det = self._face_detector.detect(frame) if self._face_detector and self._face_detector.ready else None
         if det and det.found:
             self._face_missing_ms = 0
             self._last_face_present = True
-            turn, dbg = self._face_tracker.update(det, frame.width, frame.timestamp_ms)
+            turn, dbg = self._face_tracker.update(det, frame.width, frame.timestamp_ms) if self._face_tracker else (None, {})
             if turn is not None:
                 self._hardware.set_pan_turn(turn)
             ex_smooth = abs(float(dbg.get("ex_smooth", 0.0)))
@@ -547,7 +557,8 @@ class PiEmotionRuntime:
             self._hardware.set_status_active(False)
 
     def _maybe_rewrite_care_plan(self, care_plan, frame: RiskFrame, transcript: str, summary: str, tags: List[str], t_score: Optional[float]):
-        if not self._llm or not self._llm.enabled:
+        llm = self._ensure_llm()
+        if not llm or not llm.enabled:
             return care_plan
         if care_plan.decision not in {"NUDGE", "CARE", "GUARD"}:
             return care_plan
@@ -562,7 +573,7 @@ class PiEmotionRuntime:
             "transcript_summary": summary or transcript[:120],
             "constraints": "回复≤100字；先共情，再给一个轻建议，最多一个问题，不说教。",
         }
-        reply = self._llm.generate_care_reply(context) or {}
+        reply = llm.generate_care_reply(context) or {}
         text = str(reply.get("text", "") or "").strip()
         if not text:
             return care_plan
@@ -607,7 +618,7 @@ class PiEmotionRuntime:
             self._stop.wait(timeout=min(wait_sec, 60.0))
 
     def _generate_daily_summary(self) -> None:
-        payload = self._summarizer.summarize(list(self._summary_events))
+        payload = DailySummarizer(self._ensure_llm()).summarize(list(self._summary_events))
         payload["count"] = len(self._summary_events)
         self._last_summary_payload = payload
         self._emit("DailySummaryReady", self._now_ms(), payload)

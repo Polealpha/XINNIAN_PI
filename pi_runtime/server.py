@@ -11,6 +11,7 @@ from pydantic import BaseModel, Field
 
 from engine.core.types import UserSignal
 
+from .config import load_pi_config
 from .runtime import PiEmotionRuntime
 
 logging.basicConfig(level=logging.INFO, format="[%(asctime)s] %(levelname)s %(name)s: %(message)s")
@@ -105,9 +106,9 @@ def main() -> None:
     parser.add_argument("--engine-config", default="config/engine_config.json", help="Engine config path")
     args = parser.parse_args()
 
-    temp_runtime = PiEmotionRuntime(args.config, args.engine_config)
     app = build_app(args.config, args.engine_config)
-    uvicorn.run(app, host=temp_runtime.pi_config.service.host, port=temp_runtime.pi_config.service.port)
+    pi_config = load_pi_config(args.config)
+    uvicorn.run(app, host=pi_config.service.host, port=pi_config.service.port)
 
 
 if __name__ == "__main__":

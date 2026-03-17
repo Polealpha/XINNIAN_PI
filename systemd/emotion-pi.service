@@ -5,11 +5,22 @@ Wants=network-online.target
 
 [Service]
 Type=simple
+User=__SERVICE_USER__
+Group=__SERVICE_USER__
+SupplementaryGroups=audio video i2c gpio
 EnvironmentFile=-/etc/default/emotion-pi
+Environment=PYTHONUNBUFFERED=1
+Environment=OMP_NUM_THREADS=1
+Environment=OPENBLAS_NUM_THREADS=1
+Environment=NUMEXPR_NUM_THREADS=1
 WorkingDirectory=__PROJECT_ROOT__
-ExecStart=__PROJECT_ROOT__/.venv/bin/python -m pi_runtime.server --config config/pi_zero2w.json --engine-config config/engine_config.json
+ExecStart=/bin/sh -lc 'exec "__PROJECT_ROOT__/.venv/bin/python" -m pi_runtime.server --config "${PI_RUNTIME_CONFIG:-config/pi_zero2w.headless.json}" --engine-config "${ENGINE_CONFIG_PATH:-config/engine_config.json}"'
 Restart=always
-RestartSec=3
+RestartSec=2
+TasksMax=128
+Nice=5
+NoNewPrivileges=true
+PrivateTmp=true
 
 [Install]
 WantedBy=multi-user.target
