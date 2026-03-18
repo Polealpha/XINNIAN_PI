@@ -1,0 +1,7 @@
+{
+  "name": "EmoResonance - Dual Robot Companion",
+  "description": "A companion app for the Emotional Capture & Active Care Dual Robot system. It visualizes daily emotional states captured by the workplace robot and facilitates active care conversations.",
+  "requestFramePermissions": [
+    "microphone"
+  ]
+}

@@ -19,3 +19,9 @@ build/
 *.jpeg
 *.png
 *.mp4
+app windows/node_modules/
+app windows/dist/
+app windows/release/
+app windows/.vite/
+apps/**/__pycache__/
+models/

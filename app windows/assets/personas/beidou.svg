@@ -1,0 +1,21 @@
+﻿<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="800" viewBox="0 0 1200 800" role="img" aria-label="Beidou portrait">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#101a3a"/>
+      <stop offset="100%" stop-color="#081024"/>
+    </linearGradient>
+    <radialGradient id="face" cx="50%" cy="45%" r="60%">
+      <stop offset="0%" stop-color="#f4d6be"/>
+      <stop offset="100%" stop-color="#ddb79b"/>
+    </radialGradient>
+  </defs>
+  <rect width="1200" height="800" fill="url(#bg)"/>
+  <circle cx="600" cy="420" r="210" fill="url(#face)"/>
+  <path d="M390 360c20-150 160-230 270-210 110 15 195 95 215 220-80-70-150-95-245-90-95 6-165 28-240 80z" fill="#141318"/>
+  <ellipse cx="525" cy="430" rx="18" ry="12" fill="#1d1a1c"/>
+  <ellipse cx="675" cy="430" rx="18" ry="12" fill="#1d1a1c"/>
+  <path d="M520 535c55 35 105 35 160 0" stroke="#7f4a45" stroke-width="12" fill="none" stroke-linecap="round"/>
+  <path d="M300 740c50-150 190-220 300-220s250 70 300 220" fill="#202742"/>
+  <text x="72" y="90" fill="#d9defa" font-family="Arial" font-size="52" font-weight="700">Beidou</text>
+  <text x="72" y="138" fill="#8fa0ff" font-family="Arial" font-size="28">Calm Strategy Persona</text>
+</svg>

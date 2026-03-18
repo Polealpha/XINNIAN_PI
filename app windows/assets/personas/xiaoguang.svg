@@ -1,0 +1,22 @@
+﻿<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="800" viewBox="0 0 1200 800" role="img" aria-label="Xiaoguang portrait">
+  <defs>
+    <linearGradient id="bg3" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#1a1840"/>
+      <stop offset="100%" stop-color="#101633"/>
+    </linearGradient>
+    <radialGradient id="face3" cx="50%" cy="42%" r="60%">
+      <stop offset="0%" stop-color="#f7dbc4"/>
+      <stop offset="100%" stop-color="#ddb89d"/>
+    </radialGradient>
+  </defs>
+  <rect width="1200" height="800" fill="url(#bg3)"/>
+  <circle cx="600" cy="418" r="208" fill="url(#face3)"/>
+  <path d="M380 360c35-150 160-230 270-220 112 10 205 95 228 220-80-60-155-90-255-90s-178 30-243 90z" fill="#18161c"/>
+  <path d="M430 278c78-32 123-92 140-170 105 72 178 150 176 258-50-56-98-86-168-90-70-4-118 6-148 2z" fill="#1b1820"/>
+  <ellipse cx="525" cy="430" rx="17" ry="11" fill="#221f22"/>
+  <ellipse cx="675" cy="430" rx="17" ry="11" fill="#221f22"/>
+  <path d="M520 538c55 34 105 34 160 0" stroke="#8a4b45" stroke-width="12" fill="none" stroke-linecap="round"/>
+  <path d="M302 742c52-150 190-220 300-220 110 0 250 70 300 220" fill="#252c4a"/>
+  <text x="72" y="90" fill="#dce1ff" font-family="Arial" font-size="52" font-weight="700">Xiaoguang</text>
+  <text x="72" y="138" fill="#c28cff" font-family="Arial" font-size="28">Growth Encouragement Persona</text>
+</svg>

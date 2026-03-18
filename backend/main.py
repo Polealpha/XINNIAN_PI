@@ -722,7 +722,7 @@ def _activation_page_html() -> str:
     const output = q("output");
     const tokenInput = q("token");
     const qsToken = new URLSearchParams(window.location.search).get("token") || "";
-    tokenInput.value = localStorage.getItem("activationToken") || qsToken;
+    tokenInput.value = qsToken || localStorage.getItem("activationToken") || "";
 
     function headers() {{
       const token = (tokenInput.value || "").trim();

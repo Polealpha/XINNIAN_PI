@@ -1,0 +1,22 @@
+﻿<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="800" viewBox="0 0 1200 800" role="img" aria-label="Moling portrait">
+  <defs>
+    <linearGradient id="bg2" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#0f132d"/>
+      <stop offset="100%" stop-color="#08101f"/>
+    </linearGradient>
+    <radialGradient id="face2" cx="50%" cy="42%" r="60%">
+      <stop offset="0%" stop-color="#f1d4bc"/>
+      <stop offset="100%" stop-color="#d4af92"/>
+    </radialGradient>
+  </defs>
+  <rect width="1200" height="800" fill="url(#bg2)"/>
+  <circle cx="610" cy="420" r="205" fill="url(#face2)"/>
+  <path d="M400 355c15-130 120-230 250-230 135 0 245 96 255 230-65-50-150-80-255-80s-190 30-250 80z" fill="#121116"/>
+  <path d="M410 365c0 130 80 245 210 280-70-70-90-155-78-280H410z" fill="#111014" opacity="0.9"/>
+  <ellipse cx="540" cy="432" rx="16" ry="11" fill="#1d1a1c"/>
+  <ellipse cx="682" cy="432" rx="16" ry="11" fill="#1d1a1c"/>
+  <path d="M540 540c48 26 90 26 138 0" stroke="#7a4340" stroke-width="11" fill="none" stroke-linecap="round"/>
+  <path d="M315 742c64-146 186-220 295-220 114 0 236 72 300 220" fill="#1f2540"/>
+  <text x="72" y="90" fill="#d7defa" font-family="Arial" font-size="52" font-weight="700">Moling</text>
+  <text x="72" y="138" fill="#b58cff" font-family="Arial" font-size="28">Focus Collaboration Persona</text>
+</svg>
