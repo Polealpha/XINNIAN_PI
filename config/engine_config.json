@@ -57,10 +57,10 @@
   },
   "asr": {
     "enabled": true,
-    "engine": "dashscope",
+    "engine": "sherpa_onnx",
     "language": "zh",
     "max_sec": 12,
-    "model_path": "",
+    "model_path": "models/asr/vosk-model-small-cn-0.22",
     "model_name": "small",
     "device": "cpu",
     "compute_type": "int8",
@@ -68,9 +68,14 @@
     "vad_filter": true,
     "api_key": "",
     "api_key_env": "DASHSCOPE_API_KEY",
-    "base_websocket_api_url": "wss://dashscope.aliyuncs.com/api-ws/v1/inference",
-    "model": "paraformer-realtime-v2",
-    "semantic_punctuation_enabled": true
+    "base_websocket_api_url": "",
+    "model": "local",
+    "semantic_punctuation_enabled": true,
+    "tokens_path": "models/asr/sherpa/tokens.txt",
+    "encoder_path": "models/asr/sherpa/encoder.int8.onnx",
+    "decoder_path": "models/asr/sherpa/decoder.int8.onnx",
+    "joiner_path": "models/asr/sherpa/joiner.int8.onnx",
+    "num_threads": 2
   },
   "llm": {
     "enabled": true,

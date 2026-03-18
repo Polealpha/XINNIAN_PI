@@ -41,6 +41,7 @@ class LoginResponse(BaseModel):
     user_id: int
     is_configured: bool
     activation_required: bool = False
+    assessment_required: bool = False
     activation_path: str = "/activate"
 
 
@@ -408,6 +409,8 @@ class ActivationProfileResponse(BaseModel):
     ok: bool
     is_configured: bool
     activation_required: bool
+    assessment_required: bool = False
+    psychometric_completed: bool = False
     preferred_name: Optional[str] = None
     role_label: Optional[str] = None
     relation_to_robot: Optional[str] = None
@@ -459,6 +462,87 @@ class ActivationPromptPackResponse(BaseModel):
     extraction_prompt: str
     preferred_mode: str = "cli"
     preferred_code_model: str = ""
+
+
+class PsychometricScores(BaseModel):
+    E: float = 0.0
+    I: float = 0.0
+    S: float = 0.0
+    N: float = 0.0
+    T: float = 0.0
+    F: float = 0.0
+    J: float = 0.0
+    P: float = 0.0
+
+
+class PsychometricConfidence(BaseModel):
+    EI: float = 0.0
+    SN: float = 0.0
+    TF: float = 0.0
+    JP: float = 0.0
+
+
+class PsychometricEvidenceSummary(BaseModel):
+    highlights: list[str] = Field(default_factory=list)
+    notes: str = ""
+
+
+class ActivationAssessmentStartRequest(BaseModel):
+    surface: str = "desktop"
+    voice_mode: str = "text"
+    reset: bool = False
+    device_id: Optional[str] = None
+
+
+class ActivationAssessmentTurnRequest(BaseModel):
+    answer: str
+    surface: str = "desktop"
+    transcript: str = ""
+    device_id: Optional[str] = None
+    voice_mode: str = "text"
+
+
+class ActivationAssessmentVoiceRequest(BaseModel):
+    device_id: Optional[str] = None
+    session_mode: str = "assessment"
+
+
+class ActivationAssessmentStateResponse(BaseModel):
+    ok: bool
+    exists: bool = False
+    status: str = "idle"
+    started_at_ms: Optional[int] = None
+    updated_at_ms: Optional[int] = None
+    completed_at_ms: Optional[int] = None
+    turn_count: int = 0
+    effective_turn_count: int = 0
+    latest_question: str = ""
+    latest_transcript: str = ""
+    last_question_id: str = ""
+    type_code: str = ""
+    scores: PsychometricScores = Field(default_factory=PsychometricScores)
+    dimension_confidence: PsychometricConfidence = Field(default_factory=PsychometricConfidence)
+    evidence_summary: PsychometricEvidenceSummary = Field(default_factory=PsychometricEvidenceSummary)
+    conversation_count: int = 0
+    finish_reason: str = ""
+    voice_mode: str = "idle"
+    voice_session_active: bool = False
+    device_online: bool = False
+    summary: str = ""
+    response_style: str = ""
+    care_style: str = ""
+    inference_version: str = "assessment-v1"
+    required_min_turns: int = 12
+    max_turns: int = 28
+
+
+class ActivationAssessmentTurnResponse(ActivationAssessmentStateResponse):
+    question_changed: bool = False
+    just_completed: bool = False
+
+
+class ActivationAssessmentFinishResponse(ActivationAssessmentStateResponse):
+    persisted: bool = False
 
 
 class ActivationPersonalityStateResponse(BaseModel):

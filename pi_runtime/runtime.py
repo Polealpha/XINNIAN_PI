@@ -128,6 +128,15 @@ class PiEmotionRuntime:
         }
         self._tracking_target = "none"
         self._last_status_ts_ms = 0
+        self._voice_state: Dict[str, object] = {
+            "session_active": False,
+            "mode": "idle",
+            "tts_ready": bool(self._tts.ready),
+            "asr_ready": bool(self._asr.ready) if self._asr is not None else False,
+            "last_transcript": "",
+            "last_prompt": "",
+            "last_update_ms": self._now_ms(),
+        }
 
         self._rms_mean = 0.0
         self._rms_m2 = 0.0
@@ -208,6 +217,7 @@ class PiEmotionRuntime:
             "recognition_label": identity_state.get("recognition_label"),
             "embedding_version": identity_state.get("embedding_version"),
             "enrollment_active": bool(identity_state.get("enrollment_active")),
+            "voice_state": dict(self._voice_state),
         }
         self._last_status_ts_ms = int(payload["timestamp_ms"])
         return payload
@@ -220,6 +230,45 @@ class PiEmotionRuntime:
         state = self._onboarding.get_state()
         state["identity_state"] = self._identity_state.get("identity_state")
         return state
+
+    def get_voice_status(self) -> Dict[str, object]:
+        state = dict(self._voice_state)
+        state["tts_ready"] = bool(self._tts.ready)
+        state["asr_ready"] = bool(self._asr.ready) if self._asr is not None else False
+        state["device_id"] = self.pi_config.device.device_id
+        return state
+
+    def start_voice_session(self, mode: str = "assessment") -> Dict[str, object]:
+        self._voice_state.update(
+            {
+                "session_active": True,
+                "mode": str(mode or "assessment").strip() or "assessment",
+                "last_update_ms": self._now_ms(),
+            }
+        )
+        return self.get_voice_status()
+
+    def stop_voice_session(self, mode: str = "assessment") -> Dict[str, object]:
+        _ = mode
+        self._voice_state.update(
+            {
+                "session_active": False,
+                "mode": "idle",
+                "last_update_ms": self._now_ms(),
+            }
+        )
+        return self.get_voice_status()
+
+    def warmup_tts(self, text: str = "你好，我已经准备好了。") -> Dict[str, object]:
+        ok = bool(self._tts.warmup(text))
+        self._voice_state.update(
+            {
+                "tts_ready": bool(self._tts.ready),
+                "last_prompt": str(text or "").strip(),
+                "last_update_ms": self._now_ms(),
+            }
+        )
+        return {"ok": ok, **self.get_voice_status()}
 
     def scan_networks(self) -> List[Dict[str, object]]:
         return self._onboarding.scan_networks()
@@ -290,6 +339,8 @@ class PiEmotionRuntime:
             payload = signal.payload if isinstance(signal.payload, dict) else {}
             text = str(payload.get("text", "") or "")
             if text:
+                self._voice_state["last_prompt"] = text
+                self._voice_state["last_update_ms"] = self._now_ms()
                 self._hardware.speak(self._tts, text)
             return
         if signal.type == "pan_tilt":
@@ -356,9 +407,13 @@ class PiEmotionRuntime:
                 "mode": self._mode,
             }
         )
+        self._voice_state["last_prompt"] = text
+        self._voice_state["last_update_ms"] = self._now_ms()
         self._hardware.speak(self._tts, text)
         if followup:
             time.sleep(0.8)
+            self._voice_state["last_prompt"] = followup
+            self._voice_state["last_update_ms"] = self._now_ms()
             self._hardware.speak(self._tts, followup)
         return event_payload
 
@@ -627,6 +682,8 @@ class PiEmotionRuntime:
             t_score, tags, summary = self._text_risk.score(transcript)
             self._last_t_score = t_score
             self._last_transcript = transcript
+            self._voice_state["last_transcript"] = transcript
+            self._voice_state["last_update_ms"] = self._now_ms()
             self._last_summary = summary
             self._last_tags = list(tags)
             self._last_t_sub = {"transcript": transcript, "summary": summary, "tags": tags}

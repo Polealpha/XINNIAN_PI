@@ -287,6 +287,86 @@ def init_db() -> None:
         _ensure_column(conn, "user_personality_profiles", "confidence", "REAL NOT NULL DEFAULT 0")
         _ensure_column(conn, "user_personality_profiles", "sample_count", "INTEGER NOT NULL DEFAULT 0")
         _ensure_column(conn, "user_personality_profiles", "inference_version", "TEXT NOT NULL DEFAULT 'v1'")
+        cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS user_assessment_sessions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                status TEXT NOT NULL DEFAULT 'active',
+                session_json TEXT NOT NULL DEFAULT '{}',
+                started_at_ms INTEGER NOT NULL,
+                completed_at_ms INTEGER,
+                updated_at INTEGER NOT NULL,
+                created_at INTEGER NOT NULL,
+                FOREIGN KEY(user_id) REFERENCES users(id)
+            )
+            """
+        )
+        _ensure_column(conn, "user_assessment_sessions", "status", "TEXT NOT NULL DEFAULT 'active'")
+        _ensure_column(conn, "user_assessment_sessions", "session_json", "TEXT NOT NULL DEFAULT '{}'")
+        _ensure_column(conn, "user_assessment_sessions", "started_at_ms", "INTEGER NOT NULL DEFAULT 0")
+        _ensure_column(conn, "user_assessment_sessions", "completed_at_ms", "INTEGER")
+        _ensure_column(conn, "user_assessment_sessions", "updated_at", "INTEGER NOT NULL DEFAULT 0")
+        _ensure_column(conn, "user_assessment_sessions", "created_at", "INTEGER NOT NULL DEFAULT 0")
+        cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS user_psychometric_profiles (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL UNIQUE,
+                type_code TEXT,
+                scores_json TEXT NOT NULL DEFAULT '{}',
+                dimension_confidence_json TEXT NOT NULL DEFAULT '{}',
+                evidence_summary_json TEXT NOT NULL DEFAULT '{}',
+                summary TEXT,
+                response_style TEXT,
+                care_style TEXT,
+                conversation_count INTEGER NOT NULL DEFAULT 0,
+                completed_at_ms INTEGER,
+                inference_version TEXT NOT NULL DEFAULT 'assessment-v1',
+                profile_json TEXT NOT NULL DEFAULT '{}',
+                updated_at INTEGER NOT NULL,
+                created_at INTEGER NOT NULL,
+                FOREIGN KEY(user_id) REFERENCES users(id)
+            )
+            """
+        )
+        _ensure_column(conn, "user_psychometric_profiles", "type_code", "TEXT")
+        _ensure_column(conn, "user_psychometric_profiles", "scores_json", "TEXT NOT NULL DEFAULT '{}'")
+        _ensure_column(conn, "user_psychometric_profiles", "dimension_confidence_json", "TEXT NOT NULL DEFAULT '{}'")
+        _ensure_column(conn, "user_psychometric_profiles", "evidence_summary_json", "TEXT NOT NULL DEFAULT '{}'")
+        _ensure_column(conn, "user_psychometric_profiles", "summary", "TEXT")
+        _ensure_column(conn, "user_psychometric_profiles", "response_style", "TEXT")
+        _ensure_column(conn, "user_psychometric_profiles", "care_style", "TEXT")
+        _ensure_column(conn, "user_psychometric_profiles", "conversation_count", "INTEGER NOT NULL DEFAULT 0")
+        _ensure_column(conn, "user_psychometric_profiles", "completed_at_ms", "INTEGER")
+        _ensure_column(conn, "user_psychometric_profiles", "inference_version", "TEXT NOT NULL DEFAULT 'assessment-v1'")
+        _ensure_column(conn, "user_psychometric_profiles", "profile_json", "TEXT NOT NULL DEFAULT '{}'")
+        _ensure_column(conn, "user_psychometric_profiles", "updated_at", "INTEGER NOT NULL DEFAULT 0")
+        _ensure_column(conn, "user_psychometric_profiles", "created_at", "INTEGER NOT NULL DEFAULT 0")
+        cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS assessment_turn_events (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                session_id INTEGER NOT NULL,
+                turn_index INTEGER NOT NULL,
+                question_id TEXT,
+                question_text TEXT,
+                answer_text TEXT,
+                transcript_text TEXT,
+                scoring_json TEXT NOT NULL DEFAULT '{}',
+                created_at INTEGER NOT NULL,
+                FOREIGN KEY(user_id) REFERENCES users(id),
+                FOREIGN KEY(session_id) REFERENCES user_assessment_sessions(id)
+            )
+            """
+        )
+        _ensure_column(conn, "assessment_turn_events", "question_id", "TEXT")
+        _ensure_column(conn, "assessment_turn_events", "question_text", "TEXT")
+        _ensure_column(conn, "assessment_turn_events", "answer_text", "TEXT")
+        _ensure_column(conn, "assessment_turn_events", "transcript_text", "TEXT")
+        _ensure_column(conn, "assessment_turn_events", "scoring_json", "TEXT NOT NULL DEFAULT '{}'")
+        _ensure_column(conn, "assessment_turn_events", "created_at", "INTEGER NOT NULL DEFAULT 0")
         conn.commit()
     finally:
         conn.close()

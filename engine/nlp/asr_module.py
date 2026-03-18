@@ -15,6 +15,9 @@ from ..core.config import AsrConfig
 class AsrModule:
     def __init__(self, config: AsrConfig) -> None:
         self.config = config
+        self._sherpa_recognizer = None
+        self._sherpa_ready = False
+        self._sherpa_error: Optional[str] = None
         self._vosk_model = None
         self._vosk_ready = False
         self._whisper_model = None
@@ -26,7 +29,9 @@ class AsrModule:
         self._dashscope_callback = None
         self._dashscope_api_key: Optional[str] = None
         if self.config.enabled:
-            if self.config.engine == "vosk":
+            if self.config.engine in {"sherpa_onnx", "sherpa"}:
+                self._init_sherpa_onnx()
+            elif self.config.engine == "vosk":
                 self._init_vosk()
             elif self.config.engine in ("whisper", "faster_whisper"):
                 self._init_whisper()
@@ -38,6 +43,8 @@ class AsrModule:
         if not self.config.enabled:
             return False
         engine = str(self.config.engine or "").strip().lower()
+        if engine in {"sherpa_onnx", "sherpa"}:
+            return bool(self._sherpa_ready or self._vosk_ready)
         if engine == "vosk":
             return bool(self._vosk_ready)
         if engine in {"whisper", "faster_whisper"}:
@@ -48,6 +55,8 @@ class AsrModule:
 
     @property
     def error(self) -> Optional[str]:
+        if self._sherpa_error and not self._vosk_ready:
+            return self._sherpa_error
         if self._dashscope_error:
             return self._dashscope_error
         if self._whisper_error:
@@ -56,6 +65,13 @@ class AsrModule:
 
     def transcribe(self, pcm_s16le: bytes, sample_rate: int) -> str:
         if not self.config.enabled:
+            return ""
+        if self.config.engine in {"sherpa_onnx", "sherpa"}:
+            text = self._transcribe_sherpa_onnx(pcm_s16le, sample_rate)
+            if text:
+                return text
+            if self._vosk_ready:
+                return self._transcribe_vosk(pcm_s16le, sample_rate)
             return ""
         if self.config.engine == "vosk":
             return self._transcribe_vosk(pcm_s16le, sample_rate)
@@ -66,6 +82,93 @@ class AsrModule:
             if text:
                 return text
         return ""
+
+    def _resolve_path(self, value: str) -> str:
+        raw = str(value or "").strip()
+        if not raw:
+            return ""
+        path = Path(raw)
+        if not path.is_absolute():
+            repo_root = Path(__file__).resolve().parents[2]
+            path = (repo_root / path).resolve()
+        return str(path)
+
+    def _init_sherpa_onnx(self) -> None:
+        try:
+            import sherpa_onnx  # type: ignore
+        except Exception as exc:
+            self._sherpa_error = str(exc)
+            self._sherpa_ready = False
+            if self.config.model_path:
+                self._init_vosk()
+            return
+        tokens = self._resolve_path(self.config.tokens_path)
+        encoder = self._resolve_path(self.config.encoder_path)
+        decoder = self._resolve_path(self.config.decoder_path)
+        joiner = self._resolve_path(self.config.joiner_path)
+        if not tokens or not encoder or not decoder or not joiner:
+            self._sherpa_error = "missing_sherpa_model_files"
+            self._sherpa_ready = False
+            if self.config.model_path:
+                self._init_vosk()
+            return
+        try:
+            self._sherpa_recognizer = sherpa_onnx.OfflineRecognizer.from_paraformer(
+                tokens=tokens,
+                paraformer=encoder,
+                num_threads=max(1, int(self.config.num_threads or 2)),
+                sample_rate=16000,
+                feature_dim=80,
+                decoding_method="greedy_search",
+                debug=False,
+                provider="cpu",
+            )
+            self._sherpa_ready = True
+            self._sherpa_error = None
+        except Exception:
+            try:
+                self._sherpa_recognizer = sherpa_onnx.OfflineRecognizer.from_transducer(
+                    tokens=tokens,
+                    encoder=encoder,
+                    decoder=decoder,
+                    joiner=joiner,
+                    num_threads=max(1, int(self.config.num_threads or 2)),
+                    sample_rate=16000,
+                    feature_dim=80,
+                    decoding_method="greedy_search",
+                    debug=False,
+                    provider="cpu",
+                )
+                self._sherpa_ready = True
+                self._sherpa_error = None
+            except Exception as exc:
+                self._sherpa_error = str(exc)
+                self._sherpa_ready = False
+                if self.config.model_path:
+                    self._init_vosk()
+
+    def _transcribe_sherpa_onnx(self, pcm_s16le: bytes, sample_rate: int) -> str:
+        if not self._sherpa_ready or self._sherpa_recognizer is None:
+            return ""
+        try:
+            import numpy as np  # type: ignore
+        except Exception:
+            return ""
+        pcm = self._trim_audio(pcm_s16le, sample_rate)
+        if not pcm:
+            return ""
+        if sample_rate != 16000:
+            return ""
+        samples = np.frombuffer(pcm, dtype=np.int16).astype("float32") / 32768.0
+        try:
+            stream = self._sherpa_recognizer.create_stream()
+            stream.accept_waveform(16000, samples)
+            self._sherpa_recognizer.decode_stream(stream)
+            result = getattr(stream.result, "text", "") if hasattr(stream, "result") else ""
+            return str(result or "").strip()
+        except Exception as exc:
+            self._sherpa_error = str(exc)
+            return ""
 
     def _init_vosk(self) -> None:
         try:

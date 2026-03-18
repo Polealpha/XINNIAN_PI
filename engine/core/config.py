@@ -167,7 +167,7 @@ class FusionConfig:
 @dataclass
 class AsrConfig:
     enabled: bool = True
-    engine: str = "vosk"
+    engine: str = "sherpa_onnx"
     language: str = "zh"
     max_sec: int = 60
     model_path: str = ""
@@ -181,13 +181,18 @@ class AsrConfig:
     base_websocket_api_url: str = "wss://dashscope.aliyuncs.com/api-ws/v1/inference"
     model: str = "paraformer-realtime-v2"
     semantic_punctuation_enabled: bool = True
+    tokens_path: str = ""
+    encoder_path: str = ""
+    decoder_path: str = ""
+    joiner_path: str = ""
+    num_threads: int = 2
 
     @classmethod
     def from_dict(cls, data: Optional[Dict[str, Any]]) -> "AsrConfig":
         data = data or {}
         return cls(
             enabled=bool(data.get("enabled", True)),
-            engine=str(data.get("engine", "vosk")),
+            engine=str(data.get("engine", "sherpa_onnx")),
             language=str(data.get("language", "zh")),
             max_sec=int(data.get("max_sec", 60)),
             model_path=str(data.get("model_path", "")),
@@ -203,6 +208,11 @@ class AsrConfig:
             ),
             model=str(data.get("model", "paraformer-realtime-v2")),
             semantic_punctuation_enabled=bool(data.get("semantic_punctuation_enabled", True)),
+            tokens_path=str(data.get("tokens_path", "")),
+            encoder_path=str(data.get("encoder_path", "")),
+            decoder_path=str(data.get("decoder_path", "")),
+            joiner_path=str(data.get("joiner_path", "")),
+            num_threads=int(data.get("num_threads", 2)),
         )
 
 

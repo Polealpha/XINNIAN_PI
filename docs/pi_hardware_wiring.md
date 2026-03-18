@@ -30,16 +30,50 @@ This document describes the recommended hardware layout for the Pi-first robot b
 
 ### 3. Microphone
 
-- Preferred: USB microphone with ALSA support.
-- Alternative: I2S microphone only if you are comfortable with Pi overlay configuration.
+- Preferred Pi v1: I2S microphone, because the original ESP32-S3 build was also on an I2S audio path.
+- Recommended modules:
+  - `INMP441` if you want the lightest BOM
+  - `ICS-43434` if you want a cleaner digital MEMS option
+- Recommended Pi wiring for an I2S microphone:
+  - `GPIO18 / PCM_CLK` -> mic `SCK`
+  - `GPIO19 / PCM_FS` -> mic `WS/LRCL`
+  - `GPIO20 / PCM_DIN` -> mic `SD`
+  - `3V3` -> mic `VDD`
+  - `GND` -> mic `GND`
+- If you want the fastest bring-up instead of the cleanest embedded path, a USB microphone is still acceptable.
 - Default capture command expects ALSA `default` device:
   `arecord -q -D default -f S16_LE -r 16000 -c 1 -t raw`
 
 ### 4. Speaker
 
-- Preferred: USB audio dongle or I2S DAC with ALSA playback.
+- Preferred Pi v1: I2S DAC / amp, not cloud TTS and not browser audio.
+- Recommended modules:
+  - `MAX98357A` for a simple mono I2S amp path
+  - `WM8960` audio HAT if you want a more integrated codec route
+- Recommended `MAX98357A` wiring:
+  - `GPIO18 / PCM_CLK` -> `BCLK`
+  - `GPIO19 / PCM_FS` -> `LRC`
+  - `GPIO21 / PCM_DOUT` -> `DIN`
+  - `5V` -> `VIN`
+  - `GND` -> `GND`
+  - speaker -> `SPK+ / SPK-`
 - Default playback path uses:
   `aplay -q`
+
+### 4.1 Original ESP audio direction reference
+
+The old ESP32-S3 version in `emotion engine/XINNIAN` clearly used an I2S microphone + I2S amp path rather than pure USB audio:
+
+- microphone side in `src/main.cpp`
+  - `I2S_BCLK_PIN = 41`
+  - `I2S_WS_PIN = 42`
+  - `I2S_SD_PIN = 40`
+- amplifier side in `platformio.ini`
+  - `AMP_BCLK_PIN = 19`
+  - `AMP_LRCLK_PIN = 20`
+  - `AMP_DIN_PIN = 14`
+
+The exact module vendor name is not written clearly in the old firmware files, so the Pi rewrite standardizes on the same I2S architecture and recommends the concrete modules above.
 
 ### 5. Status LED
 
@@ -97,10 +131,25 @@ Example direct-GPIO config pattern:
 ## Raspberry Pi software setup before connecting motion hardware
 
 - Enable I2C in `raspi-config`.
+- Enable I2S / audio overlays if you are using `INMP441`, `MAX98357A`, `WM8960` or similar modules.
 - Confirm camera stack with `libcamera-hello --list-cameras`.
 - Confirm audio devices with `arecord -l` and `aplay -l`.
 - Confirm PCA9685 visibility with `i2cdetect -y 1`.
 - Confirm onboarding support with `nmcli device status`.
+
+## Local voice runtime target
+
+- TTS is now planned as local-only on Pi:
+  - preferred: `Piper`
+  - fallback: `pyttsx3`
+- ASR is now planned as local-only on Pi:
+  - preferred: `sherpa-onnx`
+  - fallback: bundled `vosk`
+- Runtime control endpoints:
+  - `GET /voice/status`
+  - `POST /voice/session/start`
+  - `POST /voice/session/stop`
+  - `POST /voice/tts/warmup`
 
 ## Suggested config progression
 

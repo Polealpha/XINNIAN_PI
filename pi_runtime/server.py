@@ -43,6 +43,14 @@ class EnrollmentRequest(BaseModel):
     claim_token: str = ""
 
 
+class VoiceSessionRequest(BaseModel):
+    mode: str = "assessment"
+
+
+class TtsWarmupRequest(BaseModel):
+    text: str = "你好，我已经准备好了。"
+
+
 def build_app(pi_config_path: str, engine_config_path: str) -> FastAPI:
     @asynccontextmanager
     async def lifespan(app: FastAPI):
@@ -168,6 +176,26 @@ def build_app(pi_config_path: str, engine_config_path: str) -> FastAPI:
             return {"ok": True, "state": runtime.reset_owner_profile()}
         except Exception as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.get("/voice/status")
+    def voice_status() -> dict:
+        assert runtime is not None
+        return runtime.get_voice_status()
+
+    @app.post("/voice/session/start")
+    def voice_session_start(payload: VoiceSessionRequest) -> dict:
+        assert runtime is not None
+        return {"ok": True, "state": runtime.start_voice_session(payload.mode)}
+
+    @app.post("/voice/session/stop")
+    def voice_session_stop(payload: VoiceSessionRequest) -> dict:
+        assert runtime is not None
+        return {"ok": True, "state": runtime.stop_voice_session(payload.mode)}
+
+    @app.post("/voice/tts/warmup")
+    def voice_tts_warmup(payload: TtsWarmupRequest) -> dict:
+        assert runtime is not None
+        return runtime.warmup_tts(payload.text)
 
     return app
 

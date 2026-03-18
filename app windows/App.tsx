@@ -1423,9 +1423,10 @@ const App: React.FC = () => {
       setIsAuthenticated(true);
       setAuthChecked(true);
       localStorage.removeItem("guest_mode");
-      localStorage.setItem("activation_required", result.activation_required ? "true" : "false");
+      const gateRequired = Boolean(result.activation_required || result.assessment_required);
+      localStorage.setItem("activation_required", gateRequired ? "true" : "false");
       localStorage.setItem("activation_path", result.activation_path || "/activate");
-      setActivationRequired(Boolean(result.activation_required));
+      setActivationRequired(gateRequired);
       setActivationPath(result.activation_path || "/activate");
       setActiveTab(Tab.DASHBOARD);
     },
@@ -1490,8 +1491,8 @@ const App: React.FC = () => {
 
   const handleActivationCompleted = useCallback(async () => {
     const activation = await getActivationState();
-    if (activation.activation_required) {
-      throw new Error("激活尚未完成，请先在页面中确认身份信息。");
+    if (activation.activation_required || activation.assessment_required) {
+      throw new Error("激活尚未完成，请先确认身份并完成详细人格测评。");
     }
     localStorage.setItem("activation_required", "false");
     setActivationRequired(false);
@@ -1679,11 +1680,12 @@ const App: React.FC = () => {
         try {
           const activation = await getActivationState();
           if (!active) return;
-          setActivationRequired(Boolean(activation.activation_required));
+          const gateRequired = Boolean(activation.activation_required || activation.assessment_required);
+          setActivationRequired(gateRequired);
           setActivationPath(localStorage.getItem("activation_path") || "/activate");
           localStorage.setItem(
             "activation_required",
-            activation.activation_required ? "true" : "false"
+            gateRequired ? "true" : "false"
           );
         } catch (err) {
           console.warn("activation state load failed:", err);

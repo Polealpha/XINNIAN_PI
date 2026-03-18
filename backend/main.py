@@ -25,6 +25,32 @@ from cryptography.fernet import Fernet, InvalidToken
 
 from . import auth
 from .activation_prompts import ACTIVATION_SYSTEM_PROMPT, IDENTITY_EXTRACTION_PROMPT
+from .assessment_engine import (
+    PAIR_KEYS,
+    QUESTION_MAP,
+    build_final_profile,
+    build_initial_session,
+    build_memory_summary,
+    compute_dimension_confidence,
+    derive_type_code,
+    empty_pair_confidence,
+    empty_score_map,
+    extract_next_question_from_model,
+    extract_scoring_from_model,
+    extract_termination_from_model,
+    merge_scoring,
+    normalize_confidence,
+    normalize_scores,
+    parse_json_dict,
+    score_answer_heuristic,
+    select_next_question,
+)
+from .assessment_prompts import (
+    ASSESSMENT_CONDUCTOR_PROMPT,
+    ASSESSMENT_MEMORY_WRITER_PROMPT,
+    ASSESSMENT_SCORER_PROMPT,
+    ASSESSMENT_TERMINATOR_PROMPT,
+)
 from .personality_prompts import PERSONALITY_EXTRACTION_PROMPT, PERSONALITY_SYSTEM_PROMPT
 from .assistant_service import AssistantService, build_session_key, normalize_surface
 from .db import get_db, init_db
@@ -32,6 +58,12 @@ from .openclaw_gateway import OpenClawGatewayError
 from .schemas import (
     AssistantBridgeSendRequest,
     ActivationCompleteRequest,
+    ActivationAssessmentFinishResponse,
+    ActivationAssessmentStartRequest,
+    ActivationAssessmentStateResponse,
+    ActivationAssessmentTurnRequest,
+    ActivationAssessmentTurnResponse,
+    ActivationAssessmentVoiceRequest,
     ActivationIdentityInferRequest,
     ActivationIdentityInferResponse,
     ActivationPersonalityCompleteRequest,
@@ -442,8 +474,9 @@ def _upsert_activation_profile(conn: Connection, user_id: int, payload: Dict[str
     return _get_activation_profile(conn, user_id)
 
 
-def _activation_response(user: Dict[str, object], profile: Dict[str, object]) -> ActivationProfileResponse:
+def _activation_response(conn: Connection, user: Dict[str, object], profile: Dict[str, object]) -> ActivationProfileResponse:
     is_configured = bool(user.get("is_configured", 0))
+    psychometric_completed = bool(_get_psychometric_profile(conn, int(user["id"])))
     preferred_name = str(profile.get("preferred_name") or "").strip() or None
     role_label = str(profile.get("role_label") or "").strip() or None
     relation_to_robot = str(profile.get("relation_to_robot") or "").strip() or None
@@ -455,6 +488,8 @@ def _activation_response(user: Dict[str, object], profile: Dict[str, object]) ->
         ok=True,
         is_configured=is_configured,
         activation_required=not is_configured,
+        assessment_required=is_configured and not psychometric_completed,
+        psychometric_completed=psychometric_completed,
         preferred_name=preferred_name,
         role_label=role_label,
         relation_to_robot=relation_to_robot,
@@ -596,6 +631,245 @@ def _upsert_personality_profile(conn: Connection, user_id: int, payload: Dict[st
     return _get_personality_profile(conn, user_id)
 
 
+def _get_active_assessment_session_row(conn: Connection, user_id: int) -> Optional[Dict[str, object]]:
+    row = conn.execute(
+        """
+        SELECT *
+        FROM user_assessment_sessions
+        WHERE user_id = ? AND status = 'active'
+        ORDER BY updated_at DESC
+        LIMIT 1
+        """,
+        (int(user_id),),
+    ).fetchone()
+    return dict(row) if row else None
+
+
+def _get_latest_assessment_session_row(conn: Connection, user_id: int) -> Optional[Dict[str, object]]:
+    row = conn.execute(
+        """
+        SELECT *
+        FROM user_assessment_sessions
+        WHERE user_id = ?
+        ORDER BY updated_at DESC
+        LIMIT 1
+        """,
+        (int(user_id),),
+    ).fetchone()
+    return dict(row) if row else None
+
+
+def _load_assessment_session(conn: Connection, user_id: int, active_only: bool = False) -> tuple[Optional[int], Dict[str, object]]:
+    row = _get_active_assessment_session_row(conn, user_id) if active_only else _get_latest_assessment_session_row(conn, user_id)
+    if not row:
+        return None, {}
+    payload = parse_json_dict(str(row.get("session_json") or "{}"))
+    if not payload:
+        payload = {}
+    payload.setdefault("status", str(row.get("status") or "idle"))
+    payload.setdefault("started_at_ms", int(row.get("started_at_ms") or 0) or None)
+    payload.setdefault("completed_at_ms", int(row.get("completed_at_ms") or 0) or None)
+    payload.setdefault("updated_at_ms", int(row.get("updated_at") or 0) or None)
+    payload["scores"] = normalize_scores(payload.get("scores"))
+    payload["dimension_confidence"] = normalize_confidence(payload.get("dimension_confidence"))
+    return int(row["id"]), payload
+
+
+def _save_assessment_session(conn: Connection, user_id: int, session_payload: Dict[str, object], session_id: Optional[int] = None) -> int:
+    now_ms = int(time.time() * 1000)
+    payload = dict(session_payload)
+    payload["scores"] = normalize_scores(payload.get("scores"))
+    payload["dimension_confidence"] = normalize_confidence(payload.get("dimension_confidence"))
+    session_json = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+    status_value = str(payload.get("status") or "active").strip() or "active"
+    started_at_ms = int(payload.get("started_at_ms") or now_ms)
+    completed_at_ms = int(payload.get("completed_at_ms") or 0) or None
+    if session_id is None:
+        conn.execute("UPDATE user_assessment_sessions SET status = 'superseded', updated_at = ? WHERE user_id = ? AND status = 'active'", (now_ms, int(user_id)))
+        cursor = conn.execute(
+            """
+            INSERT INTO user_assessment_sessions (
+                user_id, status, session_json, started_at_ms, completed_at_ms, updated_at, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (int(user_id), status_value, session_json, started_at_ms, completed_at_ms, now_ms, now_ms),
+        )
+        conn.commit()
+        return int(cursor.lastrowid)
+    conn.execute(
+        """
+        UPDATE user_assessment_sessions
+        SET status = ?, session_json = ?, started_at_ms = ?, completed_at_ms = ?, updated_at = ?
+        WHERE id = ? AND user_id = ?
+        """,
+        (status_value, session_json, started_at_ms, completed_at_ms, now_ms, int(session_id), int(user_id)),
+    )
+    conn.commit()
+    return int(session_id)
+
+
+def _append_assessment_turn_event(
+    conn: Connection,
+    user_id: int,
+    session_id: int,
+    turn_index: int,
+    question_id: str,
+    question_text: str,
+    answer_text: str,
+    transcript_text: str,
+    scoring: Dict[str, object],
+) -> None:
+    conn.execute(
+        """
+        INSERT INTO assessment_turn_events (
+            user_id, session_id, turn_index, question_id, question_text,
+            answer_text, transcript_text, scoring_json, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            int(user_id),
+            int(session_id),
+            int(turn_index),
+            str(question_id or "").strip() or None,
+            str(question_text or "").strip() or None,
+            str(answer_text or "").strip() or None,
+            str(transcript_text or "").strip() or None,
+            json.dumps(scoring or {}, ensure_ascii=False, separators=(",", ":")),
+            int(time.time() * 1000),
+        ),
+    )
+    conn.commit()
+
+
+def _get_psychometric_profile(conn: Connection, user_id: int) -> Dict[str, object]:
+    row = conn.execute(
+        """
+        SELECT *
+        FROM user_psychometric_profiles
+        WHERE user_id = ?
+        """,
+        (int(user_id),),
+    ).fetchone()
+    if not row:
+        return {}
+    payload = dict(row)
+    merged = parse_json_dict(str(payload.get("profile_json") or "{}"))
+    merged.update(
+        {
+            "type_code": str(payload.get("type_code") or "").strip(),
+            "scores": parse_json_dict(str(payload.get("scores_json") or "{}")),
+            "dimension_confidence": parse_json_dict(str(payload.get("dimension_confidence_json") or "{}")),
+            "evidence_summary": parse_json_dict(str(payload.get("evidence_summary_json") or "{}")),
+            "summary": str(payload.get("summary") or "").strip(),
+            "response_style": str(payload.get("response_style") or "").strip(),
+            "care_style": str(payload.get("care_style") or "").strip(),
+            "conversation_count": int(payload.get("conversation_count") or 0),
+            "completed_at_ms": int(payload.get("completed_at_ms") or 0) or None,
+            "updated_at_ms": int(payload.get("updated_at") or 0) or None,
+            "inference_version": str(payload.get("inference_version") or "assessment-v1").strip() or "assessment-v1",
+        }
+    )
+    merged["scores"] = normalize_scores(merged.get("scores"))
+    merged["dimension_confidence"] = normalize_confidence(merged.get("dimension_confidence"))
+    evidence = merged.get("evidence_summary")
+    if not isinstance(evidence, dict):
+        evidence = {}
+    merged["evidence_summary"] = {
+        "highlights": [str(item).strip() for item in evidence.get("highlights") or [] if str(item).strip()],
+        "notes": str(evidence.get("notes") or "").strip(),
+    }
+    return merged
+
+
+def _upsert_psychometric_profile(conn: Connection, user_id: int, profile: Dict[str, object]) -> Dict[str, object]:
+    now_ms = int(time.time() * 1000)
+    scores = normalize_scores(profile.get("scores"))
+    confidence = normalize_confidence(profile.get("dimension_confidence"))
+    evidence_summary = profile.get("evidence_summary") if isinstance(profile.get("evidence_summary"), dict) else {}
+    payload = dict(profile)
+    payload["scores"] = scores
+    payload["dimension_confidence"] = confidence
+    payload["evidence_summary"] = evidence_summary
+    conn.execute(
+        """
+        INSERT INTO user_psychometric_profiles (
+            user_id, type_code, scores_json, dimension_confidence_json, evidence_summary_json,
+            summary, response_style, care_style, conversation_count, completed_at_ms,
+            inference_version, profile_json, updated_at, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(user_id) DO UPDATE SET
+            type_code = excluded.type_code,
+            scores_json = excluded.scores_json,
+            dimension_confidence_json = excluded.dimension_confidence_json,
+            evidence_summary_json = excluded.evidence_summary_json,
+            summary = excluded.summary,
+            response_style = excluded.response_style,
+            care_style = excluded.care_style,
+            conversation_count = excluded.conversation_count,
+            completed_at_ms = excluded.completed_at_ms,
+            inference_version = excluded.inference_version,
+            profile_json = excluded.profile_json,
+            updated_at = excluded.updated_at
+        """,
+        (
+            int(user_id),
+            str(profile.get("type_code") or derive_type_code(scores)).strip() or None,
+            json.dumps(scores, ensure_ascii=False, separators=(",", ":")),
+            json.dumps(confidence, ensure_ascii=False, separators=(",", ":")),
+            json.dumps(evidence_summary, ensure_ascii=False, separators=(",", ":")),
+            str(profile.get("summary") or "").strip() or None,
+            str(profile.get("response_style") or "").strip() or None,
+            str(profile.get("care_style") or "").strip() or None,
+            int(profile.get("conversation_count") or 0),
+            int(profile.get("completed_at_ms") or 0) or None,
+            str(profile.get("inference_version") or "assessment-v1").strip() or "assessment-v1",
+            json.dumps(payload, ensure_ascii=False, separators=(",", ":")),
+            now_ms,
+            now_ms,
+        ),
+    )
+    conn.commit()
+    return _get_psychometric_profile(conn, user_id)
+
+
+def _assessment_response(session: Dict[str, object], device_online: bool = False, exists: bool = True) -> ActivationAssessmentStateResponse:
+    final = session.get("final_result") if isinstance(session.get("final_result"), dict) else {}
+    scores = normalize_scores((final or session).get("scores"))
+    confidence = normalize_confidence((final or session).get("dimension_confidence"))
+    evidence = (final or session).get("evidence_summary")
+    if not isinstance(evidence, dict):
+        evidence = {}
+    return ActivationAssessmentStateResponse(
+        ok=True,
+        exists=bool(exists and session),
+        status=str(session.get("status") or "idle"),
+        started_at_ms=int(session.get("started_at_ms") or 0) or None,
+        updated_at_ms=int(session.get("updated_at_ms") or 0) or None,
+        completed_at_ms=int((final or session).get("completed_at_ms") or 0) or None,
+        turn_count=max(0, int(session.get("turn_count") or 0)),
+        effective_turn_count=max(0, int(session.get("effective_turn_count") or 0)),
+        latest_question=str(session.get("latest_question") or ""),
+        latest_transcript=str(session.get("latest_transcript") or ""),
+        last_question_id=str(session.get("last_question_id") or ""),
+        type_code=str((final or session).get("type_code") or ""),
+        scores=scores,
+        dimension_confidence=confidence,
+        evidence_summary={
+            "highlights": [str(item).strip() for item in evidence.get("highlights") or [] if str(item).strip()],
+            "notes": str(evidence.get("notes") or "").strip(),
+        },
+        conversation_count=max(0, int((final or session).get("conversation_count") or session.get("effective_turn_count") or 0)),
+        finish_reason=str(session.get("finish_reason") or ""),
+        voice_mode=str(session.get("voice_mode") or "idle"),
+        voice_session_active=bool(session.get("voice_session_active")),
+        device_online=bool(device_online),
+        summary=str((final or session).get("summary") or (session.get("profile_preview") or {}).get("summary") or ""),
+        response_style=str((final or session).get("response_style") or (session.get("profile_preview") or {}).get("response_style") or ""),
+        care_style=str((final or session).get("care_style") or (session.get("profile_preview") or {}).get("care_style") or ""),
+        inference_version=str((final or session).get("inference_version") or "assessment-v1"),
+    )
+
+
 def _heuristic_personality_profile(text: str) -> Dict[str, object]:
     raw = str(text or "").strip()
     lowered = raw.lower()
@@ -655,6 +929,7 @@ def _heuristic_personality_profile(text: str) -> Dict[str, object]:
 def _build_assistant_identity_context(conn: Connection, user_id: int) -> Dict[str, object]:
     activation = _get_activation_profile(conn, user_id)
     personality = _get_personality_profile(conn, user_id)
+    psychometric = _get_psychometric_profile(conn, user_id)
     return {
         "identity": {
             "preferred_name": str(activation.get("preferred_name") or "").strip(),
@@ -671,6 +946,15 @@ def _build_assistant_identity_context(conn: Connection, user_id: int) -> Dict[st
             "topics": [str(item) for item in personality.get("topics") or [] if str(item).strip()],
             "boundaries": [str(item) for item in personality.get("boundaries") or [] if str(item).strip()],
             "signals": [str(item) for item in personality.get("signals") or [] if str(item).strip()],
+        },
+        "psychometric": {
+            "type_code": str(psychometric.get("type_code") or "").strip(),
+            "scores": psychometric.get("scores") or empty_score_map(),
+            "dimension_confidence": psychometric.get("dimension_confidence") or empty_pair_confidence(),
+            "summary": str(psychometric.get("summary") or "").strip(),
+            "response_style": str(psychometric.get("response_style") or "").strip(),
+            "care_style": str(psychometric.get("care_style") or "").strip(),
+            "conversation_count": int(psychometric.get("conversation_count") or 0),
         },
         "runtime_preferences": {
             "preferred_mode": OPENCLAW_PREFERRED_MODE,
@@ -698,6 +982,106 @@ def _extract_json_block(text: str) -> Dict[str, object]:
         return parsed if isinstance(parsed, dict) else {}
     except Exception:
         return {}
+
+
+def _assessment_device_online(conn: Connection, user_id: int, device_id: Optional[str] = None) -> tuple[bool, Optional[Dict[str, object]]]:
+    selected = _get_device(conn, int(user_id), device_id) if device_id else {}
+    if not selected:
+        devices = _list_devices(conn, int(user_id))
+        selected = devices[0] if devices else {}
+    resolved_ip = str(selected.get("device_ip") or "").strip() if selected else ""
+    return bool(selected and resolved_ip), (selected or None)
+
+
+async def _assessment_pick_model_question(
+    user_id: int,
+    activation_profile: Dict[str, object],
+    session_payload: Dict[str, object],
+) -> Dict[str, object]:
+    prompt = (
+        f"{ASSESSMENT_CONDUCTOR_PROMPT}\n\n"
+        f"输入数据：{json.dumps({'user_id': user_id, 'identity': activation_profile, 'session': session_payload}, ensure_ascii=False)}"
+    )
+    session_key = f"activation:{int(user_id)}:assessment:conductor:{int(time.time() * 1000)}"
+    try:
+        raw = await assistant_service.gateway.send_message(session_key, prompt)
+    except OpenClawGatewayError:
+        return {}
+    return extract_next_question_from_model(raw)
+
+
+async def _assessment_score_model(
+    user_id: int,
+    question: Dict[str, object],
+    session_payload: Dict[str, object],
+    answer: str,
+) -> Dict[str, object]:
+    prompt = (
+        f"{ASSESSMENT_SCORER_PROMPT}\n\n"
+        f"输入数据：{json.dumps({'question': question, 'session': session_payload, 'answer': answer}, ensure_ascii=False)}"
+    )
+    session_key = f"activation:{int(user_id)}:assessment:scorer:{int(time.time() * 1000)}"
+    try:
+        raw = await assistant_service.gateway.send_message(session_key, prompt)
+    except OpenClawGatewayError:
+        return {}
+    return extract_scoring_from_model(raw)
+
+
+async def _assessment_terminate_model(user_id: int, session_payload: Dict[str, object]) -> Dict[str, object]:
+    prompt = (
+        f"{ASSESSMENT_TERMINATOR_PROMPT}\n\n"
+        f"输入数据：{json.dumps(session_payload, ensure_ascii=False)}"
+    )
+    session_key = f"activation:{int(user_id)}:assessment:terminator:{int(time.time() * 1000)}"
+    try:
+        raw = await assistant_service.gateway.send_message(session_key, prompt)
+    except OpenClawGatewayError:
+        return {}
+    return extract_termination_from_model(raw)
+
+
+def _assessment_sync_personality_profile(conn: Connection, user_id: int, psychometric: Dict[str, object]) -> None:
+    type_code = str(psychometric.get("type_code") or "").strip()
+    traits = [f"类型:{type_code}"] if type_code else []
+    for pair in PAIR_KEYS:
+        conf = psychometric.get("dimension_confidence") or {}
+        score = float((conf or {}).get(pair, 0.0) or 0.0)
+        if score >= 0.78:
+            traits.append(f"{pair}稳定")
+    summary = str(psychometric.get("summary") or "").strip()
+    _upsert_personality_profile(
+        conn,
+        int(user_id),
+        {
+            "summary": summary,
+            "response_style": str(psychometric.get("response_style") or "").strip(),
+            "care_style": str(psychometric.get("care_style") or "").strip(),
+            "traits": traits[:6],
+            "topics": [],
+            "boundaries": [],
+            "signals": [str(item) for item in ((psychometric.get("evidence_summary") or {}).get("highlights") or [])[:4]],
+            "confidence": min(0.99, max(normalize_confidence(psychometric.get("dimension_confidence")).values() or [0.0])),
+            "sample_count": int(psychometric.get("conversation_count") or 0),
+            "inference_version": str(psychometric.get("inference_version") or "assessment-v1"),
+            "profile": {"source": "psychometric_assessment", "psychometric_profile": psychometric},
+        },
+    )
+
+
+def _persist_assessment_completion(conn: Connection, user_id: int, session_payload: Dict[str, object]) -> Dict[str, object]:
+    final_profile = build_final_profile(session_payload)
+    psychometric = _upsert_psychometric_profile(conn, int(user_id), final_profile)
+    _assessment_sync_personality_profile(conn, int(user_id), psychometric)
+    activation = _get_activation_profile(conn, int(user_id))
+    preferred_name = str(activation.get("preferred_name") or "").strip()
+    assistant_service.store.append_memory(
+        int(user_id),
+        title="psychometric_profile",
+        content=build_memory_summary(psychometric, preferred_name=preferred_name),
+        tags=["activation", "assessment", "psychometric"],
+    )
+    return psychometric
 
 
 def _heuristic_activation_identity(transcript: str, observed_name: str = "") -> Dict[str, object]:
@@ -1940,6 +2324,7 @@ def login_api(payload: LoginEmailRequest, conn: Connection = Depends(get_db)) ->
         user_id=int(user["id"]),
         is_configured=bool(user.get("is_configured", 0)),
         activation_required=not bool(user.get("is_configured", 0)),
+        assessment_required=bool(user.get("is_configured", 0)) and not bool(_get_psychometric_profile(conn, int(user["id"]))),
         activation_path="/activate",
     )
 
@@ -1965,7 +2350,7 @@ def activation_state(
 ) -> ActivationProfileResponse:
     user = _parse_access_token(credentials, conn)
     profile = _get_activation_profile(conn, int(user["id"]))
-    return _activation_response(user, profile)
+    return _activation_response(conn, user, profile)
 
 
 @app.post("/api/activation/complete", response_model=ActivationProfileResponse)
@@ -2006,7 +2391,7 @@ def activation_complete(
         tags=["activation", "identity", "profile"],
     )
     updated_user = _get_user_by_id(conn, int(user["id"]))
-    return _activation_response(updated_user, profile)
+    return _activation_response(conn, updated_user, profile)
 
 
 @app.post("/api/activation/identity/infer", response_model=ActivationIdentityInferResponse)
@@ -2079,6 +2464,203 @@ def activation_prompt_pack(
         preferred_mode=OPENCLAW_PREFERRED_MODE,
         preferred_code_model=OPENCLAW_PREFERRED_CODE_MODEL,
     )
+
+
+@app.post("/api/activation/assessment/start", response_model=ActivationAssessmentStateResponse)
+async def activation_assessment_start(
+    payload: ActivationAssessmentStartRequest,
+    credentials: HTTPAuthorizationCredentials = Depends(bearer_scheme),
+    conn: Connection = Depends(get_db),
+) -> ActivationAssessmentStateResponse:
+    user = _parse_access_token(credentials, conn)
+    if not bool(user.get("is_configured", 0)):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Identity activation must complete first")
+    session_id, existing = _load_assessment_session(conn, int(user["id"]), active_only=True)
+    if payload.reset or not existing:
+        now_ms = int(time.time() * 1000)
+        session_payload = build_initial_session(now_ms)
+        session_payload["voice_mode"] = str(payload.voice_mode or "text").strip() or "text"
+        activation = _get_activation_profile(conn, int(user["id"]))
+        model_question = await _assessment_pick_model_question(int(user["id"]), activation, session_payload)
+        if model_question:
+            session_payload["last_question_id"] = str(model_question.get("id") or "")
+            session_payload["latest_question"] = str(model_question.get("prompt") or "")
+        session_id = _save_assessment_session(conn, int(user["id"]), session_payload, session_id=None)
+        existing = session_payload
+    device_online, _selected = _assessment_device_online(conn, int(user["id"]), payload.device_id)
+    return _assessment_response(existing, device_online=device_online, exists=True)
+
+
+@app.get("/api/activation/assessment/state", response_model=ActivationAssessmentStateResponse)
+def activation_assessment_state(
+    credentials: HTTPAuthorizationCredentials = Depends(bearer_scheme),
+    conn: Connection = Depends(get_db),
+) -> ActivationAssessmentStateResponse:
+    user = _parse_access_token(credentials, conn)
+    _session_id, session_payload = _load_assessment_session(conn, int(user["id"]), active_only=False)
+    device_online, _selected = _assessment_device_online(conn, int(user["id"]))
+    if not session_payload:
+        completed = _get_psychometric_profile(conn, int(user["id"]))
+        if completed:
+            session_payload = {
+                "status": "completed",
+                "completed_at_ms": completed.get("completed_at_ms"),
+                "updated_at_ms": completed.get("updated_at_ms"),
+                "effective_turn_count": completed.get("conversation_count"),
+                "turn_count": completed.get("conversation_count"),
+                "type_code": completed.get("type_code"),
+                "voice_mode": "idle",
+                "voice_session_active": False,
+                "final_result": completed,
+            }
+            return _assessment_response(session_payload, device_online=device_online, exists=True)
+        return _assessment_response({}, device_online=device_online, exists=False)
+    return _assessment_response(session_payload, device_online=device_online, exists=True)
+
+
+@app.post("/api/activation/assessment/turn", response_model=ActivationAssessmentTurnResponse)
+async def activation_assessment_turn(
+    payload: ActivationAssessmentTurnRequest,
+    credentials: HTTPAuthorizationCredentials = Depends(bearer_scheme),
+    conn: Connection = Depends(get_db),
+) -> ActivationAssessmentTurnResponse:
+    user = _parse_access_token(credentials, conn)
+    session_id, session_payload = _load_assessment_session(conn, int(user["id"]), active_only=True)
+    if not session_payload or session_id is None:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Assessment session not started")
+    if str(session_payload.get("status") or "") == "completed":
+        response = _assessment_response(session_payload, device_online=_assessment_device_online(conn, int(user["id"]), payload.device_id)[0], exists=True)
+        return ActivationAssessmentTurnResponse(**response.model_dump(), question_changed=False, just_completed=False)
+    answer_text = str(payload.answer or payload.transcript or "").strip()
+    if not answer_text:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="answer is required")
+    question_id = str(session_payload.get("last_question_id") or "").strip()
+    question = QUESTION_MAP.get(question_id) or {
+        "id": question_id or "ad-hoc",
+        "pair": "EI",
+        "prompt": str(session_payload.get("latest_question") or ""),
+        "dimension_targets": ["E", "I"],
+        "difficulty": 2,
+        "followup_rules": [],
+    }
+    scoring = await _assessment_score_model(int(user["id"]), question, session_payload, answer_text)
+    if not scoring:
+        scoring = score_answer_heuristic(question, answer_text)
+    merged = merge_scoring(session_payload, question, answer_text, scoring, int(time.time() * 1000))
+    terminator = await _assessment_terminate_model(int(user["id"]), merged)
+    if terminator.get("should_finish") and merged.get("status") != "completed":
+        merged["status"] = "completed"
+        merged["completed_at_ms"] = int(time.time() * 1000)
+        merged["finish_reason"] = str(terminator.get("reason") or "model_finish")
+        merged["final_result"] = build_final_profile(merged)
+        merged["latest_question"] = ""
+        merged["last_question_id"] = ""
+    elif merged.get("status") != "completed" and terminator.get("missing_pair"):
+        # Keep local selection authoritative but allow model to steer next pair when it is specific.
+        suggested = await _assessment_pick_model_question(int(user["id"]), _get_activation_profile(conn, int(user["id"])), merged)
+        if suggested:
+            merged["latest_question"] = str(suggested.get("prompt") or merged.get("latest_question") or "")
+            merged["last_question_id"] = str(suggested.get("id") or merged.get("last_question_id") or "")
+    _append_assessment_turn_event(
+        conn,
+        int(user["id"]),
+        int(session_id),
+        int(merged.get("turn_count") or 0),
+        str(question.get("id") or ""),
+        str(question.get("prompt") or ""),
+        answer_text,
+        str(payload.transcript or answer_text),
+        scoring,
+    )
+    if merged.get("status") == "completed":
+        merged["final_result"] = _persist_assessment_completion(conn, int(user["id"]), merged)
+    _save_assessment_session(conn, int(user["id"]), merged, session_id=int(session_id))
+    device_online, _selected = _assessment_device_online(conn, int(user["id"]), payload.device_id)
+    response = _assessment_response(merged, device_online=device_online, exists=True)
+    return ActivationAssessmentTurnResponse(
+        **response.model_dump(),
+        question_changed=bool(response.latest_question),
+        just_completed=bool(merged.get("status") == "completed"),
+    )
+
+
+@app.post("/api/activation/assessment/finish", response_model=ActivationAssessmentFinishResponse)
+def activation_assessment_finish(
+    credentials: HTTPAuthorizationCredentials = Depends(bearer_scheme),
+    conn: Connection = Depends(get_db),
+) -> ActivationAssessmentFinishResponse:
+    user = _parse_access_token(credentials, conn)
+    session_id, session_payload = _load_assessment_session(conn, int(user["id"]), active_only=True)
+    if not session_payload or session_id is None:
+        profile = _get_psychometric_profile(conn, int(user["id"]))
+        if profile:
+            return ActivationAssessmentFinishResponse(
+                **_assessment_response(
+                    {"status": "completed", "final_result": profile, "completed_at_ms": profile.get("completed_at_ms")},
+                    device_online=_assessment_device_online(conn, int(user["id"]))[0],
+                    exists=True,
+                ).model_dump(),
+                persisted=True,
+            )
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Assessment session not started")
+    if session_payload.get("status") != "completed":
+        session_payload["status"] = "completed"
+        session_payload["completed_at_ms"] = int(time.time() * 1000)
+        session_payload["finish_reason"] = str(session_payload.get("finish_reason") or "manual_finish")
+        session_payload["final_result"] = build_final_profile(session_payload)
+    session_payload["final_result"] = _persist_assessment_completion(conn, int(user["id"]), session_payload)
+    _save_assessment_session(conn, int(user["id"]), session_payload, session_id=int(session_id))
+    device_online, _selected = _assessment_device_online(conn, int(user["id"]))
+    return ActivationAssessmentFinishResponse(
+        **_assessment_response(session_payload, device_online=device_online, exists=True).model_dump(),
+        persisted=True,
+    )
+
+
+@app.post("/api/activation/assessment/voice/start")
+def activation_assessment_voice_start(
+    payload: ActivationAssessmentVoiceRequest,
+    credentials: HTTPAuthorizationCredentials = Depends(bearer_scheme),
+    conn: Connection = Depends(get_db),
+) -> Dict[str, object]:
+    user = _parse_access_token(credentials, conn)
+    device_online, selected = _assessment_device_online(conn, int(user["id"]), payload.device_id)
+    if not selected or not device_online:
+        return {"ok": True, "device_online": False, "state": "offline", "detail": "Device offline; voice mode unavailable"}
+    resolved_ip = str(selected.get("device_ip") or "").strip()
+    try:
+        response = _post_device_json(resolved_ip, "/voice/session/start", {"mode": str(payload.session_mode or "assessment")})
+    except Exception as exc:
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
+    session_id, session_payload = _load_assessment_session(conn, int(user["id"]), active_only=True)
+    if session_payload and session_id is not None:
+        session_payload["voice_mode"] = "robot"
+        session_payload["voice_session_active"] = True
+        _save_assessment_session(conn, int(user["id"]), session_payload, session_id=int(session_id))
+    return {"ok": True, "device_online": True, "state": response}
+
+
+@app.post("/api/activation/assessment/voice/stop")
+def activation_assessment_voice_stop(
+    payload: ActivationAssessmentVoiceRequest,
+    credentials: HTTPAuthorizationCredentials = Depends(bearer_scheme),
+    conn: Connection = Depends(get_db),
+) -> Dict[str, object]:
+    user = _parse_access_token(credentials, conn)
+    device_online, selected = _assessment_device_online(conn, int(user["id"]), payload.device_id)
+    if not selected or not device_online:
+        return {"ok": True, "device_online": False, "state": "offline"}
+    resolved_ip = str(selected.get("device_ip") or "").strip()
+    try:
+        response = _post_device_json(resolved_ip, "/voice/session/stop", {"mode": str(payload.session_mode or "assessment")})
+    except Exception as exc:
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
+    session_id, session_payload = _load_assessment_session(conn, int(user["id"]), active_only=True)
+    if session_payload and session_id is not None:
+        session_payload["voice_session_active"] = False
+        session_payload["voice_mode"] = "text"
+        _save_assessment_session(conn, int(user["id"]), session_payload, session_id=int(session_id))
+    return {"ok": True, "device_online": True, "state": response}
 
 
 @app.get("/api/activation/personality/state", response_model=ActivationPersonalityStateResponse)

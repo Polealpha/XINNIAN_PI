@@ -6,6 +6,7 @@ export interface LoginResult {
   user_id: number;
   is_configured: boolean;
   activation_required: boolean;
+  assessment_required: boolean;
   activation_path: string;
 }
 
@@ -35,6 +36,8 @@ export interface ActivationStateResult {
   ok: boolean;
   is_configured: boolean;
   activation_required: boolean;
+  assessment_required: boolean;
+  psychometric_completed: boolean;
   preferred_name?: string | null;
   role_label?: string | null;
   relation_to_robot?: string | null;
