@@ -77,6 +77,20 @@
     "joiner_path": "models/asr/sherpa/joiner.int8.onnx",
     "num_threads": 2
   },
+  "wake": {
+    "enabled": true,
+    "provider": "sherpa",
+    "wake_phrase": "小念",
+    "alias_mode": "wide",
+    "model_dir": "models/kws/sherpa",
+    "fallback_model_path": "models/asr/vosk-model-small-cn-0.22",
+    "auto_download": false,
+    "num_threads": 2,
+    "keywords_score": 1.65,
+    "keywords_threshold": 0.2,
+    "ack_text": "我在",
+    "ack_guard_ms": 2400
+  },
   "llm": {
     "enabled": true,
     "call_mode": "client_direct",

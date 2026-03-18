@@ -217,6 +217,43 @@ class AsrConfig:
 
 
 @dataclass
+class WakeConfig:
+    enabled: bool = True
+    provider: str = "sherpa"
+    wake_phrase: str = "小念"
+    alias_mode: str = "wide"
+    model_dir: str = "models/kws/sherpa"
+    fallback_model_path: str = "models/asr/vosk-model-small-cn-0.22"
+    auto_download: bool = False
+    num_threads: int = 2
+    keywords_score: float = 1.65
+    keywords_threshold: float = 0.2
+    ack_text: str = "我在"
+    ack_guard_ms: int = 2400
+
+    @classmethod
+    def from_dict(cls, data: Optional[Dict[str, Any]]) -> "WakeConfig":
+        data = data or {}
+        return cls(
+            enabled=bool(data.get("enabled", True)),
+            provider=str(data.get("provider", "sherpa") or "sherpa"),
+            wake_phrase=str(data.get("wake_phrase", "小念") or "小念"),
+            alias_mode=str(data.get("alias_mode", "wide") or "wide"),
+            model_dir=str(data.get("model_dir", "models/kws/sherpa") or "models/kws/sherpa"),
+            fallback_model_path=str(
+                data.get("fallback_model_path", "models/asr/vosk-model-small-cn-0.22")
+                or "models/asr/vosk-model-small-cn-0.22"
+            ),
+            auto_download=bool(data.get("auto_download", False)),
+            num_threads=int(data.get("num_threads", 2)),
+            keywords_score=float(data.get("keywords_score", 1.65)),
+            keywords_threshold=float(data.get("keywords_threshold", 0.2)),
+            ack_text=str(data.get("ack_text", "我在") or "我在"),
+            ack_guard_ms=int(data.get("ack_guard_ms", 2400)),
+        )
+
+
+@dataclass
 class LlmConfig:
     enabled: bool = True
     call_mode: str = "client_direct"
@@ -542,6 +579,7 @@ class EngineConfig:
     trigger: TriggerConfig = field(default_factory=TriggerConfig)
     fusion: FusionConfig = field(default_factory=FusionConfig)
     asr: AsrConfig = field(default_factory=AsrConfig)
+    wake: WakeConfig = field(default_factory=WakeConfig)
     llm: LlmConfig = field(default_factory=LlmConfig)
     runtime: RuntimeConfig = field(default_factory=RuntimeConfig)
     face_tracking: FaceTrackingConfig = field(default_factory=FaceTrackingConfig)
@@ -558,6 +596,7 @@ class EngineConfig:
             trigger=TriggerConfig.from_dict(data.get("trigger")),
             fusion=FusionConfig.from_dict(data.get("fusion")),
             asr=AsrConfig.from_dict(data.get("asr")),
+            wake=WakeConfig.from_dict(data.get("wake")),
             llm=LlmConfig.from_dict(data.get("llm")),
             runtime=RuntimeConfig.from_dict(data.get("runtime")),
             face_tracking=FaceTrackingConfig.from_dict(data.get("face_tracking")),

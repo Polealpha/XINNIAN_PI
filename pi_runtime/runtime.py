@@ -19,7 +19,9 @@ from engine.core.event_bus import EventBus
 from engine.core.types import AudioFrame, Context, EngineStatus, Event, RiskFrame, ScriptStep, UserSignal, VideoFrame
 from engine.llm.llm_responder import LLMResponder
 from engine.nlp.asr_module import AsrModule
+from engine.nlp.sherpa_kws import SherpaKwsDetector
 from engine.nlp.text_risk import TextRiskScorer
+from engine.nlp.wake_word import WakeWordDetector
 from engine.policy.care_policy import CarePolicy
 from engine.summary.daily_summarizer import DailySummarizer
 from engine.trigger.fusion_scorer import FusionScorer
@@ -68,6 +70,7 @@ class PiEmotionRuntime:
         self._tts = TtsEngine()
         self._hardware: BaseHardware = build_hardware(self.pi_config.hardware)
         self._onboarding = OnboardingManager(self.pi_config.onboarding)
+        self._wake_detector = self._build_wake_detector() if self.pi_config.audio.enabled else None
 
         self._face_detector = FaceDetector(asdict(self.engine_config.face_tracking)) if self.pi_config.camera.enabled else None
         self._face_tracker = FaceTracker(asdict(self.engine_config.face_tracking)) if self.pi_config.camera.enabled else None
@@ -137,6 +140,8 @@ class PiEmotionRuntime:
             "last_prompt": "",
             "last_update_ms": self._now_ms(),
         }
+        self._wake_state: Dict[str, object] = self._build_initial_wake_state()
+        self._wake_guard_until_ms = 0
 
         self._rms_mean = 0.0
         self._rms_m2 = 0.0
@@ -218,6 +223,7 @@ class PiEmotionRuntime:
             "embedding_version": identity_state.get("embedding_version"),
             "enrollment_active": bool(identity_state.get("enrollment_active")),
             "voice_state": dict(self._voice_state),
+            "wake_state": self.get_wake_status(),
         }
         self._last_status_ts_ms = int(payload["timestamp_ms"])
         return payload
@@ -235,6 +241,12 @@ class PiEmotionRuntime:
         state = dict(self._voice_state)
         state["tts_ready"] = bool(self._tts.ready)
         state["asr_ready"] = bool(self._asr.ready) if self._asr is not None else False
+        state["device_id"] = self.pi_config.device.device_id
+        state["wake_state"] = self.get_wake_status()
+        return state
+
+    def get_wake_status(self) -> Dict[str, object]:
+        state = dict(self._wake_state)
         state["device_id"] = self.pi_config.device.device_id
         return state
 
@@ -571,6 +583,7 @@ class PiEmotionRuntime:
             return
         self._last_audio_ts = frame.timestamp_ms
         self._ring_buffer.add_frame(frame)
+        self._handle_wake_audio(frame)
         features = extract_features(frame.pcm_s16le)
         vad_active = self._vad.update(features["rms"]) if self.engine_config.audio.vad_enabled else True
         self._last_vad_active = vad_active
@@ -953,3 +966,121 @@ class PiEmotionRuntime:
     @staticmethod
     def _now_ms() -> int:
         return int(time.time() * 1000)
+
+    def _build_initial_wake_state(self) -> Dict[str, object]:
+        detector = self._wake_detector
+        provider = str(self.engine_config.wake.provider or "disabled").strip().lower()
+        return {
+            "enabled": bool(self.pi_config.audio.enabled and self.engine_config.wake.enabled),
+            "ready": bool(getattr(detector, "ready", False)),
+            "provider": provider if detector is not None else "disabled",
+            "wake_phrase": str(self.engine_config.wake.wake_phrase or "").strip(),
+            "last_text": "",
+            "last_trigger_ms": 0,
+            "error": str(getattr(detector, "error", "") or ""),
+            "unhealthy": bool(getattr(detector, "unhealthy", False)),
+        }
+
+    def _build_wake_detector(self):
+        cfg = self.engine_config.wake
+        if not cfg.enabled:
+            return None
+
+        provider = str(cfg.provider or "sherpa").strip().lower()
+        if provider in {"sherpa", "sherpa_kws"}:
+            detector = SherpaKwsDetector(
+                wake_phrase=cfg.wake_phrase,
+                model_dir=cfg.model_dir,
+                sample_rate=self.engine_config.audio.sample_rate,
+                alias_mode=cfg.alias_mode,
+                auto_download=cfg.auto_download,
+                num_threads=cfg.num_threads,
+                keywords_score=cfg.keywords_score,
+                keywords_threshold=cfg.keywords_threshold,
+            )
+            if detector.ready:
+                return detector
+            logger.warning("sherpa wake init failed, falling back to vosk wake: %s", detector.error)
+
+        fallback_path = str(cfg.fallback_model_path or self.engine_config.asr.model_path).strip()
+        detector = WakeWordDetector(
+            model_path=fallback_path,
+            sample_rate=self.engine_config.audio.sample_rate,
+            phrases=[cfg.wake_phrase],
+        )
+        return detector if detector.ready else None
+
+    def _handle_wake_audio(self, frame: AudioFrame) -> None:
+        detector = self._wake_detector
+        if detector is None:
+            return
+        if not getattr(detector, "ready", False):
+            self._wake_state["ready"] = False
+            self._wake_state["error"] = str(getattr(detector, "error", "") or "")
+            return
+        if bool(self._voice_state.get("session_active")):
+            return
+        if frame.timestamp_ms < self._wake_guard_until_ms:
+            return
+        hit = False
+        try:
+            hit = bool(detector.update(frame.pcm_s16le))
+        except Exception as exc:
+            self._wake_state["error"] = f"runtime_error:{exc}"
+            return
+        self._wake_state.update(
+            {
+                "ready": bool(getattr(detector, "ready", False)),
+                "provider": self._resolve_wake_provider(detector),
+                "error": str(getattr(detector, "error", "") or ""),
+                "unhealthy": bool(getattr(detector, "unhealthy", False)),
+            }
+        )
+        if not hit:
+            return
+        self._on_wake_detected(frame.timestamp_ms, str(getattr(detector, "last_text", "") or "").strip())
+
+    def _on_wake_detected(self, timestamp_ms: int, text: str) -> None:
+        hit_text = text or str(self.engine_config.wake.wake_phrase or "唤醒").strip()
+        self._wake_state.update(
+            {
+                "ready": True,
+                "provider": self._resolve_wake_provider(self._wake_detector),
+                "last_text": hit_text,
+                "last_trigger_ms": int(timestamp_ms),
+                "last_update_ms": self._now_ms(),
+            }
+        )
+        self._voice_state.update(
+            {
+                "session_active": True,
+                "mode": "wake_listen",
+                "last_update_ms": self._now_ms(),
+            }
+        )
+        self._emit(
+            "WakeDetected",
+            timestamp_ms,
+            {
+                "text": hit_text,
+                "provider": self._wake_state.get("provider"),
+                "wake_phrase": self.engine_config.wake.wake_phrase,
+            },
+        )
+        ack_text = str(self.engine_config.wake.ack_text or "").strip()
+        if not ack_text:
+            return
+        self._voice_state["last_prompt"] = ack_text
+        self._voice_state["last_update_ms"] = self._now_ms()
+        self._wake_guard_until_ms = int(timestamp_ms) + max(0, int(self.engine_config.wake.ack_guard_ms))
+        self._hardware.speak(self._tts, ack_text)
+
+    def _resolve_wake_provider(self, detector) -> str:
+        if detector is None:
+            return "disabled"
+        name = detector.__class__.__name__.lower()
+        if "sherpa" in name:
+            return "sherpa"
+        if "wakeword" in name or "vosk" in name:
+            return "vosk"
+        return str(self.engine_config.wake.provider or "unknown").strip().lower()
