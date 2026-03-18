@@ -270,6 +270,23 @@ class PiEmotionRuntime:
         )
         return {"ok": ok, **self.get_voice_status()}
 
+    def transcribe_recent_audio(self, window_ms: int = 6000) -> Dict[str, object]:
+        if self._asr is None:
+            return {"ok": False, "detail": "asr disabled", "transcript": ""}
+        pcm, _start, _end = self._ring_buffer.get_last_ms(max(1000, int(window_ms)))
+        if not pcm:
+            return {"ok": False, "detail": "no_audio", "transcript": ""}
+        transcript = self._asr.transcribe(pcm, self.engine_config.audio.sample_rate).strip()
+        self._voice_state["last_transcript"] = transcript
+        self._voice_state["last_update_ms"] = self._now_ms()
+        return {
+            "ok": bool(transcript),
+            "detail": "ok" if transcript else (self._asr.error or "empty_transcript"),
+            "transcript": transcript,
+            "window_ms": max(1000, int(window_ms)),
+            **self.get_voice_status(),
+        }
+
     def scan_networks(self) -> List[Dict[str, object]]:
         return self._onboarding.scan_networks()
 

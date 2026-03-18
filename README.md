@@ -57,6 +57,7 @@ python server_backend/run_server.py
 - `POST /voice/session/start`
 - `POST /voice/session/stop`
 - `POST /voice/tts/warmup`
+- `POST /voice/transcribe_recent`
 - `POST /signal`
 - `POST /care/manual`
 - `POST /speak`

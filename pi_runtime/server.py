@@ -51,6 +51,10 @@ class TtsWarmupRequest(BaseModel):
     text: str = "你好，我已经准备好了。"
 
 
+class VoiceTranscribeRequest(BaseModel):
+    window_ms: int = 6000
+
+
 def build_app(pi_config_path: str, engine_config_path: str) -> FastAPI:
     @asynccontextmanager
     async def lifespan(app: FastAPI):
@@ -196,6 +200,11 @@ def build_app(pi_config_path: str, engine_config_path: str) -> FastAPI:
     def voice_tts_warmup(payload: TtsWarmupRequest) -> dict:
         assert runtime is not None
         return runtime.warmup_tts(payload.text)
+
+    @app.post("/voice/transcribe_recent")
+    def voice_transcribe_recent(payload: VoiceTranscribeRequest) -> dict:
+        assert runtime is not None
+        return runtime.transcribe_recent_audio(payload.window_ms)
 
     return app
 
