@@ -209,6 +209,19 @@ class OwnerStatusResponse(BaseModel):
     enrolled_at_ms: Optional[int] = None
 
 
+class OwnerEnrollmentStartRequest(BaseModel):
+    device_id: Optional[str] = None
+    owner_label: str = "owner"
+
+
+class OwnerEnrollmentStartResponse(BaseModel):
+    ok: bool
+    device_id: str
+    started: bool = True
+    detail: str = ""
+    state: dict = Field(default_factory=dict)
+
+
 class ClientSessionHeartbeatRequest(BaseModel):
     client_type: str
     client_id: str
@@ -446,3 +459,55 @@ class ActivationPromptPackResponse(BaseModel):
     extraction_prompt: str
     preferred_mode: str = "cli"
     preferred_code_model: str = ""
+
+
+class ActivationPersonalityStateResponse(BaseModel):
+    ok: bool
+    exists: bool = False
+    summary: str = ""
+    response_style: str = ""
+    care_style: str = ""
+    traits: list[str] = Field(default_factory=list)
+    topics: list[str] = Field(default_factory=list)
+    boundaries: list[str] = Field(default_factory=list)
+    signals: list[str] = Field(default_factory=list)
+    confidence: float = 0.0
+    sample_count: int = 0
+    inference_version: str = "v1"
+    updated_at_ms: Optional[int] = None
+
+
+class ActivationPersonalityInferRequest(BaseModel):
+    transcript: str = ""
+    answers: list[str] = Field(default_factory=list)
+    surface: str = "desktop"
+    context: dict = Field(default_factory=dict)
+
+
+class ActivationPersonalityInferResponse(BaseModel):
+    ok: bool
+    summary: str = ""
+    response_style: str = ""
+    care_style: str = ""
+    traits: list[str] = Field(default_factory=list)
+    topics: list[str] = Field(default_factory=list)
+    boundaries: list[str] = Field(default_factory=list)
+    signals: list[str] = Field(default_factory=list)
+    confidence: float = 0.0
+    sample_count: int = 0
+    inference_version: str = "v1"
+    raw_json: dict = Field(default_factory=dict)
+
+
+class ActivationPersonalityCompleteRequest(BaseModel):
+    summary: str
+    response_style: str = ""
+    care_style: str = ""
+    traits: list[str] = Field(default_factory=list)
+    topics: list[str] = Field(default_factory=list)
+    boundaries: list[str] = Field(default_factory=list)
+    signals: list[str] = Field(default_factory=list)
+    confidence: float = 0.0
+    sample_count: int = 0
+    inference_version: str = "v1"
+    profile: dict = Field(default_factory=dict)

@@ -254,6 +254,39 @@ def init_db() -> None:
         _ensure_column(conn, "user_activation_profiles", "voice_intro_summary", "TEXT")
         _ensure_column(conn, "user_activation_profiles", "profile_json", "TEXT NOT NULL DEFAULT '{}'")
         _ensure_column(conn, "user_activation_profiles", "activation_version", "TEXT NOT NULL DEFAULT 'v1'")
+        cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS user_personality_profiles (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL UNIQUE,
+                summary TEXT,
+                response_style TEXT,
+                care_style TEXT,
+                traits_json TEXT NOT NULL DEFAULT '[]',
+                topics_json TEXT NOT NULL DEFAULT '[]',
+                boundaries_json TEXT NOT NULL DEFAULT '[]',
+                signals_json TEXT NOT NULL DEFAULT '[]',
+                profile_json TEXT NOT NULL DEFAULT '{}',
+                confidence REAL NOT NULL DEFAULT 0,
+                sample_count INTEGER NOT NULL DEFAULT 0,
+                inference_version TEXT NOT NULL DEFAULT 'v1',
+                updated_at INTEGER NOT NULL,
+                created_at INTEGER NOT NULL,
+                FOREIGN KEY(user_id) REFERENCES users(id)
+            )
+            """
+        )
+        _ensure_column(conn, "user_personality_profiles", "summary", "TEXT")
+        _ensure_column(conn, "user_personality_profiles", "response_style", "TEXT")
+        _ensure_column(conn, "user_personality_profiles", "care_style", "TEXT")
+        _ensure_column(conn, "user_personality_profiles", "traits_json", "TEXT NOT NULL DEFAULT '[]'")
+        _ensure_column(conn, "user_personality_profiles", "topics_json", "TEXT NOT NULL DEFAULT '[]'")
+        _ensure_column(conn, "user_personality_profiles", "boundaries_json", "TEXT NOT NULL DEFAULT '[]'")
+        _ensure_column(conn, "user_personality_profiles", "signals_json", "TEXT NOT NULL DEFAULT '[]'")
+        _ensure_column(conn, "user_personality_profiles", "profile_json", "TEXT NOT NULL DEFAULT '{}'")
+        _ensure_column(conn, "user_personality_profiles", "confidence", "REAL NOT NULL DEFAULT 0")
+        _ensure_column(conn, "user_personality_profiles", "sample_count", "INTEGER NOT NULL DEFAULT 0")
+        _ensure_column(conn, "user_personality_profiles", "inference_version", "TEXT NOT NULL DEFAULT 'v1'")
         conn.commit()
     finally:
         conn.close()

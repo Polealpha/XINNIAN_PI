@@ -25,6 +25,7 @@ from cryptography.fernet import Fernet, InvalidToken
 
 from . import auth
 from .activation_prompts import ACTIVATION_SYSTEM_PROMPT, IDENTITY_EXTRACTION_PROMPT
+from .personality_prompts import PERSONALITY_EXTRACTION_PROMPT, PERSONALITY_SYSTEM_PROMPT
 from .assistant_service import AssistantService, build_session_key, normalize_surface
 from .db import get_db, init_db
 from .openclaw_gateway import OpenClawGatewayError
@@ -33,6 +34,10 @@ from .schemas import (
     ActivationCompleteRequest,
     ActivationIdentityInferRequest,
     ActivationIdentityInferResponse,
+    ActivationPersonalityCompleteRequest,
+    ActivationPersonalityInferRequest,
+    ActivationPersonalityInferResponse,
+    ActivationPersonalityStateResponse,
     ActivationProfileResponse,
     ActivationPromptPackResponse,
     AssistantMemorySearchResponse,
@@ -62,6 +67,8 @@ from .schemas import (
     EngineSignalPullResponse,
     EngineSignalRequest,
     OwnerEnrollmentRequest,
+    OwnerEnrollmentStartRequest,
+    OwnerEnrollmentStartResponse,
     OwnerEnrollmentResponse,
     OwnerStatusResponse,
     EmotionEventRequest,
@@ -460,6 +467,216 @@ def _activation_response(user: Dict[str, object], profile: Dict[str, object]) ->
         preferred_mode=OPENCLAW_PREFERRED_MODE,
         preferred_code_model=OPENCLAW_PREFERRED_CODE_MODEL,
     )
+
+
+def _json_list(value: object) -> List[str]:
+    if isinstance(value, list):
+        return [str(item).strip() for item in value if str(item).strip()]
+    try:
+        parsed = json.loads(str(value or "[]"))
+    except Exception:
+        return []
+    if not isinstance(parsed, list):
+        return []
+    return [str(item).strip() for item in parsed if str(item).strip()]
+
+
+def _get_personality_profile(conn: Connection, user_id: int) -> Dict[str, object]:
+    row = conn.execute(
+        """
+        SELECT *
+        FROM user_personality_profiles
+        WHERE user_id = ?
+        """,
+        (int(user_id),),
+    ).fetchone()
+    if not row:
+        return {}
+    payload = dict(row)
+    try:
+        profile_json = json.loads(str(payload.get("profile_json") or "{}"))
+    except Exception:
+        profile_json = {}
+    if not isinstance(profile_json, dict):
+        profile_json = {}
+    merged = dict(profile_json)
+    merged.update(
+        {
+            "summary": str(payload.get("summary") or "").strip(),
+            "response_style": str(payload.get("response_style") or "").strip(),
+            "care_style": str(payload.get("care_style") or "").strip(),
+            "traits": _json_list(payload.get("traits_json")),
+            "topics": _json_list(payload.get("topics_json")),
+            "boundaries": _json_list(payload.get("boundaries_json")),
+            "signals": _json_list(payload.get("signals_json")),
+            "confidence": float(payload.get("confidence") or 0.0),
+            "sample_count": int(payload.get("sample_count") or 0),
+            "inference_version": str(payload.get("inference_version") or "v1").strip() or "v1",
+            "updated_at_ms": int(payload.get("updated_at") or 0) or None,
+        }
+    )
+    return merged
+
+
+def _personality_response(profile: Dict[str, object]) -> ActivationPersonalityStateResponse:
+    return ActivationPersonalityStateResponse(
+        ok=True,
+        exists=bool(profile),
+        summary=str(profile.get("summary") or "").strip(),
+        response_style=str(profile.get("response_style") or "").strip(),
+        care_style=str(profile.get("care_style") or "").strip(),
+        traits=[str(item) for item in profile.get("traits") or [] if str(item).strip()],
+        topics=[str(item) for item in profile.get("topics") or [] if str(item).strip()],
+        boundaries=[str(item) for item in profile.get("boundaries") or [] if str(item).strip()],
+        signals=[str(item) for item in profile.get("signals") or [] if str(item).strip()],
+        confidence=max(0.0, min(1.0, float(profile.get("confidence") or 0.0))),
+        sample_count=max(0, int(profile.get("sample_count") or 0)),
+        inference_version=str(profile.get("inference_version") or "v1"),
+        updated_at_ms=int(profile.get("updated_at_ms") or 0) or None,
+    )
+
+
+def _upsert_personality_profile(conn: Connection, user_id: int, payload: Dict[str, object]) -> Dict[str, object]:
+    now_ms = int(time.time() * 1000)
+    traits = [str(item).strip() for item in payload.get("traits") or [] if str(item).strip()]
+    topics = [str(item).strip() for item in payload.get("topics") or [] if str(item).strip()]
+    boundaries = [str(item).strip() for item in payload.get("boundaries") or [] if str(item).strip()]
+    signals = [str(item).strip() for item in payload.get("signals") or [] if str(item).strip()]
+    profile_json = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+    conn.execute(
+        """
+        INSERT INTO user_personality_profiles (
+            user_id,
+            summary,
+            response_style,
+            care_style,
+            traits_json,
+            topics_json,
+            boundaries_json,
+            signals_json,
+            profile_json,
+            confidence,
+            sample_count,
+            inference_version,
+            updated_at,
+            created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(user_id) DO UPDATE SET
+            summary = excluded.summary,
+            response_style = excluded.response_style,
+            care_style = excluded.care_style,
+            traits_json = excluded.traits_json,
+            topics_json = excluded.topics_json,
+            boundaries_json = excluded.boundaries_json,
+            signals_json = excluded.signals_json,
+            profile_json = excluded.profile_json,
+            confidence = excluded.confidence,
+            sample_count = excluded.sample_count,
+            inference_version = excluded.inference_version,
+            updated_at = excluded.updated_at
+        """,
+        (
+            int(user_id),
+            str(payload.get("summary") or "").strip() or None,
+            str(payload.get("response_style") or "").strip() or None,
+            str(payload.get("care_style") or "").strip() or None,
+            json.dumps(traits, ensure_ascii=False),
+            json.dumps(topics, ensure_ascii=False),
+            json.dumps(boundaries, ensure_ascii=False),
+            json.dumps(signals, ensure_ascii=False),
+            profile_json,
+            max(0.0, min(1.0, float(payload.get("confidence") or 0.0))),
+            max(0, int(payload.get("sample_count") or 0)),
+            str(payload.get("inference_version") or "v1").strip() or "v1",
+            now_ms,
+            now_ms,
+        ),
+    )
+    conn.commit()
+    return _get_personality_profile(conn, user_id)
+
+
+def _heuristic_personality_profile(text: str) -> Dict[str, object]:
+    raw = str(text or "").strip()
+    lowered = raw.lower()
+    traits: List[str] = []
+    topics: List[str] = []
+    boundaries: List[str] = []
+    signals: List[str] = []
+    response_style = "先给结论，再补解释。"
+    care_style = "以低打扰、可执行、短句陪伴为主。"
+    if any(token in raw for token in ["直接", "别绕", "简洁", "效率"]):
+        traits.append("偏直接")
+        response_style = "先给结论，避免绕圈，必要时再补步骤。"
+    if any(token in raw for token in ["理性", "逻辑", "分析"]):
+        traits.append("偏理性")
+    if any(token in raw for token in ["敏感", "容易想多", "内耗", "焦虑"]):
+        traits.append("容易内耗")
+        topics.append("压力与焦虑管理")
+        care_style = "先安抚情绪，再给一个很小的下一步。"
+    if any(token in raw for token in ["睡眠", "熬夜", "作息"]):
+        topics.append("睡眠节律")
+    if any(token in raw for token in ["工作", "任务", "效率", "项目"]):
+        topics.append("工作压力")
+    if any(token in raw for token in ["不要催", "别催", "不喜欢被催"]):
+        boundaries.append("不要频繁催促")
+    if any(token in raw for token in ["不要说教", "别说教"]):
+        boundaries.append("不要说教")
+    if any(token in raw for token in ["先自己扛", "先不说", "先沉默", "不想马上说"]):
+        signals.append("压力大时可能先沉默")
+    if "不是生气" in raw or "只是着急" in raw or "只是烦" in raw:
+        signals.append("语气直接不等于敌意")
+    if "幽默" in raw or "轻松" in raw:
+        care_style = "允许轻松一点，但避免过度玩笑。"
+    if not traits:
+        traits = ["需要稳定感", "偏长期陪伴"]
+    if not topics:
+        topics = ["日常压力", "情绪节律"]
+    if not boundaries:
+        boundaries = ["避免一次问太多问题"]
+    if not signals:
+        signals = ["需要先被理解，再接受建议"]
+    summary = "这个用户更适合稳定、低打扰、持续记忆式陪伴。"
+    return {
+        "summary": summary,
+        "response_style": response_style,
+        "care_style": care_style,
+        "traits": traits[:5],
+        "topics": topics[:5],
+        "boundaries": boundaries[:5],
+        "signals": signals[:5],
+        "confidence": 0.42 if raw else 0.0,
+        "sample_count": max(1, len([line for line in raw.splitlines() if line.strip()])) if raw else 0,
+        "inference_version": "v1",
+        "heuristic": True,
+    }
+
+
+def _build_assistant_identity_context(conn: Connection, user_id: int) -> Dict[str, object]:
+    activation = _get_activation_profile(conn, user_id)
+    personality = _get_personality_profile(conn, user_id)
+    return {
+        "identity": {
+            "preferred_name": str(activation.get("preferred_name") or "").strip(),
+            "role_label": str(activation.get("role_label") or "").strip(),
+            "relation_to_robot": str(activation.get("relation_to_robot") or "").strip(),
+            "identity_summary": str(activation.get("identity_summary") or "").strip(),
+            "voice_intro_summary": str(activation.get("voice_intro_summary") or "").strip(),
+        },
+        "personality": {
+            "summary": str(personality.get("summary") or "").strip(),
+            "response_style": str(personality.get("response_style") or "").strip(),
+            "care_style": str(personality.get("care_style") or "").strip(),
+            "traits": [str(item) for item in personality.get("traits") or [] if str(item).strip()],
+            "topics": [str(item) for item in personality.get("topics") or [] if str(item).strip()],
+            "boundaries": [str(item) for item in personality.get("boundaries") or [] if str(item).strip()],
+            "signals": [str(item) for item in personality.get("signals") or [] if str(item).strip()],
+        },
+        "runtime_preferences": {
+            "preferred_mode": OPENCLAW_PREFERRED_MODE,
+            "preferred_code_model": OPENCLAW_PREFERRED_CODE_MODEL,
+        },
+    }
 
 
 def _extract_json_block(text: str) -> Dict[str, object]:
@@ -1514,6 +1731,16 @@ def _fetch_device_status(device_ip: str, timeout_sec: float = 2.0) -> Dict:
     raise ValueError("Invalid status payload")
 
 
+def _post_device_json(device_ip: str, path: str, payload: Dict[str, object], timeout_sec: float = 4.0) -> Dict:
+    url = f"http://{device_ip}{path}"
+    response = httpx.post(url, json=payload, timeout=timeout_sec)
+    response.raise_for_status()
+    data = response.json()
+    if isinstance(data, dict):
+        return data
+    raise ValueError("Invalid device payload")
+
+
 def _emotion_type_from_tags(tags: List[str], s_value: float) -> str:
     tags_lower = [str(tag).lower() for tag in tags]
     if any(tag in tags_lower for tag in ("anger", "angry")):
@@ -1852,6 +2079,124 @@ def activation_prompt_pack(
         preferred_mode=OPENCLAW_PREFERRED_MODE,
         preferred_code_model=OPENCLAW_PREFERRED_CODE_MODEL,
     )
+
+
+@app.get("/api/activation/personality/state", response_model=ActivationPersonalityStateResponse)
+def activation_personality_state(
+    credentials: HTTPAuthorizationCredentials = Depends(bearer_scheme),
+    conn: Connection = Depends(get_db),
+) -> ActivationPersonalityStateResponse:
+    user = _parse_access_token(credentials, conn)
+    return _personality_response(_get_personality_profile(conn, int(user["id"])))
+
+
+@app.post("/api/activation/personality/infer", response_model=ActivationPersonalityInferResponse)
+async def activation_personality_infer(
+    payload: ActivationPersonalityInferRequest,
+    credentials: HTTPAuthorizationCredentials = Depends(bearer_scheme),
+    conn: Connection = Depends(get_db),
+) -> ActivationPersonalityInferResponse:
+    user = _parse_access_token(credentials, conn)
+    answers = [str(item).strip() for item in payload.answers or [] if str(item).strip()]
+    transcript = str(payload.transcript or "").strip()
+    merged_lines = []
+    if transcript:
+        merged_lines.append(transcript)
+    merged_lines.extend(answers)
+    if not merged_lines:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="answers or transcript is required")
+    recent_rows = _list_chat_messages(conn, int(user["id"]), 12, session_key=build_session_key("desktop", int(user["id"])))
+    recent_history = [
+        {
+            "sender": str(row["sender"] or ""),
+            "text": str(row["text"] or ""),
+            "timestamp_ms": int(row["timestamp_ms"] or 0),
+        }
+        for row in recent_rows[-8:]
+        if str(row["text"] or "").strip()
+    ]
+    inference_input = {
+        "identity": _get_activation_profile(conn, int(user["id"])),
+        "surface": str(payload.surface or "desktop").strip() or "desktop",
+        "answers": answers,
+        "transcript": transcript,
+        "context": payload.context or {},
+        "recent_history": recent_history,
+    }
+    session_key = f"activation:{int(user['id'])}:personality:{int(time.time() * 1000)}"
+    prompt = (
+        f"{PERSONALITY_SYSTEM_PROMPT}\n\n"
+        f"{PERSONALITY_EXTRACTION_PROMPT}\n\n"
+        f"输入数据：{json.dumps(inference_input, ensure_ascii=False)}"
+    )
+    try:
+        raw = await assistant_service.gateway.send_message(session_key, prompt)
+        parsed = _extract_json_block(raw)
+    except OpenClawGatewayError:
+        raw = ""
+        parsed = _heuristic_personality_profile("\n".join(merged_lines))
+    summary = str(parsed.get("summary") or "").strip()
+    response_style = str(parsed.get("response_style") or "").strip()
+    care_style = str(parsed.get("care_style") or "").strip()
+    traits = [str(item).strip() for item in parsed.get("traits") or [] if str(item).strip()]
+    topics = [str(item).strip() for item in parsed.get("topics") or [] if str(item).strip()]
+    boundaries = [str(item).strip() for item in parsed.get("boundaries") or [] if str(item).strip()]
+    signals = [str(item).strip() for item in parsed.get("signals") or [] if str(item).strip()]
+    confidence = max(0.0, min(1.0, float(parsed.get("confidence") or 0.0)))
+    sample_count = max(len(answers), 1 if transcript else 0, int(parsed.get("sample_count") or 0))
+    return ActivationPersonalityInferResponse(
+        ok=True,
+        summary=summary,
+        response_style=response_style,
+        care_style=care_style,
+        traits=traits,
+        topics=topics,
+        boundaries=boundaries,
+        signals=signals,
+        confidence=confidence,
+        sample_count=sample_count,
+        inference_version=str(parsed.get("inference_version") or "v1").strip() or "v1",
+        raw_json=parsed or {"raw_text": raw},
+    )
+
+
+@app.post("/api/activation/personality/complete", response_model=ActivationPersonalityStateResponse)
+def activation_personality_complete(
+    payload: ActivationPersonalityCompleteRequest,
+    credentials: HTTPAuthorizationCredentials = Depends(bearer_scheme),
+    conn: Connection = Depends(get_db),
+) -> ActivationPersonalityStateResponse:
+    user = _parse_access_token(credentials, conn)
+    summary = str(payload.summary or "").strip()
+    if not summary:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="summary is required")
+    profile = _upsert_personality_profile(
+        conn,
+        int(user["id"]),
+        {
+            "summary": summary,
+            "response_style": str(payload.response_style or "").strip(),
+            "care_style": str(payload.care_style or "").strip(),
+            "traits": payload.traits or [],
+            "topics": payload.topics or [],
+            "boundaries": payload.boundaries or [],
+            "signals": payload.signals or [],
+            "confidence": max(0.0, min(1.0, float(payload.confidence or 0.0))),
+            "sample_count": max(0, int(payload.sample_count or 0)),
+            "inference_version": str(payload.inference_version or "v1").strip() or "v1",
+            "profile": payload.profile or {},
+        },
+    )
+    assistant_service.store.append_memory(
+        int(user["id"]),
+        title="personality_profile",
+        content=(
+            f"人格画像已确认。摘要：{summary}；回复风格：{str(payload.response_style or '').strip()}；"
+            f"陪伴风格：{str(payload.care_style or '').strip()}；特征：{', '.join(payload.traits or [])}"
+        ),
+        tags=["activation", "personality", "profile"],
+    )
+    return _personality_response(profile)
 
 
 @app.get("/api/user/profile", response_model=ProfileResponse)
@@ -2251,6 +2596,9 @@ def owner_enrollment(
         if not claim:
             raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid claim token")
         user_id = int(claim["claimed_user_id"])
+    user_row = _get_user_by_id(conn, int(user_id))
+    if not bool(user_row.get("is_configured", 0)):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Activation must complete before owner enrollment")
     owner = _get_device_owner(conn, payload.device_id)
     if owner and int(owner.get("user_id") or 0) != int(user_id):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Device owned by another user")
@@ -2281,6 +2629,44 @@ def owner_status(
         recognition_enabled=bool(int(profile.get("recognition_enabled") or 0)) if profile else True,
         last_sync_ms=int(profile.get("last_sync_ms") or 0) if profile else None,
         enrolled_at_ms=int(profile.get("enrolled_at_ms") or 0) if profile else None,
+    )
+
+
+@app.post("/api/device/owner/enrollment/start", response_model=OwnerEnrollmentStartResponse)
+def owner_enrollment_start(
+    payload: OwnerEnrollmentStartRequest,
+    credentials: HTTPAuthorizationCredentials = Depends(bearer_scheme),
+    conn: Connection = Depends(get_db),
+) -> OwnerEnrollmentStartResponse:
+    user = _parse_access_token(credentials, conn)
+    if not bool(user.get("is_configured", 0)):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Activation must complete before face enrollment")
+    selected = {}
+    if payload.device_id:
+        selected = _get_device(conn, int(user["id"]), payload.device_id)
+    else:
+        devices = _list_devices(conn, int(user["id"]))
+        if devices:
+            selected = devices[0]
+    if not selected:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Device not found")
+    resolved_ip = str(selected.get("device_ip") or "").strip()
+    if not resolved_ip:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Device IP missing")
+    try:
+        state = _post_device_json(
+            resolved_ip,
+            "/owner/enrollment/start",
+            {"owner_label": str(payload.owner_label or "owner").strip() or "owner", "claim_token": ""},
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
+    return OwnerEnrollmentStartResponse(
+        ok=True,
+        device_id=str(selected.get("device_id") or payload.device_id or "unknown"),
+        started=True,
+        detail="Face enrollment requested on robot",
+        state=state,
     )
 
 
@@ -2439,7 +2825,20 @@ def device_status(
         if devices:
             selected = devices[0]
     if not selected and not device_ip:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Device not found")
+        return DeviceStatusResponse(
+            device_id=device_id or "unbound",
+            device_ip=None,
+            device_mac=None,
+            online=False,
+            last_seen_ms=None,
+            ssid=None,
+            desired_ssid=None,
+            network_mismatch=False,
+            missing_profile=False,
+            last_switch_reason=None,
+            status=None,
+            error="Device not bound yet",
+        )
 
     resolved_id = device_id or selected.get("device_id", "unknown")
     resolved_ip = device_ip or selected.get("device_ip")
@@ -2652,6 +3051,8 @@ async def _assistant_send_impl(
     raw_text = str(payload.text or "").strip()
     if not raw_text:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="text is required")
+    merged_metadata = dict(payload.metadata or {})
+    merged_metadata["user_profile"] = _build_assistant_identity_context(conn, int(user_id))
     response_payload = await assistant_service.send_message(
         conn,
         user_id=int(user_id),
@@ -2661,7 +3062,7 @@ async def _assistant_send_impl(
         device_id=payload.device_id,
         sender_id=payload.sender_id,
         attachments=payload.attachments or [],
-        metadata=payload.metadata or {},
+        metadata=merged_metadata,
     )
     user_message = ChatMessageRequest(
         sender="user",
@@ -3060,7 +3461,11 @@ async def llm_care(
             text=assistant_prompt,
             surface="desktop",
             session_key=f"desktop:{int(user['id'])}:care",
-            metadata={"entrypoint": "llm_care", "current_emotion": payload.current_emotion},
+            metadata={
+                "entrypoint": "llm_care",
+                "current_emotion": payload.current_emotion,
+                "user_profile": _build_assistant_identity_context(conn, int(user["id"])),
+            },
         )
     except Exception:
         assistant_reply = {"text": "我在这里陪着你。"}
@@ -3092,7 +3497,11 @@ async def llm_care_stream(
             text=assistant_prompt,
             surface="desktop",
             session_key=f"desktop:{int(user['id'])}:care",
-            metadata={"entrypoint": "llm_care_stream", "current_emotion": payload.current_emotion},
+            metadata={
+                "entrypoint": "llm_care_stream",
+                "current_emotion": payload.current_emotion,
+                "user_profile": _build_assistant_identity_context(conn, int(user["id"])),
+            },
         )
         final_text = _sanitize_outbound_bot_text(str(assistant_reply.get("text") or ""))[0] or "我在这里陪着你。"
     except Exception:

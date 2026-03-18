@@ -54,7 +54,7 @@ import {
   getEmotionHistory,
   getEmotionHistoryRange,
 } from "./services/emotionService";
-import { getChatHistory, addChatMessage } from "./services/chatService";
+import { getChatHistory } from "./services/chatService";
 import { getDeviceStatus } from "./services/deviceService";
 import { connectEventStream, EngineEvent } from "./services/eventService";
 import { getUserProfile, updateUserProfile } from "./services/profileService";
@@ -864,7 +864,7 @@ const App: React.FC = () => {
   }, [isAuthenticated, isGuest, isFloatWidget, isFloatChat, pushToast, showSystemNotification]);
 
   const appendMessage = useCallback(
-    (message: ChatMessage, persist = false) => {
+    (message: ChatMessage) => {
       const hasText = Boolean(String(message.text || "").trim());
       const hasAttachments = Array.isArray(message.attachments) && message.attachments.length > 0;
       if (!hasText && !hasAttachments) return;
@@ -885,11 +885,8 @@ const App: React.FC = () => {
         }
         return [...prev, message];
       });
-      if (persist && !isGuest) {
-        addChatMessage(message).catch((err) => console.warn("save chat failed:", err));
-      }
     },
-    [isGuest]
+    []
   );
 
   const handleChatUpdate = useCallback(
@@ -1341,8 +1338,14 @@ const App: React.FC = () => {
       const status = await getDeviceStatus();
       setDeviceStatus(status);
     } catch (err) {
-      console.error("Device status fetch failed:", err);
-      setDeviceStatusError("状态刷新失败");
+      const message = err instanceof Error ? err.message : String(err);
+      if (message.includes("404")) {
+        setDeviceStatus(null);
+        setDeviceStatusError("");
+      } else {
+        console.error("Device status fetch failed:", err);
+        setDeviceStatusError("状态刷新失败");
+      }
     } finally {
       setStatusRefreshing(false);
     }
@@ -2199,14 +2202,8 @@ const App: React.FC = () => {
   if (!isAuthenticated) return <Login onLogin={handleLogin} onGuest={handleGuest} />;
 
   if (activationRequired && !isGuest) {
-    const token = localStorage.getItem("auth_token") || "";
     return (
-      <ActivationGate
-        activationPath={activationPath}
-        backendBase={getDeviceSyncApiBase() || getApiBase()}
-        token={token}
-        onActivated={handleActivationCompleted}
-      />
+      <ActivationGate onActivated={handleActivationCompleted} />
     );
   }
 

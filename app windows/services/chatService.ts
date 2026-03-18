@@ -5,7 +5,7 @@ export const getChatHistory = async (): Promise<ChatMessage[]> => {
   const data = await apiGet("/api/chat/history?limit=100", true);
   return data.map((item: any) => ({
     id: String(item.id),
-    sender: item.sender,
+    sender: String(item.sender || "").toLowerCase() === "user" ? "user" : "bot",
     text: item.text,
     contentType: String(item.content_type || "text") as ChatMessage["contentType"],
     attachments: Array.isArray(item.attachments) ? item.attachments : [],

@@ -1,5 +1,5 @@
-﻿import { ChatAttachment, EmotionEvent, EmotionType } from "../types";
-import { apiPost, getAccessToken, getApiBase } from "./apiClient";
+import { ChatAttachment, EmotionEvent, EmotionType } from "../types";
+import { apiPost } from "./apiClient";
 
 export interface CareHistoryItem {
   sender: string;
@@ -13,6 +13,33 @@ interface CareStreamHandlers {
   onDone?: (fullText: string) => void;
 }
 
+const buildAssistantPayload = (
+  currentEmotion: EmotionType,
+  context: string,
+  history: CareHistoryItem[],
+  currentTsMs?: number,
+  memorySummary?: string,
+  expressionLabel?: string,
+  expressionConfidence?: number,
+  attachments: ChatAttachment[] = []
+) => ({
+  text: context,
+  surface: "desktop",
+  attachments,
+  metadata: {
+    entrypoint: "desktop_chat",
+    current_emotion: currentEmotion,
+    current_ts_ms: currentTsMs,
+    history: history.slice(-6),
+    memory_summary: memorySummary || "",
+    expression_label: expressionLabel || "unknown",
+    expression_confidence:
+      typeof expressionConfidence === "number" && Number.isFinite(expressionConfidence)
+        ? expressionConfidence
+        : 0,
+  },
+});
+
 export const generateCareMessage = async (
   currentEmotion: EmotionType,
   context: string,
@@ -24,23 +51,23 @@ export const generateCareMessage = async (
   attachments: ChatAttachment[] = []
 ): Promise<string> => {
   try {
-    const payload = {
-      current_emotion: currentEmotion,
-      context,
-      current_ts_ms: currentTsMs,
-      history: history.slice(-4),
-      memory_summary: memorySummary || "",
-      expression_label: expressionLabel || "unknown",
-      expression_confidence:
-        typeof expressionConfidence === "number" && Number.isFinite(expressionConfidence)
-          ? expressionConfidence
-          : 0,
-      attachments,
-    };
-    const response = await apiPost("/api/llm/care", payload, true);
+    const response = await apiPost(
+      "/api/assistant/send",
+      buildAssistantPayload(
+        currentEmotion,
+        context,
+        history,
+        currentTsMs,
+        memorySummary,
+        expressionLabel,
+        expressionConfidence,
+        attachments
+      ),
+      true
+    );
     return response.text || "我在这里陪着你，如果愿意可以继续和我说。";
   } catch (error) {
-    console.error("LLM API Error:", error);
+    console.error("Assistant API Error:", error);
     return "我在，先慢一点呼吸一下，我们再继续。";
   }
 };
@@ -57,40 +84,29 @@ export const generateCareMessageStream = async (
   expressionConfidence?: number,
   attachments: ChatAttachment[] = []
 ): Promise<string> => {
-  const payload = {
-    current_emotion: currentEmotion,
-    context,
-    current_ts_ms: currentTsMs,
-    history: history.slice(-4),
-    memory_summary: memorySummary || "",
-    expression_label: expressionLabel || "unknown",
-    expression_confidence:
-      typeof expressionConfidence === "number" && Number.isFinite(expressionConfidence)
-        ? expressionConfidence
-        : 0,
-    attachments,
-  };
-
-  const headers: Record<string, string> = {
-    "Content-Type": "application/json",
-    Accept: "text/event-stream",
-  };
-  const token = getAccessToken();
-  if (token) {
-    headers.Authorization = `Bearer ${token}`;
-  }
-
-  let response: Response;
   try {
-    response = await fetch(`${getApiBase()}/api/llm/care/stream`, {
-      method: "POST",
-      headers,
-      body: JSON.stringify(payload),
-      cache: "no-store",
-      signal,
-    });
+    handlers.onStart?.();
+    const fullText = await generateCareMessage(
+      currentEmotion,
+      context,
+      history,
+      currentTsMs,
+      memorySummary,
+      expressionLabel,
+      expressionConfidence,
+      attachments
+    );
+    let streamedText = "";
+    for (const char of fullText) {
+      if (signal?.aborted) return "";
+      streamedText += char;
+      handlers.onDelta?.(char, streamedText);
+      await new Promise((resolve) => window.setTimeout(resolve, 10));
+    }
+    handlers.onDone?.(streamedText);
+    return streamedText;
   } catch (error) {
-    console.error("LLM stream API Error:", error);
+    console.error("Assistant stream emulation failed:", error);
     if (signal?.aborted) return "";
     return generateCareMessage(
       currentEmotion,
@@ -103,118 +119,6 @@ export const generateCareMessageStream = async (
       attachments
     );
   }
-
-  if (!response.ok || !response.body) {
-    console.warn("LLM stream unavailable, fallback to sync");
-    return generateCareMessage(
-      currentEmotion,
-      context,
-      history,
-      currentTsMs,
-      memorySummary,
-      expressionLabel,
-      expressionConfidence,
-      attachments
-    );
-  }
-
-  const reader = response.body.getReader();
-  const decoder = new TextDecoder("utf-8");
-  let buffer = "";
-  let fullText = "";
-
-  const processBlock = (block: string) => {
-    if (!block.trim()) return;
-    const lines = block.split("\n");
-    let eventType = "message";
-    const dataLines: string[] = [];
-    for (const line of lines) {
-      if (line.startsWith("event:")) {
-        eventType = line.slice(6).trim();
-      } else if (line.startsWith("data:")) {
-        dataLines.push(line.slice(5).trimStart());
-      }
-    }
-    if (dataLines.length === 0) return;
-
-    const dataRaw = dataLines.join("\n");
-    let data: any = {};
-    try {
-      data = JSON.parse(dataRaw);
-    } catch {
-      data = { text: dataRaw };
-    }
-
-    if (eventType === "start") {
-      handlers.onStart?.();
-      return;
-    }
-    if (eventType === "delta") {
-      const delta = typeof data.text === "string" ? data.text : "";
-      if (!delta) return;
-      fullText += delta;
-      handlers.onDelta?.(delta, fullText);
-      return;
-    }
-    if (eventType === "done") {
-      if (typeof data.text === "string" && data.text.trim()) {
-        fullText = data.text;
-      }
-      handlers.onDone?.(fullText);
-      return;
-    }
-    if (eventType === "error") {
-      throw new Error(String(data.message || "stream error"));
-    }
-  };
-
-  try {
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      buffer += decoder.decode(value, { stream: true }).replace(/\r\n/g, "\n");
-      let sepIndex = buffer.indexOf("\n\n");
-      while (sepIndex >= 0) {
-        const block = buffer.slice(0, sepIndex);
-        buffer = buffer.slice(sepIndex + 2);
-        processBlock(block);
-        sepIndex = buffer.indexOf("\n\n");
-      }
-    }
-    if (buffer.trim()) {
-      processBlock(buffer);
-    }
-  } catch (error) {
-    console.error("LLM stream parse error:", error);
-    if (!fullText.trim()) {
-      return generateCareMessage(
-        currentEmotion,
-        context,
-        history,
-        currentTsMs,
-        memorySummary,
-        expressionLabel,
-        expressionConfidence,
-        attachments
-      );
-    }
-  } finally {
-    reader.releaseLock();
-  }
-
-  if (!fullText.trim()) {
-    return generateCareMessage(
-      currentEmotion,
-      context,
-      history,
-      currentTsMs,
-      memorySummary,
-      expressionLabel,
-      expressionConfidence,
-      attachments
-    );
-  }
-  return fullText;
 };
 
 export const generateDailySummary = async (events: EmotionEvent[]): Promise<string> => {

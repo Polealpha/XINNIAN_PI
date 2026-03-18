@@ -2,7 +2,7 @@
 import { ChatAttachment, ChatMessage, EmotionType } from "../types";
 import { Send, Sparkles, User, Bot, Activity, Paperclip, X } from "lucide-react";
 import { generateCareMessage, generateCareMessageStream } from "../services/llmService";
-import { addChatMessage, uploadChatAttachment } from "../services/chatService";
+import { uploadChatAttachment } from "../services/chatService";
 
 interface ChatInterfaceProps {
   currentEmotion: EmotionType;
@@ -309,12 +309,6 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
       return;
     }
 
-    try {
-      await addChatMessage(userMsg);
-    } catch (error) {
-      console.error("Chat history save failed:", error);
-    }
-
     const botMsgId = `bot-${Date.now()}`;
     const botTimestamp = new Date();
     const upsertBotMessage = (text: string) => {
@@ -448,11 +442,6 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
           attachments: [],
         };
         if (onSendMessage) onSendMessage(botMsg);
-        try {
-          await addChatMessage(botMsg);
-        } catch (error) {
-          console.error("Chat history save failed:", error);
-        }
       }
     } finally {
       if (streamFlushTimerRef.current != null) {
