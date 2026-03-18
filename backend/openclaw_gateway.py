@@ -41,6 +41,9 @@ def discover_openclaw_state_dir(configured: str, workspace_dir: str) -> Path:
         [
             Path.home() / ".openclaw",
             Path(os.environ.get("APPDATA", "")) / "Antigravity" / "openclaw",
+            Path(os.environ.get("LOCALAPPDATA", "")) / "Antigravity" / "openclaw",
+            Path(os.environ.get("LOCALAPPDATA", "")) / "com.lbjlaq.antigravity-tools" / "openclaw",
+            Path(workspace_dir).expanduser().resolve() / ".openclaw",
             Path(workspace_dir).expanduser().resolve() / ".." / ".openclaw",
         ]
     )

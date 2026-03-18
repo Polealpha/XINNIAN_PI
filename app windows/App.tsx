@@ -60,6 +60,7 @@ import { connectEventStream, EngineEvent } from "./services/eventService";
 import { getUserProfile, updateUserProfile } from "./services/profileService";
 import { sendEngineSignal } from "./services/engineService";
 import { generateDailySummary } from "./services/llmService";
+import { getAssistantRuntimeStatus, getDueAssistantTodos } from "./services/assistantService";
 
 enum Tab {
   DASHBOARD = "DASHBOARD",
@@ -571,6 +572,56 @@ const App: React.FC = () => {
     "idle" | "detecting" | "listening" | "thinking" | "speaking"
   >("idle");
   const wakeActiveUntilRef = useRef<number>(0);
+  const assistantStatusLoggedRef = useRef(false);
+  const seenReminderIdsRef = useRef<Set<string>>(new Set());
+
+  useEffect(() => {
+    if (!isAuthenticated || isGuest) return;
+    let cancelled = false;
+    if (!assistantStatusLoggedRef.current) {
+      assistantStatusLoggedRef.current = true;
+      getAssistantRuntimeStatus()
+        .then((status) => {
+          if (cancelled) return;
+          console.info("[assistant runtime]", status);
+        })
+        .catch((error) => {
+          if (cancelled) return;
+          console.warn("[assistant runtime] unavailable", error);
+        });
+    }
+    const pollDue = async () => {
+      try {
+        const items = await getDueAssistantTodos(8);
+        for (const item of items) {
+          if (seenReminderIdsRef.current.has(item.id)) continue;
+          seenReminderIdsRef.current.add(item.id);
+          const title = item.title || "新的提醒";
+          const body = item.details || "到点了";
+          if ("Notification" in window) {
+            if (Notification.permission === "granted") {
+              new Notification(`小念提醒：${title}`, { body });
+            } else if (Notification.permission === "default") {
+              Notification.requestPermission().then((permission) => {
+                if (permission === "granted") {
+                  new Notification(`小念提醒：${title}`, { body });
+                }
+              });
+            }
+          }
+          console.info("[assistant reminder]", item);
+        }
+      } catch (error) {
+        console.warn("[assistant reminder] poll failed", error);
+      }
+    };
+    pollDue();
+    const timer = window.setInterval(pollDue, 15000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [isAuthenticated, isGuest]);
 
   const isLikelyWakeText = useCallback((raw: string): boolean => {
     const t = String(raw || "").trim().toLowerCase();

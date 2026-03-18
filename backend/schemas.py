@@ -369,6 +369,8 @@ class AssistantTodoItem(BaseModel):
     updated_at_ms: int
     due_at_ms: Optional[int] = None
     tags: list[str] = Field(default_factory=list)
+    notified_at_ms: Optional[int] = None
+    action: dict = Field(default_factory=dict)
 
 
 class AssistantTodoCreateRequest(BaseModel):
@@ -376,6 +378,7 @@ class AssistantTodoCreateRequest(BaseModel):
     details: str = ""
     due_at_ms: Optional[int] = None
     tags: list[str] = Field(default_factory=list)
+    action: dict = Field(default_factory=dict)
 
 
 class AssistantTodoUpdateRequest(BaseModel):
@@ -389,6 +392,16 @@ class AssistantTodoUpdateRequest(BaseModel):
 class AssistantTodoListResponse(BaseModel):
     ok: bool
     items: list[AssistantTodoItem] = Field(default_factory=list)
+
+
+class AssistantRuntimeStatusResponse(BaseModel):
+    ok: bool
+    gateway_ready: bool = False
+    gateway_error: str = ""
+    state_dir: str = ""
+    workspace_dir: str = ""
+    desktop_tools: list[str] = Field(default_factory=list)
+    robot_bridge_ready: bool = False
 
 
 class AssistantMemorySearchResponse(BaseModel):
@@ -507,6 +520,12 @@ class ActivationAssessmentVoiceRequest(BaseModel):
     session_mode: str = "assessment"
 
 
+class ActivationAssessmentVoicePollRequest(BaseModel):
+    device_id: Optional[str] = None
+    window_ms: int = 5000
+    speak_question: bool = True
+
+
 class ActivationAssessmentStateResponse(BaseModel):
     ok: bool
     exists: bool = False
@@ -543,6 +562,16 @@ class ActivationAssessmentTurnResponse(ActivationAssessmentStateResponse):
 
 class ActivationAssessmentFinishResponse(ActivationAssessmentStateResponse):
     persisted: bool = False
+
+
+class ActivationAssessmentVoicePollResponse(BaseModel):
+    ok: bool
+    device_online: bool = False
+    transcript: str = ""
+    transcript_processed: bool = False
+    prompt_spoken: bool = False
+    detail: str = ""
+    state: ActivationAssessmentStateResponse
 
 
 class ActivationPersonalityStateResponse(BaseModel):

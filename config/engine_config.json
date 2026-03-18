@@ -71,10 +71,10 @@
     "base_websocket_api_url": "",
     "model": "local",
     "semantic_punctuation_enabled": true,
-    "tokens_path": "models/asr/sherpa/tokens.txt",
-    "encoder_path": "models/asr/sherpa/encoder.int8.onnx",
-    "decoder_path": "models/asr/sherpa/decoder.int8.onnx",
-    "joiner_path": "models/asr/sherpa/joiner.int8.onnx",
+    "tokens_path": "models/asr/sherpa/sherpa-onnx-paraformer-zh-small-2024-03-09/tokens.txt",
+    "encoder_path": "models/asr/sherpa/sherpa-onnx-paraformer-zh-small-2024-03-09/model.int8.onnx",
+    "decoder_path": "",
+    "joiner_path": "",
     "num_threads": 2
   },
   "wake": {

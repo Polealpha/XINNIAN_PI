@@ -87,6 +87,16 @@ export interface ActivationAssessmentTurnResponse extends ActivationAssessmentSt
   just_completed: boolean;
 }
 
+export interface ActivationAssessmentVoicePollResponse {
+  ok: boolean;
+  device_online: boolean;
+  transcript: string;
+  transcript_processed: boolean;
+  prompt_spoken: boolean;
+  detail: string;
+  state: ActivationAssessmentState;
+}
+
 export const inferActivationIdentity = async (payload: {
   transcript: string;
   surface?: string;
@@ -207,6 +217,22 @@ export const stopAssessmentVoice = async (deviceId?: string) => {
   );
 };
 
+export const pollAssessmentVoice = async (payload?: {
+  deviceId?: string;
+  windowMs?: number;
+  speakQuestion?: boolean;
+}): Promise<ActivationAssessmentVoicePollResponse> => {
+  return apiPost(
+    "/api/activation/assessment/voice/poll",
+    {
+      device_id: payload?.deviceId || undefined,
+      window_ms: payload?.windowMs || 5000,
+      speak_question: payload?.speakQuestion ?? true,
+    },
+    true
+  );
+};
+
 export const startOwnerEnrollment = async (deviceId?: string) => {
   return apiPost(
     "/api/device/owner/enrollment/start",
@@ -217,4 +243,3 @@ export const startOwnerEnrollment = async (deviceId?: string) => {
     true
   );
 };
-

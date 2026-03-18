@@ -10,6 +10,7 @@ import subprocess
 import base64
 import hashlib
 import secrets
+from difflib import SequenceMatcher
 from collections import deque
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -64,6 +65,8 @@ from .schemas import (
     ActivationAssessmentTurnRequest,
     ActivationAssessmentTurnResponse,
     ActivationAssessmentVoiceRequest,
+    ActivationAssessmentVoicePollRequest,
+    ActivationAssessmentVoicePollResponse,
     ActivationIdentityInferRequest,
     ActivationIdentityInferResponse,
     ActivationPersonalityCompleteRequest,
@@ -73,6 +76,7 @@ from .schemas import (
     ActivationProfileResponse,
     ActivationPromptPackResponse,
     AssistantMemorySearchResponse,
+    AssistantRuntimeStatusResponse,
     AssistantSendRequest,
     AssistantSendResponse,
     AssistantSessionResetRequest,
@@ -870,6 +874,117 @@ def _assessment_response(session: Dict[str, object], device_online: bool = False
     )
 
 
+def _compact_text(text: str) -> str:
+    return re.sub(r"[\s，。！？、,.!?：:；;\"'“”‘’（）()【】\[\]<>《》-]+", "", str(text or "").strip().lower())
+
+
+def _get_device_json(device_ip: str, path: str, timeout_sec: float = 4.0) -> Dict[str, object]:
+    url = f"http://{device_ip}{path}"
+    response = httpx.get(url, timeout=timeout_sec)
+    response.raise_for_status()
+    data = response.json()
+    if isinstance(data, dict):
+        return data
+    raise ValueError("Invalid device payload")
+
+
+def _assessment_speak_text(device_ip: str, text: str, timeout_sec: float = 8.0) -> Dict[str, object]:
+    clean = str(text or "").strip()
+    if not clean:
+        return {"ok": False, "detail": "empty_text"}
+    return _post_device_json(device_ip, "/speak", {"text": clean}, timeout_sec=timeout_sec)
+
+
+def _assessment_should_ignore_transcript(session_payload: Dict[str, object], transcript: str) -> bool:
+    clean = _compact_text(transcript)
+    if not clean:
+        return True
+    last_consumed = _compact_text(str(session_payload.get("voice_last_consumed_transcript") or ""))
+    if last_consumed and clean == last_consumed:
+        return True
+
+    latest_question = _compact_text(str(session_payload.get("latest_question") or ""))
+    if latest_question:
+        similarity = SequenceMatcher(None, clean, latest_question).ratio()
+        if clean == latest_question or similarity >= 0.82:
+            return True
+
+    latest_prompt = _compact_text(str(session_payload.get("voice_last_prompt") or ""))
+    if latest_prompt:
+        similarity = SequenceMatcher(None, clean, latest_prompt).ratio()
+        if clean == latest_prompt or similarity >= 0.82:
+            return True
+
+    if clean in {_compact_text("我在"), _compact_text("你好"), _compact_text("收到")}:
+        return True
+    return False
+
+
+async def _assessment_apply_turn(
+    conn: Connection,
+    user_id: int,
+    session_id: int,
+    session_payload: Dict[str, object],
+    *,
+    answer_text: str,
+    transcript_text: str,
+    device_id: Optional[str],
+    voice_mode: str,
+    surface: str,
+) -> tuple[Dict[str, object], ActivationAssessmentTurnResponse]:
+    question_id = str(session_payload.get("last_question_id") or "").strip()
+    question = QUESTION_MAP.get(question_id) or {
+        "id": question_id or "ad-hoc",
+        "pair": "EI",
+        "prompt": str(session_payload.get("latest_question") or ""),
+        "dimension_targets": ["E", "I"],
+        "difficulty": 2,
+        "followup_rules": [],
+    }
+    scoring = await _assessment_score_model(int(user_id), question, session_payload, answer_text)
+    if not scoring:
+        scoring = score_answer_heuristic(question, answer_text)
+    merged = merge_scoring(session_payload, question, answer_text, scoring, int(time.time() * 1000))
+    merged["voice_mode"] = str(voice_mode or "text").strip() or "text"
+
+    terminator = await _assessment_terminate_model(int(user_id), merged)
+    if terminator.get("should_finish") and merged.get("status") != "completed":
+        merged["status"] = "completed"
+        merged["completed_at_ms"] = int(time.time() * 1000)
+        merged["finish_reason"] = str(terminator.get("reason") or "model_finish")
+        merged["final_result"] = build_final_profile(merged)
+        merged["latest_question"] = ""
+        merged["last_question_id"] = ""
+    elif merged.get("status") != "completed" and terminator.get("missing_pair"):
+        suggested = await _assessment_pick_model_question(int(user_id), _get_activation_profile(conn, int(user_id)), merged)
+        if suggested:
+            merged["latest_question"] = str(suggested.get("prompt") or merged.get("latest_question") or "")
+            merged["last_question_id"] = str(suggested.get("id") or merged.get("last_question_id") or "")
+
+    _append_assessment_turn_event(
+        conn,
+        int(user_id),
+        int(session_id),
+        int(merged.get("turn_count") or 0),
+        str(question.get("id") or ""),
+        str(question.get("prompt") or ""),
+        answer_text,
+        transcript_text,
+        scoring,
+    )
+    if merged.get("status") == "completed":
+        merged["final_result"] = _persist_assessment_completion(conn, int(user_id), merged)
+
+    _save_assessment_session(conn, int(user_id), merged, session_id=int(session_id))
+    device_online, _selected = _assessment_device_online(conn, int(user_id), device_id)
+    response = _assessment_response(merged, device_online=device_online, exists=True)
+    return merged, ActivationAssessmentTurnResponse(
+        **response.model_dump(),
+        question_changed=bool(response.latest_question),
+        just_completed=bool(merged.get("status") == "completed"),
+    )
+
+
 def _heuristic_personality_profile(text: str) -> Dict[str, object]:
     raw = str(text or "").strip()
     lowered = raw.lower()
@@ -991,6 +1106,27 @@ def _assessment_device_online(conn: Connection, user_id: int, device_id: Optiona
         selected = devices[0] if devices else {}
     resolved_ip = str(selected.get("device_ip") or "").strip() if selected else ""
     return bool(selected and resolved_ip), (selected or None)
+
+
+def _assessment_sync_voice_prompt(
+    session_payload: Dict[str, object],
+    *,
+    device_ip: str,
+    speak_question: bool = True,
+) -> tuple[Dict[str, object], bool, str]:
+    prompt_text = str(session_payload.get("latest_question") or "").strip()
+    if not speak_question:
+        return session_payload, False, "speak_disabled"
+    if not prompt_text:
+        return session_payload, False, "no_prompt"
+    if not bool(session_payload.get("voice_session_active")):
+        return session_payload, False, "voice_inactive"
+    if _compact_text(prompt_text) == _compact_text(str(session_payload.get("voice_last_prompt") or "")):
+        return session_payload, False, "prompt_already_spoken"
+    _assessment_speak_text(device_ip, prompt_text)
+    session_payload["voice_last_prompt"] = prompt_text
+    session_payload["voice_last_prompt_ms"] = int(time.time() * 1000)
+    return session_payload, True, "prompt_spoken"
 
 
 async def _assessment_pick_model_question(
@@ -2534,54 +2670,18 @@ async def activation_assessment_turn(
     answer_text = str(payload.answer or payload.transcript or "").strip()
     if not answer_text:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="answer is required")
-    question_id = str(session_payload.get("last_question_id") or "").strip()
-    question = QUESTION_MAP.get(question_id) or {
-        "id": question_id or "ad-hoc",
-        "pair": "EI",
-        "prompt": str(session_payload.get("latest_question") or ""),
-        "dimension_targets": ["E", "I"],
-        "difficulty": 2,
-        "followup_rules": [],
-    }
-    scoring = await _assessment_score_model(int(user["id"]), question, session_payload, answer_text)
-    if not scoring:
-        scoring = score_answer_heuristic(question, answer_text)
-    merged = merge_scoring(session_payload, question, answer_text, scoring, int(time.time() * 1000))
-    terminator = await _assessment_terminate_model(int(user["id"]), merged)
-    if terminator.get("should_finish") and merged.get("status") != "completed":
-        merged["status"] = "completed"
-        merged["completed_at_ms"] = int(time.time() * 1000)
-        merged["finish_reason"] = str(terminator.get("reason") or "model_finish")
-        merged["final_result"] = build_final_profile(merged)
-        merged["latest_question"] = ""
-        merged["last_question_id"] = ""
-    elif merged.get("status") != "completed" and terminator.get("missing_pair"):
-        # Keep local selection authoritative but allow model to steer next pair when it is specific.
-        suggested = await _assessment_pick_model_question(int(user["id"]), _get_activation_profile(conn, int(user["id"])), merged)
-        if suggested:
-            merged["latest_question"] = str(suggested.get("prompt") or merged.get("latest_question") or "")
-            merged["last_question_id"] = str(suggested.get("id") or merged.get("last_question_id") or "")
-    _append_assessment_turn_event(
+    _merged, response = await _assessment_apply_turn(
         conn,
         int(user["id"]),
         int(session_id),
-        int(merged.get("turn_count") or 0),
-        str(question.get("id") or ""),
-        str(question.get("prompt") or ""),
-        answer_text,
-        str(payload.transcript or answer_text),
-        scoring,
+        session_payload,
+        answer_text=answer_text,
+        transcript_text=str(payload.transcript or answer_text),
+        device_id=payload.device_id,
+        voice_mode=payload.voice_mode,
+        surface=payload.surface,
     )
-    if merged.get("status") == "completed":
-        merged["final_result"] = _persist_assessment_completion(conn, int(user["id"]), merged)
-    _save_assessment_session(conn, int(user["id"]), merged, session_id=int(session_id))
-    device_online, _selected = _assessment_device_online(conn, int(user["id"]), payload.device_id)
-    response = _assessment_response(merged, device_online=device_online, exists=True)
-    return ActivationAssessmentTurnResponse(
-        **response.model_dump(),
-        question_changed=bool(response.latest_question),
-        just_completed=bool(merged.get("status") == "completed"),
-    )
+    return response
 
 
 @app.post("/api/activation/assessment/finish", response_model=ActivationAssessmentFinishResponse)
@@ -2633,11 +2733,23 @@ def activation_assessment_voice_start(
     except Exception as exc:
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
     session_id, session_payload = _load_assessment_session(conn, int(user["id"]), active_only=True)
+    prompt_spoken = False
     if session_payload and session_id is not None:
         session_payload["voice_mode"] = "robot"
         session_payload["voice_session_active"] = True
+        session_payload, prompt_spoken, _detail = _assessment_sync_voice_prompt(
+            session_payload,
+            device_ip=resolved_ip,
+            speak_question=True,
+        )
         _save_assessment_session(conn, int(user["id"]), session_payload, session_id=int(session_id))
-    return {"ok": True, "device_online": True, "state": response}
+    return {
+        "ok": True,
+        "device_online": True,
+        "prompt_spoken": prompt_spoken,
+        "state": response,
+        "assessment": _assessment_response(session_payload or {}, device_online=True, exists=bool(session_payload)),
+    }
 
 
 @app.post("/api/activation/assessment/voice/stop")
@@ -2661,6 +2773,111 @@ def activation_assessment_voice_stop(
         session_payload["voice_mode"] = "text"
         _save_assessment_session(conn, int(user["id"]), session_payload, session_id=int(session_id))
     return {"ok": True, "device_online": True, "state": response}
+
+
+@app.post("/api/activation/assessment/voice/poll", response_model=ActivationAssessmentVoicePollResponse)
+async def activation_assessment_voice_poll(
+    payload: ActivationAssessmentVoicePollRequest,
+    credentials: HTTPAuthorizationCredentials = Depends(bearer_scheme),
+    conn: Connection = Depends(get_db),
+) -> ActivationAssessmentVoicePollResponse:
+    user = _parse_access_token(credentials, conn)
+    user_id = int(user["id"])
+    session_id, session_payload = _load_assessment_session(conn, user_id, active_only=True)
+    device_online, selected = _assessment_device_online(conn, user_id, payload.device_id)
+    base_state = _assessment_response(session_payload or {}, device_online=device_online, exists=bool(session_payload))
+    if not session_payload or session_id is None:
+        return ActivationAssessmentVoicePollResponse(
+            ok=True,
+            device_online=device_online,
+            detail="assessment_not_started",
+            state=base_state,
+        )
+    if not selected or not device_online:
+        return ActivationAssessmentVoicePollResponse(
+            ok=True,
+            device_online=False,
+            detail="device_offline",
+            state=base_state,
+        )
+
+    resolved_ip = str(selected.get("device_ip") or "").strip()
+    prompt_spoken = False
+    detail = "waiting_for_transcript"
+    transcript_text = ""
+    try:
+        session_payload, prompt_spoken, prompt_detail = _assessment_sync_voice_prompt(
+            session_payload,
+            device_ip=resolved_ip,
+            speak_question=bool(payload.speak_question),
+        )
+        if prompt_detail:
+            detail = prompt_detail
+        voice_state = _get_device_json(resolved_ip, "/voice/status", timeout_sec=4.0)
+        transcribe = _post_device_json(
+            resolved_ip,
+            "/voice/transcribe_recent",
+            {"window_ms": max(2500, int(payload.window_ms or 5000))},
+            timeout_sec=12.0,
+        )
+        transcript_text = str(transcribe.get("transcript") or "").strip()
+        session_payload["voice_runtime_state"] = voice_state
+    except Exception as exc:
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
+
+    if transcript_text and not _assessment_should_ignore_transcript(session_payload, transcript_text):
+        session_payload["voice_last_consumed_transcript"] = transcript_text
+        merged, updated = await _assessment_apply_turn(
+            conn,
+            user_id,
+            int(session_id),
+            session_payload,
+            answer_text=transcript_text,
+            transcript_text=transcript_text,
+            device_id=payload.device_id,
+            voice_mode="robot",
+            surface="desktop",
+        )
+        session_payload = merged
+        base_state = updated
+        detail = "transcript_processed"
+        if session_payload.get("status") == "completed":
+            try:
+                _assessment_speak_text(resolved_ip, "测评完成啦，我已经记住你的互动偏好了。")
+                _post_device_json(resolved_ip, "/voice/session/stop", {"mode": "assessment"})
+            except Exception:
+                pass
+            session_payload["voice_session_active"] = False
+            session_payload["voice_mode"] = "text"
+            _save_assessment_session(conn, user_id, session_payload, session_id=int(session_id))
+            base_state = _assessment_response(session_payload, device_online=True, exists=True)
+        else:
+            try:
+                session_payload, spoke_next, _next_detail = _assessment_sync_voice_prompt(
+                    session_payload,
+                    device_ip=resolved_ip,
+                    speak_question=bool(payload.speak_question),
+                )
+                prompt_spoken = prompt_spoken or spoke_next
+                _save_assessment_session(conn, user_id, session_payload, session_id=int(session_id))
+            except Exception:
+                pass
+            base_state = _assessment_response(session_payload, device_online=True, exists=True)
+    else:
+        _save_assessment_session(conn, user_id, session_payload, session_id=int(session_id))
+        if transcript_text:
+            detail = "transcript_ignored"
+        base_state = _assessment_response(session_payload, device_online=True, exists=True)
+
+    return ActivationAssessmentVoicePollResponse(
+        ok=True,
+        device_online=True,
+        transcript=transcript_text,
+        transcript_processed=detail == "transcript_processed",
+        prompt_spoken=prompt_spoken,
+        detail=detail,
+        state=base_state,
+    )
 
 
 @app.get("/api/activation/personality/state", response_model=ActivationPersonalityStateResponse)
@@ -3809,6 +4026,20 @@ def assistant_todos(
     return AssistantTodoListResponse(ok=True, items=items)
 
 
+@app.get("/api/assistant/todos/due", response_model=AssistantTodoListResponse)
+def assistant_todos_due(
+    limit: int = 10,
+    credentials: HTTPAuthorizationCredentials = Depends(bearer_scheme),
+    conn: Connection = Depends(get_db),
+) -> AssistantTodoListResponse:
+    user = _parse_access_token(credentials, conn)
+    items = [
+        AssistantTodoItem(**item)
+        for item in assistant_service.claim_due_todos(int(user["id"]), limit=max(1, min(int(limit), 20)))
+    ]
+    return AssistantTodoListResponse(ok=True, items=items)
+
+
 @app.post("/api/assistant/todos", response_model=AssistantTodoItem)
 def assistant_todos_create(
     payload: AssistantTodoCreateRequest,
@@ -3854,6 +4085,15 @@ def assistant_memory_search(
         query=q,
         results=assistant_service.search_memory(int(user["id"]), q, limit=max(1, min(int(limit), 20))),
     )
+
+
+@app.get("/api/assistant/runtime/status", response_model=AssistantRuntimeStatusResponse)
+def assistant_runtime_status(
+    credentials: HTTPAuthorizationCredentials = Depends(bearer_scheme),
+    conn: Connection = Depends(get_db),
+) -> AssistantRuntimeStatusResponse:
+    _ = _parse_access_token(credentials, conn)
+    return AssistantRuntimeStatusResponse(ok=True, **assistant_service.runtime_status())
 
 
 def _require_bearer(credentials: Optional[HTTPAuthorizationCredentials]) -> None:

@@ -241,6 +241,8 @@ class PiEmotionRuntime:
         state = dict(self._voice_state)
         state["tts_ready"] = bool(self._tts.ready)
         state["asr_ready"] = bool(self._asr.ready) if self._asr is not None else False
+        state["tts_provider"] = getattr(self._tts, "active_provider", "disabled")
+        state["asr_engine"] = getattr(self._asr, "active_engine", "disabled") if self._asr is not None else "disabled"
         state["device_id"] = self.pi_config.device.device_id
         state["wake_state"] = self.get_wake_status()
         return state
@@ -969,11 +971,10 @@ class PiEmotionRuntime:
 
     def _build_initial_wake_state(self) -> Dict[str, object]:
         detector = self._wake_detector
-        provider = str(self.engine_config.wake.provider or "disabled").strip().lower()
         return {
             "enabled": bool(self.pi_config.audio.enabled and self.engine_config.wake.enabled),
             "ready": bool(getattr(detector, "ready", False)),
-            "provider": provider if detector is not None else "disabled",
+            "provider": self._resolve_wake_provider(detector),
             "wake_phrase": str(self.engine_config.wake.wake_phrase or "").strip(),
             "last_text": "",
             "last_trigger_ms": 0,

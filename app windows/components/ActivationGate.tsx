@@ -21,6 +21,7 @@ import {
   finishAssessment,
   getAssessmentState,
   inferActivationIdentity,
+  pollAssessmentVoice,
   startAssessment,
   startAssessmentVoice,
   startOwnerEnrollment,
@@ -156,6 +157,52 @@ export const ActivationGate: React.FC<ActivationGateProps> = ({ onActivated }) =
       active = false;
     };
   }, []);
+
+  useEffect(() => {
+    if (!assessmentState.voice_session_active || psychometricCompleted) {
+      return;
+    }
+    let cancelled = false;
+
+    const tick = async () => {
+      try {
+        const result = await pollAssessmentVoice({ speakQuestion: true, windowMs: 5200 });
+        if (cancelled) return;
+        setAssessmentState(result.state);
+        if (result.state.status === "completed") {
+          setPsychometricCompleted(true);
+        }
+        if (!result.device_online) {
+          setSuccess("设备离线，语音测评已自动退回文本模式。");
+          setAssessmentState((prev) => ({
+            ...prev,
+            voice_session_active: false,
+            voice_mode: "text",
+            device_online: false,
+          }));
+          return;
+        }
+        if (result.transcript && result.transcript_processed) {
+          setSuccess(`已收到语音回答：${result.transcript}`);
+        }
+      } catch (err) {
+        if (cancelled) return;
+        setError(err instanceof Error ? err.message : String(err));
+        setAssessmentState((prev) => ({
+          ...prev,
+          voice_session_active: false,
+          voice_mode: "text",
+        }));
+      }
+    };
+
+    tick();
+    const timer = window.setInterval(tick, 2200);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [assessmentState.voice_session_active, psychometricCompleted]);
 
   const canFinish = identityReady && psychometricCompleted;
   const scorePreview = useMemo(() => scoreItems(assessmentState.scores), [assessmentState.scores]);
@@ -303,12 +350,16 @@ export const ActivationGate: React.FC<ActivationGateProps> = ({ onActivated }) =
         setSuccess("机器人语音测评已停止，回到文本模式。");
       } else {
         const result = await startAssessmentVoice();
-        setAssessmentState((prev) => ({
-          ...prev,
-          voice_session_active: Boolean(result?.device_online),
-          voice_mode: result?.device_online ? "robot" : "text",
-          device_online: Boolean(result?.device_online),
-        }));
+        if (result?.assessment) {
+          setAssessmentState(result.assessment);
+        } else {
+          setAssessmentState((prev) => ({
+            ...prev,
+            voice_session_active: Boolean(result?.device_online),
+            voice_mode: result?.device_online ? "robot" : "text",
+            device_online: Boolean(result?.device_online),
+          }));
+        }
         if (result?.device_online) {
           setSuccess("机器人语音测评已启动，问题会由开发板本地播报。");
         } else {
@@ -608,6 +659,9 @@ export const ActivationGate: React.FC<ActivationGateProps> = ({ onActivated }) =
                     : "设备在线，但当前使用文本模式"
                   : "设备离线，当前只能文本模式"}
               </div>
+              <div className="text-xs leading-6 font-semibold text-slate-400">
+                最近转写：{assessmentState.latest_transcript || "暂无"}
+              </div>
             </div>
 
             <button
@@ -628,4 +682,3 @@ export const ActivationGate: React.FC<ActivationGateProps> = ({ onActivated }) =
     </div>
   );
 };
-

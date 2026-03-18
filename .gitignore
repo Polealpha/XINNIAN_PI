@@ -25,3 +25,5 @@ app windows/release/
 app windows/.vite/
 apps/**/__pycache__/
 models/
+downloads/
+third_party/

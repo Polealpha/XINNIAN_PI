@@ -37,6 +37,14 @@ class TtsEngine:
     def ready(self) -> bool:
         return bool(self._ready_piper or self._ready_local)
 
+    @property
+    def active_provider(self) -> str:
+        if self.provider in {"piper", "auto"} and self._ready_piper:
+            return "piper"
+        if self._ready_local:
+            return "pyttsx3"
+        return "disabled"
+
     def synthesize(self, text: str, target_rate: int = 16000) -> Optional[Tuple[bytes, int]]:
         if not self.ready:
             return None
@@ -66,6 +74,8 @@ class TtsEngine:
         return bool(self.synthesize(sample_text, target_rate=target_rate))
 
     def _init_engine(self) -> None:
+        self.piper_bin = self._resolve_piper_bin()
+        self.piper_model, self.piper_config = self._resolve_piper_assets()
         self._ready_piper = self._can_use_piper()
         try:
             import pyttsx3  # type: ignore
@@ -92,7 +102,74 @@ class TtsEngine:
             model_path = (repo_root / model_path).resolve()
         if not model_path.exists():
             return False
-        return shutil.which(self.piper_bin) is not None
+        return shutil.which(self.piper_bin) is not None or Path(self.piper_bin).exists()
+
+    def _repo_root(self) -> Path:
+        return Path(__file__).resolve().parents[2]
+
+    def _resolve_piper_bin(self) -> str:
+        candidates = [self.piper_bin]
+        repo_root = self._repo_root()
+        candidates.extend(
+            [
+                str(repo_root / "third_party" / "piper" / "piper"),
+                str(repo_root / "tools" / "piper" / "piper"),
+                str(repo_root / ".venv" / "bin" / "piper"),
+            ]
+        )
+        for candidate in candidates:
+            raw = str(candidate or "").strip()
+            if not raw:
+                continue
+            if shutil.which(raw):
+                return raw
+            path = Path(raw).expanduser()
+            if not path.is_absolute():
+                path = (repo_root / path).resolve()
+            if path.exists():
+                return str(path)
+        return self.piper_bin
+
+    def _resolve_piper_assets(self) -> Tuple[str, str]:
+        repo_root = self._repo_root()
+        model_path = self._resolve_candidate_path(self.piper_model)
+        config_path = self._resolve_candidate_path(self.piper_config)
+        if model_path:
+            if not config_path:
+                sibling_json = Path(model_path + ".json")
+                if sibling_json.exists():
+                    config_path = str(sibling_json)
+            return model_path, config_path
+        voice_roots = [
+            repo_root / "models" / "tts",
+            repo_root / "assets" / "tts",
+        ]
+        preferred = [
+            "zh_CN-huayan-medium.onnx",
+            "zh_CN-huayan-low.onnx",
+            "zh_CN-huayan-x_low.onnx",
+        ]
+        for root in voice_roots:
+            if not root.exists():
+                continue
+            for name in preferred:
+                candidate = root / name
+                if candidate.exists():
+                    sibling_json = Path(str(candidate) + ".json")
+                    return str(candidate), str(sibling_json) if sibling_json.exists() else ""
+            for candidate in sorted(root.glob("*.onnx")):
+                sibling_json = Path(str(candidate) + ".json")
+                return str(candidate), str(sibling_json) if sibling_json.exists() else ""
+        return "", ""
+
+    def _resolve_candidate_path(self, raw: str) -> str:
+        value = str(raw or "").strip()
+        if not value:
+            return ""
+        path = Path(value).expanduser()
+        if not path.is_absolute():
+            path = (self._repo_root() / path).resolve()
+        return str(path) if path.exists() else ""
 
     def _synthesize_piper(self, text: str, target_rate: int) -> Tuple[bytes, int]:
         model_path = Path(self.piper_model).expanduser()
@@ -163,4 +240,3 @@ class TtsEngine:
         x_new = np.linspace(0, duration, num=target_len, endpoint=False)
         resampled = np.interp(x_new, x_old, samples).astype(np.int16)
         return resampled.tobytes(), dst_rate
-

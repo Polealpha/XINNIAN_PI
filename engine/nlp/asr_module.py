@@ -6,8 +6,8 @@ import json
 import os
 from pathlib import Path
 import tempfile
+from typing import List, Optional, Tuple
 import wave
-from typing import Optional
 
 from ..core.config import AsrConfig
 
@@ -38,6 +38,9 @@ class AsrModule:
             elif self.config.engine in ("dashscope", "dashscope_realtime", "aliyun"):
                 self._init_dashscope()
 
+    def _repo_root(self) -> Path:
+        return Path(__file__).resolve().parents[2]
+
     @property
     def ready(self) -> bool:
         if not self.config.enabled:
@@ -62,6 +65,25 @@ class AsrModule:
         if self._whisper_error:
             return self._whisper_error
         return None
+
+    @property
+    def active_engine(self) -> str:
+        if not self.config.enabled:
+            return "disabled"
+        engine = str(self.config.engine or "").strip().lower()
+        if engine in {"sherpa_onnx", "sherpa"}:
+            if self._sherpa_ready:
+                return "sherpa_onnx"
+            if self._vosk_ready:
+                return "vosk_fallback"
+            return "sherpa_unavailable"
+        if engine == "vosk":
+            return "vosk" if self._vosk_ready else "vosk_unavailable"
+        if engine in {"whisper", "faster_whisper"}:
+            return "faster_whisper" if self._whisper_ready else "faster_whisper_unavailable"
+        if engine in {"dashscope", "dashscope_realtime", "aliyun"}:
+            return "dashscope" if self._dashscope_ready else "dashscope_unavailable"
+        return engine or "unknown"
 
     def transcribe(self, pcm_s16le: bytes, sample_rate: int) -> str:
         if not self.config.enabled:
@@ -89,9 +111,45 @@ class AsrModule:
             return ""
         path = Path(raw)
         if not path.is_absolute():
-            repo_root = Path(__file__).resolve().parents[2]
-            path = (repo_root / path).resolve()
+            path = (self._repo_root() / path).resolve()
         return str(path)
+
+    def _resolve_existing_path(self, value: str) -> str:
+        resolved = self._resolve_path(value)
+        if resolved and Path(resolved).exists():
+            return resolved
+        return ""
+
+    def _discover_sherpa_assets(self) -> Tuple[str, str, str, str]:
+        repo_root = self._repo_root()
+        search_roots: List[Path] = [
+            repo_root / "models" / "asr" / "sherpa",
+            repo_root / "models" / "asr",
+        ]
+        for root in search_roots:
+            if not root.exists():
+                continue
+            for tokens_path in root.rglob("tokens.txt"):
+                model_dir = tokens_path.parent
+                paraformer_candidates = sorted(model_dir.glob("model*.onnx"))
+                if paraformer_candidates:
+                    return (
+                        str(tokens_path),
+                        str(paraformer_candidates[0]),
+                        "",
+                        "",
+                    )
+                encoder_candidates = sorted(model_dir.glob("encoder*.onnx"))
+                decoder_candidates = sorted(model_dir.glob("decoder*.onnx"))
+                joiner_candidates = sorted(model_dir.glob("joiner*.onnx"))
+                if encoder_candidates and decoder_candidates and joiner_candidates:
+                    return (
+                        str(tokens_path),
+                        str(encoder_candidates[0]),
+                        str(decoder_candidates[0]),
+                        str(joiner_candidates[0]),
+                    )
+        return "", "", "", ""
 
     def _init_sherpa_onnx(self) -> None:
         try:
@@ -102,30 +160,42 @@ class AsrModule:
             if self.config.model_path:
                 self._init_vosk()
             return
-        tokens = self._resolve_path(self.config.tokens_path)
-        encoder = self._resolve_path(self.config.encoder_path)
-        decoder = self._resolve_path(self.config.decoder_path)
-        joiner = self._resolve_path(self.config.joiner_path)
-        if not tokens or not encoder or not decoder or not joiner:
+        tokens = self._resolve_existing_path(self.config.tokens_path)
+        encoder = self._resolve_existing_path(self.config.encoder_path)
+        decoder = self._resolve_existing_path(self.config.decoder_path)
+        joiner = self._resolve_existing_path(self.config.joiner_path)
+        if not tokens or not encoder:
+            tokens, encoder, decoder, joiner = self._discover_sherpa_assets()
+        if not tokens or not encoder:
             self._sherpa_error = "missing_sherpa_model_files"
             self._sherpa_ready = False
             if self.config.model_path:
                 self._init_vosk()
             return
-        try:
-            self._sherpa_recognizer = sherpa_onnx.OfflineRecognizer.from_paraformer(
-                tokens=tokens,
-                paraformer=encoder,
-                num_threads=max(1, int(self.config.num_threads or 2)),
-                sample_rate=16000,
-                feature_dim=80,
-                decoding_method="greedy_search",
-                debug=False,
-                provider="cpu",
-            )
-            self._sherpa_ready = True
-            self._sherpa_error = None
-        except Exception:
+        paraformer_like = (
+            "paraformer" in Path(encoder).name.lower()
+            or "model" in Path(encoder).name.lower()
+            or not decoder
+            or not joiner
+        )
+        if paraformer_like:
+            try:
+                self._sherpa_recognizer = sherpa_onnx.OfflineRecognizer.from_paraformer(
+                    tokens=tokens,
+                    paraformer=encoder,
+                    num_threads=max(1, int(self.config.num_threads or 2)),
+                    sample_rate=16000,
+                    feature_dim=80,
+                    decoding_method="greedy_search",
+                    debug=False,
+                    provider="cpu",
+                )
+                self._sherpa_ready = True
+                self._sherpa_error = None
+                return
+            except Exception as exc:
+                self._sherpa_error = str(exc)
+        if decoder and joiner:
             try:
                 self._sherpa_recognizer = sherpa_onnx.OfflineRecognizer.from_transducer(
                     tokens=tokens,
@@ -141,11 +211,12 @@ class AsrModule:
                 )
                 self._sherpa_ready = True
                 self._sherpa_error = None
+                return
             except Exception as exc:
                 self._sherpa_error = str(exc)
-                self._sherpa_ready = False
-                if self.config.model_path:
-                    self._init_vosk()
+        self._sherpa_ready = False
+        if self.config.model_path:
+            self._init_vosk()
 
     def _transcribe_sherpa_onnx(self, pcm_s16le: bytes, sample_rate: int) -> str:
         if not self._sherpa_ready or self._sherpa_recognizer is None:
@@ -225,8 +296,7 @@ class AsrModule:
         if self.config.model_path:
             model_path = Path(self.config.model_path)
             if not model_path.is_absolute():
-                repo_root = Path(__file__).resolve().parents[2]
-                model_path = (repo_root / model_path).resolve()
+                model_path = (self._repo_root() / model_path).resolve()
             return str(model_path)
         return self.config.model_name or "small"
 

@@ -4,6 +4,9 @@ from pi_runtime.runtime import PiEmotionRuntime
 
 def test_voice_session_state_and_warmup_endpoint():
     runtime = PiEmotionRuntime("config/pi_zero2w.headless.json", "config/engine_config.json")
+    voice_status = runtime.get_voice_status()
+    assert "tts_provider" in voice_status
+    assert "asr_engine" in voice_status
 
     started = runtime.start_voice_session("assessment")
     assert started["session_active"] is True

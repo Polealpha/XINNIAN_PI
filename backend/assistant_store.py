@@ -4,6 +4,7 @@ import json
 import re
 import time
 import uuid
+from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Optional
 
@@ -49,6 +50,7 @@ class AssistantWorkspaceStore:
         details: str = "",
         due_at_ms: Optional[int] = None,
         tags: Optional[List[str]] = None,
+        action: Optional[Dict[str, object]] = None,
     ) -> Dict[str, object]:
         now_ms = _now_ms()
         item = {
@@ -60,6 +62,8 @@ class AssistantWorkspaceStore:
             "updated_at_ms": now_ms,
             "due_at_ms": int(due_at_ms) if due_at_ms is not None else None,
             "tags": [str(tag).strip() for tag in (tags or []) if str(tag).strip()],
+            "notified_at_ms": None,
+            "action": dict(action or {}),
         }
         items = self._load_todos(user_id)
         items.append(item)
@@ -87,6 +91,12 @@ class AssistantWorkspaceStore:
                 item["due_at_ms"] = int(changes["due_at_ms"]) if changes["due_at_ms"] is not None else None
             if "tags" in changes and changes["tags"] is not None:
                 item["tags"] = [str(tag).strip() for tag in list(changes["tags"]) if str(tag).strip()]
+            if "notified_at_ms" in changes:
+                item["notified_at_ms"] = (
+                    int(changes["notified_at_ms"]) if changes["notified_at_ms"] is not None else None
+                )
+            if "action" in changes and changes["action"] is not None:
+                item["action"] = dict(changes["action"])
             item["updated_at_ms"] = _now_ms()
             self._save_todos(user_id, items)
             self.append_memory(
@@ -97,6 +107,44 @@ class AssistantWorkspaceStore:
             )
             return item
         raise KeyError(f"todo not found: {todo_id}")
+
+    def claim_due_todos(self, user_id: int, now_ms: Optional[int] = None, limit: int = 10) -> List[Dict[str, object]]:
+        current_ms = int(now_ms or _now_ms())
+        items = self._load_todos(user_id)
+        due: List[Dict[str, object]] = []
+        changed = False
+        for item in items:
+            if str(item.get("state") or "").lower() != "open":
+                continue
+            due_at = item.get("due_at_ms")
+            if due_at is None:
+                continue
+            try:
+                due_at_int = int(due_at)
+            except Exception:
+                continue
+            if due_at_int > current_ms:
+                continue
+            if item.get("notified_at_ms") is not None:
+                continue
+            item["notified_at_ms"] = current_ms
+            item["updated_at_ms"] = current_ms
+            due.append(item.copy())
+            changed = True
+            if len(due) >= max(1, min(int(limit), 20)):
+                break
+        if changed:
+            self._save_todos(user_id, items)
+        return due
+
+    def format_due_label(self, due_at_ms: Optional[int]) -> str:
+        if due_at_ms is None:
+            return ""
+        try:
+            dt = datetime.fromtimestamp(int(due_at_ms) / 1000.0)
+        except Exception:
+            return ""
+        return dt.strftime("%Y-%m-%d %H:%M")
 
     def append_memory(self, user_id: int, title: str, content: str, tags: Optional[List[str]] = None) -> None:
         memory_path = self._memory_path(user_id)
@@ -160,7 +208,16 @@ class AssistantWorkspaceStore:
             payload = json.loads(path.read_text(encoding="utf-8"))
         except Exception:
             return []
-        return payload if isinstance(payload, list) else []
+        items = payload if isinstance(payload, list) else []
+        normalized: List[Dict[str, object]] = []
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            merged = dict(item)
+            merged.setdefault("notified_at_ms", None)
+            merged.setdefault("action", {})
+            normalized.append(merged)
+        return normalized
 
     def _save_todos(self, user_id: int, items: List[Dict[str, object]]) -> None:
         path = self._todos_path(user_id)

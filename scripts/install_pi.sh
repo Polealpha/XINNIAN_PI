@@ -41,6 +41,7 @@ packages=(
   python3-dev
   python3-opencv
   python3-yaml
+  python3-sentencepiece
   python3-picamera2
   python3-libcamera
   libcamera-apps
