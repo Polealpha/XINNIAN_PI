@@ -63,6 +63,7 @@ class OpenClawGatewayClient:
         timeout_ms = max(5000, int(self.config.timeout_ms))
         async with self._connect(runtime) as ws:
             await self._connect_session(ws, runtime)
+            baseline = await self._latest_assistant_message(ws, str(session_key))
             run_id = f"assistant-{int(time.time() * 1000)}-{uuid.uuid4().hex[:8]}"
             response = await self._rpc_request(
                 ws,
@@ -78,7 +79,7 @@ class OpenClawGatewayClient:
             )
             if not response.get("ok"):
                 raise OpenClawGatewayError(f"OpenClaw chat.send failed: {response.get('error')}")
-            return await self._wait_for_final(ws, str(session_key), run_id, timeout_ms)
+            return await self._wait_for_reply(ws, str(session_key), run_id, baseline, timeout_ms)
 
     async def reset_session(self, session_key: str) -> None:
         runtime = self._load_runtime()
@@ -90,9 +91,10 @@ class OpenClawGatewayClient:
 
     def _load_runtime(self) -> Dict[str, str]:
         state_dir = discover_openclaw_state_dir(self.config.state_dir, self.config.workspace_dir)
-        openclaw_json = json.loads((state_dir / "openclaw.json").read_text(encoding="utf-8"))
-        device_json = json.loads((state_dir / "identity" / "device.json").read_text(encoding="utf-8"))
-        auth_json = json.loads((state_dir / "identity" / "device-auth.json").read_text(encoding="utf-8"))
+        openclaw_json = self._read_json(state_dir / "openclaw.json")
+        device_json = self._read_json(state_dir / "identity" / "device.json")
+        auth_path = state_dir / "identity" / "device-auth.json"
+        auth_json = self._read_json(auth_path) if auth_path.exists() else {}
         gateway_port = int(openclaw_json.get("gateway", {}).get("port", 18789))
         url = self.config.url.strip() or f"ws://127.0.0.1:{gateway_port}"
         origin = self.config.origin.strip() or f"http://127.0.0.1:{gateway_port}"
@@ -109,6 +111,10 @@ class OpenClawGatewayClient:
             "private_key_pem": str(device_json.get("privateKeyPem", "") or ""),
             "public_key_pem": str(device_json.get("publicKeyPem", "") or ""),
         }
+
+    @staticmethod
+    def _read_json(path: Path) -> Dict[str, object]:
+        return json.loads(path.read_text(encoding="utf-8-sig"))
 
     def _connect(self, runtime: Dict[str, str]):
         if websockets is None:
@@ -175,9 +181,23 @@ class OpenClawGatewayClient:
         if not response.get("ok"):
             raise OpenClawGatewayError(f"OpenClaw connect failed: {response.get('error')}")
 
-    async def _wait_for_final(self, ws, session_key: str, run_id: str, timeout_ms: int) -> str:
+    async def _wait_for_reply(
+        self,
+        ws,
+        session_key: str,
+        run_id: str,
+        baseline: Optional[Dict[str, object]],
+        timeout_ms: int,
+    ) -> str:
         deadline = time.monotonic() + timeout_ms / 1000.0
+        next_history_poll = 0.0
         while time.monotonic() < deadline:
+            now = time.monotonic()
+            if now >= next_history_poll:
+                latest = await self._latest_assistant_message(ws, session_key)
+                if self._is_new_assistant_message(latest, baseline):
+                    return str(latest.get("text") or "").strip()
+                next_history_poll = now + 1.5
             remaining = deadline - time.monotonic()
             try:
                 raw = await asyncio.wait_for(ws.recv(), timeout=min(remaining, 2.0))
@@ -199,6 +219,50 @@ class OpenClawGatewayClient:
         except Exception:
             pass
         raise OpenClawGatewayError("OpenClaw chat timed out")
+
+    async def _latest_assistant_message(self, ws, session_key: str) -> Optional[Dict[str, object]]:
+        response = await self._rpc_request(
+            ws,
+            "chat.history",
+            {"sessionKey": session_key, "limit": 20},
+            timeout_ms=8000,
+        )
+        payload = response.get("payload") if isinstance(response, dict) else None
+        messages = payload.get("messages") if isinstance(payload, dict) else None
+        if not isinstance(messages, list):
+            return None
+        for message in reversed(messages):
+            parsed = self._extract_assistant_message(message)
+            if parsed is not None:
+                return parsed
+        return None
+
+    @classmethod
+    def _extract_assistant_message(cls, message_obj: object) -> Optional[Dict[str, object]]:
+        if not isinstance(message_obj, dict):
+            return None
+        if str(message_obj.get("role") or "") != "assistant":
+            return None
+        text = cls._extract_text_from_message(message_obj).strip()
+        if not text:
+            return None
+        timestamp = int(message_obj.get("timestamp") or 0)
+        return {"timestamp": timestamp, "text": text}
+
+    @staticmethod
+    def _is_new_assistant_message(
+        latest: Optional[Dict[str, object]],
+        baseline: Optional[Dict[str, object]],
+    ) -> bool:
+        if latest is None:
+            return False
+        if baseline is None:
+            return bool(str(latest.get("text") or "").strip())
+        latest_ts = int(latest.get("timestamp") or 0)
+        baseline_ts = int(baseline.get("timestamp") or 0)
+        if latest_ts > baseline_ts:
+            return True
+        return str(latest.get("text") or "").strip() != str(baseline.get("text") or "").strip()
 
     async def _rpc_request(self, ws, method: str, params: Dict[str, object], timeout_ms: int) -> Dict[str, object]:
         req_id = str(uuid.uuid4())
