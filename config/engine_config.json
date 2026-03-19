@@ -75,7 +75,10 @@
     "encoder_path": "models/asr/sherpa/sherpa-onnx-paraformer-zh-small-2024-03-09/model.int8.onnx",
     "decoder_path": "",
     "joiner_path": "",
-    "num_threads": 2
+    "num_threads": 2,
+    "normalize_text": true,
+    "strip_fillers": true,
+    "min_transcript_chars": 2
   },
   "wake": {
     "enabled": true,
@@ -151,13 +154,23 @@
     "min_face_area_ratio": 0.02,
     "max_face_area_ratio": 0.6,
     "dead_zone": 0.08,
+    "dead_zone_y": 0.08,
     "ema_alpha": 0.3,
+    "ema_alpha_y": 0.3,
     "kp": 0.6,
+    "kp_y": 0.52,
     "turn_max": 0.6,
+    "tilt_max": 0.42,
     "send_hz": 4,
     "ui_emit_hz": 4,
     "cmd_duration_ms": 250,
     "lost_frames_stop": 5,
+    "return_start_frames": 3,
+    "return_alpha": 0.35,
+    "return_deadband": 0.015,
+    "preferred_face_area_ratio": 0.12,
+    "area_gain_floor": 0.35,
+    "min_turn_delta": 0.02,
     "multi_face_policy": "largest",
     "scene_behavior": {
       "desk": {

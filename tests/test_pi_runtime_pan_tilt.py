@@ -1,3 +1,5 @@
+from engine.vision.face_tracker import FaceTracker
+from engine.vision.vision_types import FaceDet
 from pi_runtime.runtime import PiEmotionRuntime
 
 
@@ -9,3 +11,43 @@ def test_manual_pan_tilt_updates_runtime_status():
     assert result["ok"] is True
     assert payload["pan_angle"] != 0.0
     assert payload["tilt_angle"] != 0.0
+
+
+def test_face_tracker_damps_large_face_and_returns_to_center():
+    tracker = FaceTracker(
+        {
+            "dead_zone": 0.02,
+            "dead_zone_y": 0.02,
+            "ema_alpha": 1.0,
+            "ema_alpha_y": 1.0,
+            "kp": 0.8,
+            "kp_y": 0.8,
+            "turn_max": 0.8,
+            "tilt_max": 0.8,
+            "send_hz": 20,
+            "lost_frames_stop": 4,
+            "return_start_frames": 2,
+            "return_alpha": 0.5,
+            "preferred_face_area_ratio": 0.12,
+            "area_gain_floor": 0.3,
+        }
+    )
+
+    near = FaceDet(found=True, bbox=(220, 80, 180, 180), cx=310, cy=170, area_ratio=0.18)
+    far = FaceDet(found=True, bbox=(220, 80, 70, 70), cx=255, cy=115, area_ratio=0.03)
+    near_turn, _, _ = tracker.update(near, 320, 240, 100)
+    far_turn, _, _ = tracker.update(far, 320, 240, 180)
+
+    assert near_turn is not None
+    assert far_turn is not None
+    assert abs(float(far_turn)) > abs(float(near_turn))
+
+    missing = FaceDet(found=False)
+    first_return, _, _ = tracker.update(missing, 320, 240, 260)
+    second_return, _, _ = tracker.update(missing, 320, 240, 340)
+    third_return, _, _ = tracker.update(missing, 320, 240, 420)
+
+    assert first_return is None
+    assert second_return is not None
+    assert third_return is not None
+    assert abs(float(third_return)) <= abs(float(second_return))

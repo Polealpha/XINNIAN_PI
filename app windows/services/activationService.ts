@@ -97,6 +97,17 @@ export interface ActivationAssessmentVoicePollResponse {
   state: ActivationAssessmentState;
 }
 
+export interface OwnerBindingStatus {
+  ok: boolean;
+  device_id: string;
+  enrolled: boolean;
+  owner_label?: string | null;
+  embedding_version?: string | null;
+  recognition_enabled: boolean;
+  last_sync_ms?: number | null;
+  enrolled_at_ms?: number | null;
+}
+
 export const inferActivationIdentity = async (payload: {
   transcript: string;
   surface?: string;
@@ -242,4 +253,9 @@ export const startOwnerEnrollment = async (deviceId?: string) => {
     },
     true
   );
+};
+
+export const getOwnerBindingStatus = async (deviceId: string): Promise<OwnerBindingStatus> => {
+  const encoded = encodeURIComponent(deviceId);
+  return apiGet(`/api/device/owner/status?device_id=${encoded}`, true);
 };

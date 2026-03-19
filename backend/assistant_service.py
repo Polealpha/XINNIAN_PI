@@ -103,6 +103,7 @@ class AssistantService:
         normalized_surface = normalize_surface(surface)
         assistant_mode = self._resolve_assistant_mode(metadata)
         native_control_enabled = self._resolve_native_control_enabled(metadata)
+        exact_reply_target = self._extract_exact_reply_target(text)
         resolved_session_key = build_session_key(
             normalized_surface,
             user_id=user_id,
@@ -121,19 +122,53 @@ class AssistantService:
         if assistant_mode != "agent" and tool_results and self._should_short_circuit_tool_reply(text):
             reply = self._compose_tool_only_reply(tool_results)
         else:
-            message = self._compose_openclaw_message(
-                text,
-                normalized_surface,
-                resolved_session_key,
-                tool_results,
-                attachments,
-                metadata,
-                assistant_mode,
-                native_control_enabled,
-            )
             try:
-                reply = await self.gateway.send_message(resolved_session_key, message)
+                if exact_reply_target and not tool_results and not attachments:
+                    reply = await self.gateway.send_message(
+                        f"{resolved_session_key}:exact:{_now_ms()}",
+                        self._compose_exact_reply_message(exact_reply_target),
+                    )
+                else:
+                    message = self._compose_openclaw_message(
+                        text,
+                        normalized_surface,
+                        resolved_session_key,
+                        tool_results,
+                        attachments,
+                        metadata,
+                        assistant_mode,
+                        native_control_enabled,
+                    )
+                    reply = await self.gateway.send_message(resolved_session_key, message)
                 reply = self._sanitize_gateway_reply(reply)
+                if exact_reply_target and reply != exact_reply_target:
+                    reply = await self.gateway.send_message(
+                        f"{resolved_session_key}:exact-retry:{_now_ms()}",
+                        self._compose_exact_reply_message(exact_reply_target),
+                    )
+                    reply = self._sanitize_gateway_reply(reply)
+                if not tool_results and self._reply_is_false_heartbeat(reply, text):
+                    reply = await self.gateway.send_message(
+                        f"{resolved_session_key}:retry:{_now_ms()}",
+                        self._compose_retry_message(
+                            text,
+                            normalized_surface,
+                            assistant_mode,
+                            native_control_enabled,
+                        ),
+                    )
+                    reply = self._sanitize_gateway_reply(reply)
+                if assistant_mode == "agent" and self._looks_like_setup_or_internal_reply(reply):
+                    reply = await self.gateway.send_message(
+                        f"{resolved_session_key}:repair:{_now_ms()}",
+                        self._compose_retry_message(
+                            text,
+                            normalized_surface,
+                            assistant_mode,
+                            native_control_enabled,
+                        ),
+                    )
+                    reply = self._sanitize_gateway_reply(reply)
                 if assistant_mode == "agent" and (
                     self._looks_like_setup_or_internal_reply(reply)
                     or (
@@ -328,6 +363,7 @@ class AssistantService:
             lines.append(
                 "[execution_policy] \u9664\u975e\u7528\u6237\u660e\u786e\u8981\u6c42\uff0c\u5426\u5219\u4e0d\u8981\u5411\u7528\u6237\u5c55\u793a\u4efb\u4f55\u5173\u4e8e workspace\u3001\u8bb0\u5fc6\u6587\u4ef6\u3001\u65e5\u5fd7\u3001\u5f15\u5bfc\u6587\u4ef6\u3001\u4f1a\u8bdd\u6062\u590d\u6216\u5185\u90e8\u51c6\u5907\u52a8\u4f5c\u7684\u63cf\u8ff0\u3002"
             )
+        lines.append("[input_encoding] If you see user_request_json, decode its text field and answer that request directly.")
         for item in tool_results:
             lines.append(f"[tool:{item.name}] ok={str(item.ok).lower()} detail={item.detail}")
         if attachments:
@@ -335,7 +371,33 @@ class AssistantService:
         if metadata:
             lines.append(f"[metadata] {json.dumps(metadata, ensure_ascii=False)}")
         lines.append("")
-        lines.append(str(text).strip())
+        lines.append(f"[user_request_json] {self._encode_user_text_for_gateway(text)}")
+        return "\n".join(lines).strip()
+
+    def _compose_exact_reply_message(self, exact_reply_target: str) -> str:
+        return (
+            "You must obey the user's instruction exactly. "
+            f"Return exactly this string and nothing else: {exact_reply_target}"
+        )
+
+    def _compose_retry_message(
+        self,
+        text: str,
+        surface: str,
+        assistant_mode: str,
+        native_control_enabled: bool,
+    ) -> str:
+        lines = [
+            f"[surface={surface}]",
+            f"[assistant_mode={assistant_mode}]",
+            f"[assistant_native_control={str(bool(native_control_enabled)).lower()}]",
+            "[hard_rule] This is a normal end-user chat request, not a heartbeat check.",
+            "[hard_rule] Do not reply HEARTBEAT_OK.",
+            "[hard_rule] Answer the user's request directly in concise Chinese.",
+            "[input_encoding] Decode user_request_json.text and answer that request directly.",
+            "",
+            f"[user_request_json] {self._encode_user_text_for_gateway(text)}",
+        ]
         return "\n".join(lines).strip()
 
     def _resolve_assistant_mode(self, metadata: Optional[Dict[str, object]]) -> str:
@@ -378,6 +440,12 @@ class AssistantService:
             "\u6211\u5148\u786e\u8ba4",
             "\u63a5\u4e0b\u6765\u8bfb\u53d6",
             "\u65e5\u5fd7\u76ee\u5f55",
+            "\u6b63\u5728\u786e\u8ba4\u5f53\u524d\u4f1a\u8bdd\u72b6\u6001",
+            "\u6b63\u5728\u53d6\u56de\u5fc5\u8981\u4e0a\u4e0b\u6587",
+            "\u5fc5\u8981\u4fe1\u606f\u5df2\u8db3\u591f",
+            "\u8865\u4e00\u9879\u4f1a\u8bdd\u8bb0\u5f55\u68c0\u67e5",
+            "\u6211\u5148\u6838\u5bf9",
+            "\u518d\u786e\u8ba4\u4e00\u6b21",
         )
         filtered = [line for line in lines if not any(marker.lower() in line.lower() for marker in internal_markers)]
         if filtered:
@@ -385,11 +453,44 @@ class AssistantService:
         for line in lines:
             if re.fullmatch(r"[A-Z0-9_ -]{4,80}", line):
                 return line.strip()
+        if len(lines) > 1 and not self._looks_like_setup_or_internal_reply(lines[-1]):
+            return lines[-1].strip()
         if len(lines) > 1:
             last = lines[-1]
             if re.fullmatch(r"[A-Z0-9_ -]{4,80}", last):
                 return last.strip()
         return "\n".join(lines).strip()
+
+    def _extract_exact_reply_target(self, text: str) -> str:
+        raw = str(text or "").strip()
+        if not raw:
+            return ""
+        match = re.search(r"只回复\s+([A-Z0-9_ -]{4,80})", raw)
+        if match:
+            return match.group(1).strip()
+        match = re.search(r"仅回复\s+([A-Z0-9_ -]{4,80})", raw)
+        if match:
+            return match.group(1).strip()
+        match = re.search(r"return exactly\s+([A-Z0-9_ -]{4,80})", raw, flags=re.IGNORECASE)
+        if match:
+            return match.group(1).strip()
+        return ""
+
+    def _encode_user_text_for_gateway(self, text: str) -> str:
+        return json.dumps({"text": str(text or "").strip()}, ensure_ascii=True, separators=(",", ":"))
+
+    def _reply_is_false_heartbeat(self, reply: str, user_text: str) -> bool:
+        raw_reply = str(reply or "").strip().upper()
+        if raw_reply != "HEARTBEAT_OK":
+            return False
+        raw_user = str(user_text or "").strip().lower()
+        heartbeat_markers = [
+            "heartbeat",
+            "心跳",
+            "read heartbeat.md",
+            "follow it strictly",
+        ]
+        return not any(marker in raw_user for marker in heartbeat_markers)
 
     def _looks_like_setup_or_internal_reply(self, reply: str) -> bool:
         raw = str(reply or "").strip().lower()
@@ -425,6 +526,14 @@ class AssistantService:
             "\u8bfb\u53d6\u5f15\u5bfc\u6587\u4ef6",
             "\u5148\u505a\u51c6\u5907",
             "\u6211\u5148\u51c6\u5907",
+            "\u6b63\u5728\u786e\u8ba4\u5f53\u524d\u4f1a\u8bdd\u72b6\u6001",
+            "\u6b63\u5728\u53d6\u56de\u5fc5\u8981\u4e0a\u4e0b\u6587",
+            "\u5fc5\u8981\u4fe1\u606f\u5df2\u8db3\u591f",
+            "\u8865\u4e00\u9879\u4f1a\u8bdd\u8bb0\u5f55\u68c0\u67e5",
+            "\u8bf7\u91cd\u65b0\u53d1\u4e00\u6b21\u539f\u6587",
+            "\u8bf7\u518d\u53d1\u4e00\u6b21\u539f\u6587",
+            "\u8bf7\u91cd\u65b0\u53d1\u9001\u539f\u6587",
+            "\u8bf7\u628a\u539f\u6587\u518d\u53d1\u4e00\u6b21",
         ]
         return any(marker in raw for marker in markers)
 

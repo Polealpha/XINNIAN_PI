@@ -23,3 +23,6 @@ class TrackState:
     target_bbox: Optional[Tuple[int, int, int, int]] = None
     last_turn_sent: float = 0.0
     last_tilt_sent: float = 0.0
+    last_area_ratio: float = 0.0
+    last_seen_ms: int = 0
+    returning: bool = False

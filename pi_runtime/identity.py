@@ -5,7 +5,7 @@ import logging
 import threading
 import time
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 try:
     import cv2  # type: ignore
@@ -30,6 +30,9 @@ class OwnerIdentityManager:
         self._lock = threading.Lock()
         self._events: List[Dict[str, object]] = []
         self._cascade = None
+        self._yunet = None
+        self._sface = None
+        self._embedding_backend = "face-hist-v1"
         self._owner_embedding = None
         self._owner_profile: Dict[str, object] = {}
         self._pending_sync: Dict[str, object] = {}
@@ -45,6 +48,7 @@ class OwnerIdentityManager:
             "samples": [],
             "started_at_ms": 0,
             "last_sample_ms": 0,
+            "last_bbox": None,
         }
         if cv2 is not None:
             try:
@@ -54,11 +58,43 @@ class OwnerIdentityManager:
             except Exception as exc:  # pragma: no cover
                 logger.warning("identity cascade init failed: %s", exc)
                 self._cascade = None
+        self._init_cv_models()
         self._load_state()
 
     @property
     def enabled(self) -> bool:
         return bool(self._config.enabled)
+
+    def _resolve_model_path(self, value: str) -> Path:
+        raw = str(value or "").strip()
+        path = Path(raw)
+        if not path.is_absolute():
+            path = (Path(__file__).resolve().parents[1] / path).resolve()
+        return path
+
+    def _init_cv_models(self) -> None:
+        if cv2 is None:
+            return
+        detector_path = self._resolve_model_path(self._config.detector_model_path)
+        recognizer_path = self._resolve_model_path(self._config.recognizer_model_path)
+        if detector_path.exists():
+            try:
+                if hasattr(cv2, "FaceDetectorYN_create"):
+                    self._yunet = cv2.FaceDetectorYN_create(str(detector_path), "", (320, 320))
+                elif hasattr(cv2, "FaceDetectorYN") and hasattr(cv2.FaceDetectorYN, "create"):
+                    self._yunet = cv2.FaceDetectorYN.create(str(detector_path), "", (320, 320))
+            except Exception as exc:
+                logger.warning("yunet init failed: %s", exc)
+                self._yunet = None
+        if recognizer_path.exists():
+            try:
+                if hasattr(cv2, "FaceRecognizerSF_create"):
+                    self._sface = cv2.FaceRecognizerSF_create(str(recognizer_path), "")
+                elif hasattr(cv2, "FaceRecognizerSF") and hasattr(cv2.FaceRecognizerSF, "create"):
+                    self._sface = cv2.FaceRecognizerSF.create(str(recognizer_path), "")
+            except Exception as exc:
+                logger.warning("sface init failed: %s", exc)
+                self._sface = None
 
     def has_profile(self) -> bool:
         return self._owner_embedding is not None and bool(self._owner_profile)
@@ -72,6 +108,7 @@ class OwnerIdentityManager:
                 "identity_state": state,
                 "owner_label": str(self._owner_profile.get("owner_label") or "owner"),
                 "embedding_version": str(self._owner_profile.get("embedding_version") or ""),
+                "embedding_backend": str(self._owner_profile.get("embedding_backend") or self._embedding_backend),
                 "owner_recognized": self._last_recognition_label == "owner",
                 "owner_confidence": round(float(self._last_recognition_confidence), 4),
                 "recognition_label": self._last_recognition_label,
@@ -109,6 +146,7 @@ class OwnerIdentityManager:
                 "samples": [],
                 "started_at_ms": now_ms,
                 "last_sample_ms": 0,
+                "last_bbox": None,
             }
             self._queue_event(
                 "OwnerEnrollmentState",
@@ -126,6 +164,7 @@ class OwnerIdentityManager:
             self._owner_embedding = None
             self._owner_profile = {}
             self._pending_sync = {}
+            self._embedding_backend = "face-hist-v1"
             self._last_tracking_bbox = None
             self._last_recognition_label = "no_face"
             self._last_recognition_confidence = 0.0
@@ -137,6 +176,7 @@ class OwnerIdentityManager:
                 "samples": [],
                 "started_at_ms": 0,
                 "last_sample_ms": 0,
+                "last_bbox": None,
             }
             for path in (self._profile_path, self._embedding_path, self._pending_sync_path):
                 try:
@@ -171,45 +211,55 @@ class OwnerIdentityManager:
                 self._update_recognition_state("no_face", 0.0, timestamp_ms)
                 return {"tracking_bbox": None, **self.get_status()}
 
-            target_face = max(faces, key=lambda item: int(item[2]) * int(item[3]))
+            target_face = max(faces, key=lambda item: int(item["bbox"][2]) * int(item["bbox"][3]))
             owner_confidence = 0.0
             owner_found = False
             if self._owner_embedding is not None:
-                scored: List[Tuple[float, Tuple[int, int, int, int]]] = []
-                for bbox in faces:
-                    embedding = self._extract_embedding(frame_bgr, bbox)
+                scored: List[Tuple[float, Dict[str, object]]] = []
+                for face in faces:
+                    embedding = self._extract_embedding(frame_bgr, face)
                     if embedding is None:
                         continue
                     similarity = self._cosine_similarity(self._owner_embedding, embedding)
-                    scored.append((similarity, bbox))
+                    scored.append((similarity, face))
                 if scored:
-                    best_score, best_bbox = max(scored, key=lambda item: item[0])
+                    best_score, best_face = max(scored, key=lambda item: item[0])
                     owner_confidence = float(best_score)
                     if best_score >= float(self._config.similarity_threshold):
                         owner_found = True
-                        target_face = best_bbox
+                        target_face = best_face
 
-            self._last_tracking_bbox = target_face
+            self._last_tracking_bbox = tuple(target_face["bbox"])
             if bool(self._enrollment.get("active")):
                 self._capture_enrollment_sample(frame_bgr, target_face, timestamp_ms)
 
             label = "owner" if owner_found else "unknown"
             self._update_recognition_state(label, owner_confidence if owner_found else 0.0, timestamp_ms)
-            return {"tracking_bbox": target_face, **self.get_status()}
+            return {"tracking_bbox": tuple(target_face["bbox"]), **self.get_status()}
 
-    def _capture_enrollment_sample(self, frame_bgr, bbox: Tuple[int, int, int, int], timestamp_ms: int) -> None:
+    def _capture_enrollment_sample(self, frame_bgr, face: Dict[str, object], timestamp_ms: int) -> None:
         last_sample_ms = int(self._enrollment.get("last_sample_ms") or 0)
         if timestamp_ms - last_sample_ms < int(self._config.enrollment_sample_interval_ms):
             return
-        embedding = self._extract_embedding(frame_bgr, bbox)
+        bbox = tuple(int(v) for v in (face.get("bbox") or (0, 0, 0, 0)))
+        quality = self._face_quality(frame_bgr, bbox)
+        if quality["area_ratio"] < 0.045 or quality["blur_score"] < 40.0:
+            return
+        if not self._is_bbox_stable(bbox):
+            return
+        embedding = self._extract_embedding(frame_bgr, face)
         if embedding is None:
             return
         samples = self._enrollment.get("samples")
         if not isinstance(samples, list):
             samples = []
             self._enrollment["samples"] = samples
+        if samples and self._cosine_similarity(samples[-1], embedding) >= 0.995:
+            self._enrollment["last_bbox"] = bbox
+            return
         samples.append(embedding)
         self._enrollment["last_sample_ms"] = timestamp_ms
+        self._enrollment["last_bbox"] = bbox
         sample_count = len(samples)
         self._queue_event(
             "OwnerEnrollmentState",
@@ -218,6 +268,8 @@ class OwnerIdentityManager:
                 "owner_label": self._enrollment.get("owner_label"),
                 "sample_count": sample_count,
                 "target_samples": int(self._config.enrollment_target_samples),
+                "blur_score": round(float(quality["blur_score"]), 2),
+                "face_area_ratio": round(float(quality["area_ratio"]), 4),
             },
         )
         target = int(self._config.enrollment_target_samples)
@@ -246,7 +298,7 @@ class OwnerIdentityManager:
             "embedding_version": version,
             "enrolled_at_ms": int(timestamp_ms),
             "sample_count": sample_count,
-            "embedding_backend": "face-hist-v1",
+            "embedding_backend": self._embedding_backend,
             "similarity_threshold": float(self._config.similarity_threshold),
         }
         self._owner_embedding = embedding
@@ -261,7 +313,7 @@ class OwnerIdentityManager:
                 "sample_count": sample_count,
                 "similarity_threshold": float(self._config.similarity_threshold),
                 "enrolled_at_ms": int(timestamp_ms),
-                "embedding_backend": "face-hist-v1",
+                "embedding_backend": self._embedding_backend,
             }
             self._save_json(self._pending_sync_path, self._pending_sync)
         self._enrollment = {
@@ -271,6 +323,7 @@ class OwnerIdentityManager:
             "samples": [],
             "started_at_ms": 0,
             "last_sample_ms": 0,
+            "last_bbox": None,
         }
         self._queue_event(
             "OwnerEnrollmentState",
@@ -288,6 +341,7 @@ class OwnerIdentityManager:
             try:
                 self._owner_embedding = np.load(str(self._embedding_path))
                 self._owner_profile = profile
+                self._embedding_backend = str(profile.get("embedding_backend") or self._embedding_backend)
             except Exception as exc:
                 logger.warning("identity profile load failed: %s", exc)
                 self._owner_embedding = None
@@ -302,7 +356,41 @@ class OwnerIdentityManager:
         self._save_json(self._profile_path, self._owner_profile)
         np.save(str(self._embedding_path), self._owner_embedding)
 
-    def _detect_faces(self, frame_bgr) -> List[Tuple[int, int, int, int]]:
+    def _detect_faces(self, frame_bgr) -> List[Dict[str, object]]:
+        if frame_bgr is None or cv2 is None:
+            return []
+        if self._yunet is not None:
+            detected = self._detect_faces_yunet(frame_bgr)
+            if detected:
+                return detected
+        return self._detect_faces_haar(frame_bgr)
+
+    def _detect_faces_yunet(self, frame_bgr) -> List[Dict[str, object]]:
+        if self._yunet is None:
+            return []
+        try:
+            height, width = frame_bgr.shape[:2]
+            self._yunet.setInputSize((int(width), int(height)))
+            _ok, faces = self._yunet.detect(frame_bgr)
+        except Exception:
+            return []
+        results: List[Dict[str, object]] = []
+        if faces is None:
+            return results
+        for row in faces:
+            try:
+                values = [float(v) for v in row.tolist()]
+                x, y, w, h = [int(round(v)) for v in values[:4]]
+                if w <= 0 or h <= 0:
+                    continue
+                landmarks = tuple(float(v) for v in values[4:14]) if len(values) >= 14 else None
+                score = float(values[14]) if len(values) >= 15 else 1.0
+                results.append({"bbox": (x, y, w, h), "score": score, "landmarks": landmarks, "backend": "yunet"})
+            except Exception:
+                continue
+        return results
+
+    def _detect_faces_haar(self, frame_bgr) -> List[Dict[str, object]]:
         if self._cascade is None or frame_bgr is None:
             return []
         try:
@@ -315,20 +403,25 @@ class OwnerIdentityManager:
             )
         except Exception:
             return []
-        results: List[Tuple[int, int, int, int]] = []
+        results: List[Dict[str, object]] = []
         for item in faces or []:
             x, y, w, h = [int(v) for v in item]
             if w > 0 and h > 0:
-                results.append((x, y, w, h))
+                results.append({"bbox": (x, y, w, h), "score": 1.0, "landmarks": None, "backend": "haar"})
         return results
 
-    def _extract_embedding(self, frame_bgr, bbox: Tuple[int, int, int, int]):
+    def _extract_embedding(self, frame_bgr, face: Dict[str, object]):
         if frame_bgr is None or np is None or cv2 is None:
             return None
+        bbox = tuple(int(v) for v in (face.get("bbox") or (0, 0, 0, 0)))
         x, y, w, h = bbox
         crop = frame_bgr[max(0, y) : max(0, y) + max(1, h), max(0, x) : max(0, x) + max(1, w)]
         if crop is None or crop.size == 0:
             return None
+        recognizer_embedding = self._extract_sface_embedding(frame_bgr, face)
+        if recognizer_embedding is not None:
+            self._embedding_backend = "opencv-sface-v1"
+            return recognizer_embedding
         try:
             gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
             gray = cv2.equalizeHist(gray)
@@ -341,9 +434,64 @@ class OwnerIdentityManager:
             norm = float(np.linalg.norm(embedding))
             if norm > 1e-6:
                 embedding = embedding / norm
+            self._embedding_backend = "face-hist-v1"
             return embedding
         except Exception:
             return None
+
+    def _extract_sface_embedding(self, frame_bgr, face: Dict[str, object]):
+        if self._sface is None or np is None or cv2 is None:
+            return None
+        landmarks = face.get("landmarks")
+        bbox = tuple(int(v) for v in (face.get("bbox") or (0, 0, 0, 0)))
+        if not landmarks or len(landmarks) < 10:
+            return None
+        try:
+            detection_row = np.asarray([*bbox, *[float(v) for v in landmarks[:10]], float(face.get("score") or 1.0)], dtype="float32")
+            aligned = self._sface.alignCrop(frame_bgr, detection_row)
+            feature = self._sface.feature(aligned)
+            embedding = np.asarray(feature, dtype="float32").reshape(-1)
+            norm = float(np.linalg.norm(embedding))
+            if norm > 1e-6:
+                embedding = embedding / norm
+            return embedding
+        except Exception:
+            return None
+
+    def _face_quality(self, frame_bgr, bbox: Tuple[int, int, int, int]) -> Dict[str, float]:
+        if frame_bgr is None or cv2 is None or np is None:
+            return {"blur_score": 0.0, "area_ratio": 0.0}
+        x, y, w, h = bbox
+        crop = frame_bgr[max(0, y) : max(0, y) + max(1, h), max(0, x) : max(0, x) + max(1, w)]
+        if crop is None or crop.size == 0:
+            return {"blur_score": 0.0, "area_ratio": 0.0}
+        try:
+            gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
+            blur_score = float(cv2.Laplacian(gray, cv2.CV_64F).var())
+        except Exception:
+            blur_score = 0.0
+        frame_area = float(max(1, frame_bgr.shape[0] * frame_bgr.shape[1]))
+        area_ratio = float((max(1, w) * max(1, h)) / frame_area)
+        return {"blur_score": blur_score, "area_ratio": area_ratio}
+
+    def _is_bbox_stable(self, bbox: Tuple[int, int, int, int]) -> bool:
+        previous = self._enrollment.get("last_bbox")
+        if not previous or not isinstance(previous, tuple) or len(previous) != 4:
+            return True
+        return self._bbox_iou(previous, bbox) >= 0.42
+
+    def _bbox_iou(self, first: Tuple[int, int, int, int], second: Tuple[int, int, int, int]) -> float:
+        ax, ay, aw, ah = first
+        bx, by, bw, bh = second
+        inter_x1 = max(ax, bx)
+        inter_y1 = max(ay, by)
+        inter_x2 = min(ax + aw, bx + bw)
+        inter_y2 = min(ay + ah, by + bh)
+        inter_w = max(0, inter_x2 - inter_x1)
+        inter_h = max(0, inter_y2 - inter_y1)
+        inter = inter_w * inter_h
+        union = max(1, aw * ah + bw * bh - inter)
+        return float(inter / union)
 
     def _cosine_similarity(self, base, sample) -> float:
         if base is None or sample is None or np is None:

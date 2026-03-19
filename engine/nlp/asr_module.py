@@ -5,6 +5,7 @@ from ctypes import wintypes
 import json
 import os
 from pathlib import Path
+import re
 import tempfile
 from typing import List, Optional, Tuple
 import wave
@@ -88,22 +89,23 @@ class AsrModule:
     def transcribe(self, pcm_s16le: bytes, sample_rate: int) -> str:
         if not self.config.enabled:
             return ""
+        transcript = ""
         if self.config.engine in {"sherpa_onnx", "sherpa"}:
-            text = self._transcribe_sherpa_onnx(pcm_s16le, sample_rate)
-            if text:
-                return text
+            transcript = self._transcribe_sherpa_onnx(pcm_s16le, sample_rate)
+            if transcript:
+                return self._normalize_transcript(transcript)
             if self._vosk_ready:
-                return self._transcribe_vosk(pcm_s16le, sample_rate)
-            return ""
+                transcript = self._transcribe_vosk(pcm_s16le, sample_rate)
+            return self._normalize_transcript(transcript)
         if self.config.engine == "vosk":
-            return self._transcribe_vosk(pcm_s16le, sample_rate)
+            transcript = self._transcribe_vosk(pcm_s16le, sample_rate)
+            return self._normalize_transcript(transcript)
         if self.config.engine in ("whisper", "faster_whisper"):
-            return self._transcribe_whisper(pcm_s16le, sample_rate)
+            transcript = self._transcribe_whisper(pcm_s16le, sample_rate)
+            return self._normalize_transcript(transcript)
         if self.config.engine in ("dashscope", "dashscope_realtime", "aliyun"):
-            text = self._transcribe_dashscope(pcm_s16le, sample_rate)
-            if text:
-                return text
-        return ""
+            transcript = self._transcribe_dashscope(pcm_s16le, sample_rate)
+        return self._normalize_transcript(transcript)
 
     def _resolve_path(self, value: str) -> str:
         raw = str(value or "").strip()
@@ -533,6 +535,49 @@ class AsrModule:
         if len(pcm_s16le) <= max_bytes:
             return pcm_s16le
         return pcm_s16le[-max_bytes:]
+
+    def _normalize_transcript(self, text: str) -> str:
+        raw = str(text or "").strip()
+        if not raw or not bool(self.config.normalize_text):
+            return raw
+        normalized = raw.replace("\u3000", " ").replace("\r", " ").replace("\n", " ")
+        normalized = re.sub(r"\s+", " ", normalized).strip()
+        normalized = re.sub(r"(?<=[\u4e00-\u9fff])\s+(?=[\u4e00-\u9fff])", "", normalized)
+        normalized = re.sub(r"\s*([，。！？；：,.!?;:])\s*", r"\1", normalized)
+        normalized = re.sub(r"([，。！？；：,.!?;:]){2,}", r"\1", normalized)
+        normalized = re.sub(r"(.)\1{5,}", lambda m: m.group(1) * 2, normalized)
+        normalized = normalized.strip()
+        if bool(self.config.strip_fillers):
+            normalized = self._strip_filler_utterance(normalized)
+        if len(normalized) < max(0, int(self.config.min_transcript_chars or 0)):
+            return ""
+        if re.fullmatch(r"[\W_]+", normalized, flags=re.UNICODE):
+            return ""
+        return normalized.strip()
+
+    def _strip_filler_utterance(self, text: str) -> str:
+        if not text:
+            return ""
+        filler_words = {
+            "嗯",
+            "嗯嗯",
+            "啊",
+            "啊啊",
+            "呃",
+            "额",
+            "唉",
+            "欸",
+            "诶",
+            "哦",
+            "喔",
+            "哎",
+            "哈",
+            "哈哈",
+        }
+        simplified = re.sub(r"[，。！？；：,.!?;:\s]", "", text)
+        if simplified in filler_words:
+            return ""
+        return text
 
     def _to_short_path(self, path: Path) -> Optional[Path]:
         if os.name != "nt":

@@ -242,3 +242,102 @@ async def test_agent_mode_falls_back_when_native_execution_is_blocked(monkeypatc
 def test_trim_desktop_target_drops_followup_clause(assistant_service):
     trimmed = assistant_service._trim_desktop_target("\u767e\u5ea6 \u5e76 \u7b80\u5355\u544a\u8bc9\u6211\u4f60\u5df2\u7ecf\u5f00\u59cb\u6267\u884c")
     assert trimmed == "\u767e\u5ea6"
+
+
+def test_sanitize_gateway_reply_keeps_last_user_facing_line(assistant_service):
+    raw = "\n".join(
+        [
+            "\u6b63\u5728\u786e\u8ba4\u5f53\u524d\u4f1a\u8bdd\u72b6\u6001\uff0c\u5e76\u76f4\u63a5\u7ed9\u51fa\u4f60\u8981\u7684\u90a3\u4e00\u53e5\u4e2d\u6587\u8868\u8ff0\u3002",
+            "\u6b63\u5728\u53d6\u56de\u5fc5\u8981\u4e0a\u4e0b\u6587\uff1b\u63a5\u4e0b\u6765\u53ea\u4fdd\u7559\u4e0e\u7ed3\u679c\u76f4\u63a5\u76f8\u5173\u7684\u5185\u5bb9\u3002",
+            "\u6211\u5df2\u63a5\u7ba1\u5f53\u524d\u684c\u9762\u7aef\u5bf9\u8bdd\u4e3b\u94fe\u3002",
+        ]
+    )
+    assert assistant_service._sanitize_gateway_reply(raw) == "\u6211\u5df2\u63a5\u7ba1\u5f53\u524d\u684c\u9762\u7aef\u5bf9\u8bdd\u4e3b\u94fe\u3002"
+
+
+@pytest.mark.asyncio
+async def test_agent_mode_exact_reply_uses_isolated_exact_prompt(monkeypatch, assistant_service):
+    conn = sqlite3.connect(":memory:")
+    conn.row_factory = sqlite3.Row
+    conn.execute("CREATE TABLE chat_messages (user_id INTEGER, session_key TEXT, timestamp_ms INTEGER)")
+
+    seen = {}
+
+    async def fake_gateway(session_key: str, text: str) -> str:
+        seen["session_key"] = session_key
+        seen["text"] = text
+        return "OPENCLAW_FINAL_CHECK_OK"
+
+    monkeypatch.setattr(assistant_service.gateway, "send_message", fake_gateway)
+
+    payload = await assistant_service.send_message(
+        conn,
+        user_id=1,
+        text="只回复 OPENCLAW_FINAL_CHECK_OK",
+        surface="desktop",
+        metadata={"assistant_mode": "agent", "assistant_native_control": True},
+    )
+
+    assert payload["text"] == "OPENCLAW_FINAL_CHECK_OK"
+    assert seen["session_key"].startswith("desktop:1:exact:")
+    assert "Return exactly this string and nothing else" in seen["text"]
+
+
+@pytest.mark.asyncio
+async def test_agent_mode_retries_when_gateway_false_heartbeats(monkeypatch, assistant_service):
+    conn = sqlite3.connect(":memory:")
+    conn.row_factory = sqlite3.Row
+    conn.execute("CREATE TABLE chat_messages (user_id INTEGER, session_key TEXT, timestamp_ms INTEGER)")
+
+    calls = []
+
+    async def fake_gateway(session_key: str, text: str) -> str:
+        calls.append((session_key, text))
+        if len(calls) == 1:
+            return "HEARTBEAT_OK"
+        return "我已经接管当前桌面端对话主链。"
+
+    monkeypatch.setattr(assistant_service.gateway, "send_message", fake_gateway)
+
+    payload = await assistant_service.send_message(
+        conn,
+        user_id=1,
+        text="用一句中文说明你已经接管当前桌面端对话主链。",
+        surface="desktop",
+        metadata={"assistant_mode": "agent", "assistant_native_control": True},
+    )
+
+    assert payload["text"] == "我已经接管当前桌面端对话主链。"
+    assert len(calls) == 2
+    assert calls[1][0].startswith("desktop:1:retry:")
+    assert "Do not reply HEARTBEAT_OK" in calls[1][1]
+
+
+@pytest.mark.asyncio
+async def test_agent_mode_repairs_repeat_request_reply(monkeypatch, assistant_service):
+    conn = sqlite3.connect(":memory:")
+    conn.row_factory = sqlite3.Row
+    conn.execute("CREATE TABLE chat_messages (user_id INTEGER, session_key TEXT, timestamp_ms INTEGER)")
+
+    calls = []
+
+    async def fake_gateway(session_key: str, text: str) -> str:
+        calls.append((session_key, text))
+        if len(calls) == 1:
+            return "请重新发一次原文。"
+        return "我已接管当前桌面端对话主链。"
+
+    monkeypatch.setattr(assistant_service.gateway, "send_message", fake_gateway)
+
+    payload = await assistant_service.send_message(
+        conn,
+        user_id=1,
+        text="你好，请用一句中文确认你已接管当前桌面端对话主链。",
+        surface="desktop",
+        metadata={"assistant_mode": "agent", "assistant_native_control": True},
+    )
+
+    assert payload["text"] == "我已接管当前桌面端对话主链。"
+    assert len(calls) == 2
+    assert calls[1][0].startswith("desktop:1:repair:")
+    assert "This is a normal end-user chat request" in calls[1][1]

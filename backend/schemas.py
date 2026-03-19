@@ -42,6 +42,9 @@ class LoginResponse(BaseModel):
     is_configured: bool
     activation_required: bool = False
     assessment_required: bool = False
+    owner_binding_required: bool = False
+    owner_binding_completed: bool = False
+    preferred_device_id: Optional[str] = None
     activation_path: str = "/activate"
 
 
@@ -470,6 +473,9 @@ class ActivationProfileResponse(BaseModel):
     activation_required: bool
     assessment_required: bool = False
     psychometric_completed: bool = False
+    owner_binding_required: bool = False
+    owner_binding_completed: bool = False
+    preferred_device_id: Optional[str] = None
     preferred_name: Optional[str] = None
     role_label: Optional[str] = None
     relation_to_robot: Optional[str] = None

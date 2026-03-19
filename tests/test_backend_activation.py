@@ -154,3 +154,107 @@ def test_activation_identity_infer_falls_back_to_heuristics(tmp_path, monkeypatc
         assert payload["relation_to_robot"] == "primary_user"
         assert payload["confidence"] > 0.3
         assert "待确认" in payload["onboarding_notes"]
+
+
+def test_activation_state_exposes_owner_binding_requirement(tmp_path, monkeypatch):
+    db_path = tmp_path / "auth.db"
+    workspace_dir = tmp_path / "workspace"
+    monkeypatch.setattr(db, "DB_PATH", str(db_path))
+    monkeypatch.setattr(main.assistant_service, "store", AssistantWorkspaceStore(str(workspace_dir)))
+    db.init_db()
+
+    password = "secret123"
+    now_s = int(time.time())
+    now_ms = int(time.time() * 1000)
+    conn = sqlite3.connect(str(db_path))
+    try:
+        conn.execute(
+            "INSERT INTO users (id, username, password_hash, created_at, is_configured) VALUES (?, ?, ?, ?, 1)",
+            (1, "owner@example.com", auth.hash_password(password), now_s),
+        )
+        conn.execute(
+            """
+            INSERT INTO devices (
+                user_id, device_id, device_ip, updated_at, onboarding_state, identity_state
+            ) VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (1, "pi-zero", "127.0.0.1:8090", now_ms, "online", "unenrolled"),
+        )
+        conn.execute(
+            """
+            INSERT INTO user_psychometric_profiles (
+                user_id, type_code, scores_json, dimension_confidence_json, evidence_summary_json,
+                summary, response_style, care_style, conversation_count, completed_at_ms,
+                inference_version, profile_json, updated_at, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                1,
+                "INTJ",
+                "{}",
+                "{}",
+                "{}",
+                "stable profile",
+                "direct",
+                "calm",
+                12,
+                now_ms,
+                "assessment-v1",
+                "{}",
+                now_ms,
+                now_ms,
+            ),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    token = auth.create_access_token(1, "owner@example.com")["token"]
+    headers = {"Authorization": f"Bearer {token}"}
+
+    with TestClient(main.app) as client:
+        state = client.get("/api/activation/state", headers=headers)
+        assert state.status_code == 200
+        payload = state.json()
+        assert payload["activation_required"] is False
+        assert payload["psychometric_completed"] is True
+        assert payload["owner_binding_required"] is True
+        assert payload["owner_binding_completed"] is False
+        assert payload["preferred_device_id"] == "pi-zero"
+
+
+def test_owner_enrollment_requires_completed_assessment(tmp_path, monkeypatch):
+    db_path = tmp_path / "auth.db"
+    workspace_dir = tmp_path / "workspace"
+    monkeypatch.setattr(db, "DB_PATH", str(db_path))
+    monkeypatch.setattr(main.assistant_service, "store", AssistantWorkspaceStore(str(workspace_dir)))
+    db.init_db()
+
+    password = "secret123"
+    now_s = int(time.time())
+    now_ms = int(time.time() * 1000)
+    conn = sqlite3.connect(str(db_path))
+    try:
+        conn.execute(
+            "INSERT INTO users (id, username, password_hash, created_at, is_configured) VALUES (?, ?, ?, ?, 1)",
+            (1, "owner@example.com", auth.hash_password(password), now_s),
+        )
+        conn.execute(
+            "INSERT INTO devices (user_id, device_id, device_ip, updated_at) VALUES (?, ?, ?, ?)",
+            (1, "pi-zero", "127.0.0.1:8090", now_ms),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    token = auth.create_access_token(1, "owner@example.com")["token"]
+    headers = {"Authorization": f"Bearer {token}"}
+
+    with TestClient(main.app) as client:
+        response = client.post(
+            "/api/device/owner/enrollment/start",
+            headers=headers,
+            json={"device_id": "pi-zero", "owner_label": "owner"},
+        )
+        assert response.status_code == 403
+        assert "assessment" in response.json()["detail"].lower()

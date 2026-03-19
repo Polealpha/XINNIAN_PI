@@ -20,6 +20,7 @@ import {
   completeActivation,
   finishAssessment,
   getAssessmentState,
+  getOwnerBindingStatus,
   inferActivationIdentity,
   pollAssessmentVoice,
   startAssessment,
@@ -104,6 +105,9 @@ export const ActivationGate: React.FC<ActivationGateProps> = ({ onActivated }) =
   const [success, setSuccess] = useState("");
   const [identityReady, setIdentityReady] = useState(false);
   const [psychometricCompleted, setPsychometricCompleted] = useState(false);
+  const [ownerBindingRequired, setOwnerBindingRequired] = useState(false);
+  const [ownerBindingCompleted, setOwnerBindingCompleted] = useState(false);
+  const [preferredDeviceId, setPreferredDeviceId] = useState("");
   const [identityState, setIdentityState] = useState(emptyIdentity);
   const [assessmentState, setAssessmentState] = useState<ActivationAssessmentState>(emptyAssessment);
   const [introTranscript, setIntroTranscript] = useState("");
@@ -117,9 +121,13 @@ export const ActivationGate: React.FC<ActivationGateProps> = ({ onActivated }) =
     const identityDone = !activation.activation_required;
     const assessmentDone =
       activation.psychometric_completed || assessment.status === "completed" || Boolean(assessment.completed_at_ms);
+    const preferredDevice = String(activation.preferred_device_id || "").trim();
 
     setIdentityReady(identityDone);
     setPsychometricCompleted(Boolean(assessmentDone));
+    setOwnerBindingRequired(Boolean(activation.owner_binding_required));
+    setOwnerBindingCompleted(Boolean(activation.owner_binding_completed));
+    setPreferredDeviceId(preferredDevice);
     setIdentityState({
       ok: true,
       preferred_name: activation.preferred_name || "",
@@ -133,6 +141,11 @@ export const ActivationGate: React.FC<ActivationGateProps> = ({ onActivated }) =
       raw_json: {},
     });
     setAssessmentState(assessment);
+    if (preferredDevice && activation.owner_binding_completed) {
+      setScanState(`主人面部档案已绑定到设备 ${preferredDevice}。`);
+    } else if (preferredDevice && activation.owner_binding_required) {
+      setScanState(`当前设备 ${preferredDevice} 还没有主人面部档案，首次激活需要完成扫脸绑定。`);
+    }
 
     if (identityDone && !assessmentDone && !assessment.exists) {
       const started = await startAssessment({ surface: "desktop", voice_mode: "text", reset: false });
@@ -208,7 +221,45 @@ export const ActivationGate: React.FC<ActivationGateProps> = ({ onActivated }) =
     };
   }, [assessmentState.voice_session_active, psychometricCompleted]);
 
-  const canFinish = identityReady && psychometricCompleted;
+  useEffect(() => {
+    if (!preferredDeviceId || !ownerBindingRequired || ownerBindingCompleted) {
+      return;
+    }
+    let cancelled = false;
+    const tick = async () => {
+      try {
+        const status = await getOwnerBindingStatus(preferredDeviceId);
+        if (cancelled) {
+          return;
+        }
+        if (status.enrolled) {
+          setOwnerBindingCompleted(true);
+          setOwnerBindingRequired(false);
+          setScanState(`主人面部档案已绑定完成，设备 ${status.device_id} 已可进行本地识别。`);
+          setSuccess("主人面部档案同步完成，首次绑定已完成。");
+        }
+      } catch (_err) {
+        return;
+      }
+    };
+    tick();
+    const timer = window.setInterval(tick, 3200);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [preferredDeviceId, ownerBindingRequired, ownerBindingCompleted]);
+
+  useEffect(() => {
+    if (psychometricCompleted && preferredDeviceId && !ownerBindingCompleted) {
+      setOwnerBindingRequired(true);
+      if (!scanState) {
+        setScanState(`人格测评已完成，下一步请在设备 ${preferredDeviceId} 上完成主人扫脸绑定。`);
+      }
+    }
+  }, [preferredDeviceId, psychometricCompleted, ownerBindingCompleted, scanState]);
+
+  const canFinish = identityReady && psychometricCompleted && (!ownerBindingRequired || ownerBindingCompleted);
   const scorePreview = useMemo(() => scoreItems(assessmentState.scores), [assessmentState.scores]);
   const confidencePreview = useMemo(
     () => confidenceItems(assessmentState.dimension_confidence),
@@ -313,7 +364,7 @@ export const ActivationGate: React.FC<ActivationGateProps> = ({ onActivated }) =
       setAnswerDraft("");
       if (nextState.just_completed || nextState.status === "completed") {
         setPsychometricCompleted(true);
-        setSuccess("测评完成，八维分值和类型已经写入长期记忆。现在可以做扫脸建档。");
+        setSuccess("测评完成，八维分值和类型已经写入长期记忆。下一步请完成主人扫脸绑定。");
       } else {
         setSuccess("已记录这轮回答，继续下一题。");
       }
@@ -432,9 +483,11 @@ export const ActivationGate: React.FC<ActivationGateProps> = ({ onActivated }) =
     setError("");
     setSuccess("");
     try {
-      const response = await startOwnerEnrollment();
+      const response = await startOwnerEnrollment(preferredDeviceId || undefined);
+      setOwnerBindingRequired(true);
+      setOwnerBindingCompleted(false);
       setScanState(response?.detail || "已向机器人发送主人建档请求。");
-      setSuccess("扫脸建档请求已经发到开发板。");
+      setSuccess("扫脸建档请求已经发到开发板，完成采样后会自动同步绑定状态。");
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -444,7 +497,7 @@ export const ActivationGate: React.FC<ActivationGateProps> = ({ onActivated }) =
 
   const handleFinish = async () => {
     if (!canFinish) {
-      setError("请先完成身份确认和人格测评。");
+      setError(ownerBindingRequired ? "请先完成主人扫脸绑定，再结束首次激活。" : "请先完成身份确认和人格测评。");
       return;
     }
     setFinishing(true);
@@ -480,7 +533,7 @@ export const ActivationGate: React.FC<ActivationGateProps> = ({ onActivated }) =
             <div>
               <h1 className="text-2xl font-black tracking-tight">首次激活</h1>
               <p className="text-sm text-slate-400 font-semibold">
-                先确认这个人是谁，再通过多轮轻松对话拿到完整的 8 维人格信号，最后再做扫脸主人建档。
+                先确认这个人是谁，再通过多轮轻松对话拿到完整的 8 维人格信号，最后完成主人扫脸绑定。
               </p>
             </div>
           </div>
@@ -726,19 +779,23 @@ export const ActivationGate: React.FC<ActivationGateProps> = ({ onActivated }) =
               <div className="text-xs leading-6 font-semibold text-slate-400">
                 最近转写：{assessmentState.latest_transcript || "暂无"}
               </div>
+              <div className="text-xs leading-6 font-semibold text-slate-400">
+                主人绑定：{ownerBindingCompleted ? "已完成" : ownerBindingRequired ? "待完成" : "未要求"}
+                {preferredDeviceId ? ` · 设备 ${preferredDeviceId}` : ""}
+              </div>
             </div>
 
             <button
               onClick={handleStartFaceScan}
-              disabled={busy || !psychometricCompleted}
+              disabled={busy || !psychometricCompleted || ownerBindingCompleted}
               className="rounded-2xl bg-emerald-500/15 border border-emerald-400/20 text-emerald-200 py-3 font-black text-sm flex items-center justify-center gap-2 disabled:opacity-50"
             >
               {busy ? <LoaderCircle className="animate-spin" size={16} /> : <ScanFace size={16} />}
-              启动主人扫脸建档
+              {ownerBindingCompleted ? "主人已完成扫脸绑定" : "启动主人扫脸建档"}
             </button>
 
             <div className="rounded-3xl border border-white/10 bg-slate-900/70 p-4 text-xs leading-6 text-slate-400 font-semibold">
-              {scanState || "扫脸只能在登录且完成人格测评后启动。"}
+              {scanState || "扫脸只能在登录且完成人格测评后启动；有设备时，首次激活会要求完成主人绑定。"}
             </div>
           </section>
         </div>

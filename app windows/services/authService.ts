@@ -7,6 +7,9 @@ export interface LoginResult {
   is_configured: boolean;
   activation_required: boolean;
   assessment_required: boolean;
+  owner_binding_required: boolean;
+  owner_binding_completed: boolean;
+  preferred_device_id?: string | null;
   activation_path: string;
 }
 
@@ -38,6 +41,9 @@ export interface ActivationStateResult {
   activation_required: boolean;
   assessment_required: boolean;
   psychometric_completed: boolean;
+  owner_binding_required: boolean;
+  owner_binding_completed: boolean;
+  preferred_device_id?: string | null;
   preferred_name?: string | null;
   role_label?: string | null;
   relation_to_robot?: string | null;

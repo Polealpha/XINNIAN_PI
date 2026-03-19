@@ -497,6 +497,7 @@ def _upsert_activation_profile(conn: Connection, user_id: int, payload: Dict[str
 def _activation_response(conn: Connection, user: Dict[str, object], profile: Dict[str, object]) -> ActivationProfileResponse:
     is_configured = bool(user.get("is_configured", 0))
     psychometric_completed = bool(_get_psychometric_profile(conn, int(user["id"])))
+    owner_binding = _get_owner_binding_state(conn, int(user["id"]), is_configured, psychometric_completed)
     preferred_name = str(profile.get("preferred_name") or "").strip() or None
     role_label = str(profile.get("role_label") or "").strip() or None
     relation_to_robot = str(profile.get("relation_to_robot") or "").strip() or None
@@ -510,6 +511,9 @@ def _activation_response(conn: Connection, user: Dict[str, object], profile: Dic
         activation_required=not is_configured,
         assessment_required=is_configured and not psychometric_completed,
         psychometric_completed=psychometric_completed,
+        owner_binding_required=bool(owner_binding["required"]),
+        owner_binding_completed=bool(owner_binding["completed"]),
+        preferred_device_id=owner_binding["device_id"],
         preferred_name=preferred_name,
         role_label=role_label,
         relation_to_robot=relation_to_robot,
@@ -522,6 +526,25 @@ def _activation_response(conn: Connection, user: Dict[str, object], profile: Dic
         preferred_mode=OPENCLAW_PREFERRED_MODE,
         preferred_code_model=OPENCLAW_PREFERRED_CODE_MODEL,
     )
+
+
+def _get_owner_binding_state(
+    conn: Connection,
+    user_id: int,
+    is_configured: bool,
+    psychometric_completed: bool,
+) -> Dict[str, object]:
+    devices = _list_devices(conn, int(user_id))
+    if not devices:
+        return {"required": False, "completed": False, "device_id": None}
+    preferred = devices[0]
+    device_id = str(preferred.get("device_id") or "").strip() or None
+    if not device_id:
+        return {"required": False, "completed": False, "device_id": None}
+    profile = _get_owner_profile(conn, int(user_id), device_id)
+    completed = bool(profile)
+    required = bool(is_configured and psychometric_completed and not completed)
+    return {"required": required, "completed": completed, "device_id": device_id}
 
 
 def _json_list(value: object) -> List[str]:
@@ -2600,6 +2623,13 @@ def login_api(payload: LoginEmailRequest, conn: Connection = Depends(get_db)) ->
     refresh = auth.create_refresh_token(user["id"], user["username"])
     expires_at = int(time.time()) + refresh["expires_in"]
     _insert_refresh_token(conn, user["id"], refresh["token"], expires_at)
+    psychometric_completed = bool(_get_psychometric_profile(conn, int(user["id"])))
+    owner_binding = _get_owner_binding_state(
+        conn,
+        int(user["id"]),
+        bool(user.get("is_configured", 0)),
+        psychometric_completed,
+    )
 
     return LoginResponse(
         token=access["token"],
@@ -2607,7 +2637,10 @@ def login_api(payload: LoginEmailRequest, conn: Connection = Depends(get_db)) ->
         user_id=int(user["id"]),
         is_configured=bool(user.get("is_configured", 0)),
         activation_required=not bool(user.get("is_configured", 0)),
-        assessment_required=bool(user.get("is_configured", 0)) and not bool(_get_psychometric_profile(conn, int(user["id"]))),
+        assessment_required=bool(user.get("is_configured", 0)) and not psychometric_completed,
+        owner_binding_required=bool(owner_binding["required"]),
+        owner_binding_completed=bool(owner_binding["completed"]),
+        preferred_device_id=owner_binding["device_id"],
         activation_path="/activate",
     )
 
@@ -3587,6 +3620,8 @@ def owner_enrollment_start(
     user = _parse_access_token(credentials, conn)
     if not bool(user.get("is_configured", 0)):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Activation must complete before face enrollment")
+    if not bool(_get_psychometric_profile(conn, int(user["id"]))):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Psychometric assessment must complete before face enrollment")
     selected = {}
     if payload.device_id:
         selected = _get_device(conn, int(user["id"]), payload.device_id)

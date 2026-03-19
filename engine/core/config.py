@@ -186,6 +186,9 @@ class AsrConfig:
     decoder_path: str = ""
     joiner_path: str = ""
     num_threads: int = 2
+    normalize_text: bool = True
+    strip_fillers: bool = True
+    min_transcript_chars: int = 2
 
     @classmethod
     def from_dict(cls, data: Optional[Dict[str, Any]]) -> "AsrConfig":
@@ -213,6 +216,9 @@ class AsrConfig:
             decoder_path=str(data.get("decoder_path", "")),
             joiner_path=str(data.get("joiner_path", "")),
             num_threads=int(data.get("num_threads", 2)),
+            normalize_text=bool(data.get("normalize_text", True)),
+            strip_fillers=bool(data.get("strip_fillers", True)),
+            min_transcript_chars=int(data.get("min_transcript_chars", 2)),
         )
 
 
@@ -445,13 +451,23 @@ class FaceTrackingConfig:
     min_face_area_ratio: float = 0.02
     max_face_area_ratio: float = 0.60
     dead_zone: float = 0.08
+    dead_zone_y: float = 0.08
     ema_alpha: float = 0.30
+    ema_alpha_y: float = 0.30
     kp: float = 0.60
+    kp_y: float = 0.60
     turn_max: float = 0.60
+    tilt_max: float = 0.45
     send_hz: int = 4
     ui_emit_hz: float = 4.0
     cmd_duration_ms: int = 250
     lost_frames_stop: int = 5
+    return_start_frames: int = 3
+    return_alpha: float = 0.35
+    return_deadband: float = 0.015
+    preferred_face_area_ratio: float = 0.12
+    area_gain_floor: float = 0.35
+    min_turn_delta: float = 0.02
     multi_face_policy: str = "largest"
     scene_behavior: Dict[str, Dict[str, float]] = field(
         default_factory=lambda: {"desk": {"base": 0.0}, "home": {"base": 0.0}}
@@ -472,13 +488,23 @@ class FaceTrackingConfig:
             min_face_area_ratio=float(data.get("min_face_area_ratio", 0.02)),
             max_face_area_ratio=float(data.get("max_face_area_ratio", 0.60)),
             dead_zone=float(data.get("dead_zone", 0.08)),
+            dead_zone_y=float(data.get("dead_zone_y", data.get("dead_zone", 0.08))),
             ema_alpha=float(data.get("ema_alpha", 0.30)),
+            ema_alpha_y=float(data.get("ema_alpha_y", data.get("ema_alpha", 0.30))),
             kp=float(data.get("kp", 0.60)),
+            kp_y=float(data.get("kp_y", data.get("kp", 0.60))),
             turn_max=float(data.get("turn_max", 0.60)),
+            tilt_max=float(data.get("tilt_max", data.get("turn_max", 0.45))),
             send_hz=int(data.get("send_hz", 4)),
             ui_emit_hz=float(data.get("ui_emit_hz", 4.0)),
             cmd_duration_ms=int(data.get("cmd_duration_ms", 250)),
             lost_frames_stop=int(data.get("lost_frames_stop", 5)),
+            return_start_frames=int(data.get("return_start_frames", 3)),
+            return_alpha=float(data.get("return_alpha", 0.35)),
+            return_deadband=float(data.get("return_deadband", 0.015)),
+            preferred_face_area_ratio=float(data.get("preferred_face_area_ratio", 0.12)),
+            area_gain_floor=float(data.get("area_gain_floor", 0.35)),
+            min_turn_delta=float(data.get("min_turn_delta", 0.02)),
             multi_face_policy=str(data.get("multi_face_policy", "largest")),
             scene_behavior=merged_scene_behavior,
         )

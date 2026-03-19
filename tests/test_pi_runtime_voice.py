@@ -1,4 +1,6 @@
+from engine.core.config import AsrConfig
 from engine.core.types import AudioFrame
+from engine.nlp.asr_module import AsrModule
 from pi_runtime.runtime import PiEmotionRuntime
 
 
@@ -59,3 +61,11 @@ def test_wake_detector_arms_voice_session(monkeypatch):
     assert wake_status["ready"] is True
     assert wake_status["provider"] == "sherpa"
     assert wake_status["last_text"] == "小念"
+
+
+def test_asr_normalizes_filler_and_chinese_spacing():
+    module = AsrModule(AsrConfig(enabled=False, normalize_text=True, strip_fillers=True, min_transcript_chars=2))
+
+    assert module._normalize_transcript("  嗯嗯  ") == ""
+    assert module._normalize_transcript("我 想 去 公园 。 ") == "我想去公园。"
+    assert module._normalize_transcript("  hello   world  ") == "hello world"
