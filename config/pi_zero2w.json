@@ -97,5 +97,34 @@
       "address": 64,
       "frequency": 50
     }
+  },
+  "buttons": {
+    "enabled": true,
+    "allow_system_power_commands": false,
+    "power_toggle": {
+      "enabled": true,
+      "gpio_pin": 5,
+      "pull_up": true,
+      "hold_sec": 0.0,
+      "bounce_time": 0.08
+    },
+    "shutdown": {
+      "enabled": true,
+      "gpio_pin": 6,
+      "pull_up": true,
+      "hold_sec": 0.0,
+      "bounce_time": 0.08
+    },
+    "settings": {
+      "enabled": true,
+      "gpio_pin": 16,
+      "pull_up": true,
+      "hold_sec": 0.0,
+      "bounce_time": 0.08
+    }
+  },
+  "ui": {
+    "default_page": "expression",
+    "settings_auto_return_sec": 0
   }
 }

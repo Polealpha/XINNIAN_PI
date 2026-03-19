@@ -1,189 +1,121 @@
 import React, { useEffect, useState } from "react";
-import { CareDeliveryStrategy, EngineMode } from "../types";
-import { PlayCircle, Shield, Volume2, Eye, Timer, BellRing, Video, Mic } from "lucide-react";
-import { sendEngineSignal } from "../services/engineService";
+import { DeviceSettings } from "../types";
+import { BellRing, Eye, Mic, Settings2, Timer, Video, Volume2, Wand2, X } from "lucide-react";
 
 interface SettingsPanelProps {
-  mode: EngineMode;
-  onModeChange: (m: EngineMode) => void;
+  settings: DeviceSettings;
   isGuest?: boolean;
-  careDeliveryStrategy: CareDeliveryStrategy;
-  onCareDeliveryStrategyChange: (strategy: CareDeliveryStrategy) => Promise<void>;
-  mediaState: {
-    videoEnabled: boolean;
-    audioEnabled: boolean;
-  };
-  onMediaToggle: (type: "video" | "audio", enabled: boolean) => Promise<void>;
+  onSave: (next: DeviceSettings) => Promise<void>;
+  onClose: () => Promise<void> | void;
 }
 
 const COOLDOWN_OPTIONS = [15, 30, 60, 120];
 
-export const SettingsPanel: React.FC<SettingsPanelProps> = ({
-  mode,
-  onModeChange,
-  isGuest,
-  careDeliveryStrategy,
-  onCareDeliveryStrategyChange,
-  mediaState,
-  onMediaToggle,
-}) => {
-  const [cooldownMin, setCooldownMin] = useState(30);
-  const [dailyLimit, setDailyLimit] = useState(5);
+export const SettingsPanel: React.FC<SettingsPanelProps> = ({ settings, isGuest, onSave, onClose }) => {
+  const [draft, setDraft] = useState<DeviceSettings>(settings);
   const [statusMessage, setStatusMessage] = useState("");
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    setDraft(settings);
+  }, [settings]);
 
   useEffect(() => {
     if (!statusMessage) return;
-    const timer = setTimeout(() => setStatusMessage(""), 2500);
+    const timer = setTimeout(() => setStatusMessage(""), 2600);
     return () => clearTimeout(timer);
   }, [statusMessage]);
 
-  const pushModeSignal = async (nextMode: EngineMode) => {
+  const patchDraft = (patch: Partial<DeviceSettings>) => {
+    setDraft((prev) => ({ ...prev, ...patch }));
+  };
+
+  const handleSave = async () => {
     if (isGuest) {
-      setStatusMessage("访客模式不可操作");
+      setStatusMessage("游客模式不可操作");
       return;
     }
-    if (nextMode === "privacy") {
-      await sendEngineSignal("privacy_on");
-      return;
-    }
-    if (nextMode === "dnd") {
-      await sendEngineSignal("do_not_disturb_on");
-      return;
-    }
-    if (mode === "privacy") {
-      await sendEngineSignal("privacy_off");
-      return;
-    }
-    if (mode === "dnd") {
-      await sendEngineSignal("do_not_disturb_off");
+    setSaving(true);
+    try {
+      await onSave(draft);
+      setStatusMessage("设置已同步到机器人");
+    } catch (err) {
+      console.error("Save settings failed:", err);
+      setStatusMessage("设置保存失败");
+    } finally {
+      setSaving(false);
     }
   };
 
-  const handleModeClick = async (nextMode: EngineMode) => {
-    if (nextMode === mode) return;
-    if (isGuest) {
-      setStatusMessage("访客模式不可操作");
-      return;
-    }
-    try {
-      await pushModeSignal(nextMode);
-      onModeChange(nextMode);
-      setStatusMessage("模式已更新");
-    } catch (err) {
-      console.error("Mode update failed:", err);
-      setStatusMessage("模式更新失败");
-    }
-  };
-
-  const handleManualCare = async () => {
-    if (isGuest) {
-      setStatusMessage("访客模式不可操作");
-      return;
-    }
-    try {
-      await sendEngineSignal("manual_care");
-      setStatusMessage("主动关怀已触发");
-    } catch (err) {
-      console.error("Manual care failed:", err);
-      setStatusMessage("主动关怀触发失败");
-    }
-  };
-
-  const handleCooldownUpdate = async (value: number) => {
-    setCooldownMin(value);
-    if (isGuest) {
-      setStatusMessage("访客模式不可操作");
-      return;
-    }
-    try {
-      await sendEngineSignal("config_update", { cooldown_min: value });
-      setStatusMessage("冷却周期已更新");
-    } catch (err) {
-      console.error("Cooldown update failed:", err);
-      setStatusMessage("冷却周期更新失败");
-    }
-  };
-
-  const applyDailyLimit = async (value: number) => {
-    const safeValue = Math.max(1, Math.min(20, Number.isFinite(value) ? value : 5));
-    setDailyLimit(safeValue);
-    if (isGuest) {
-      setStatusMessage("访客模式不可操作");
-      return;
-    }
-    try {
-      await sendEngineSignal("config_update", { daily_trigger_limit: safeValue });
-      setStatusMessage("每日上限已更新");
-    } catch (err) {
-      console.error("Daily limit update failed:", err);
-      setStatusMessage("每日上限更新失败");
-    }
-  };
-
-  const handleMediaChange = async (type: "video" | "audio", enabled: boolean) => {
-    if (isGuest) {
-      setStatusMessage("访客模式不可操作");
-      return;
-    }
-    try {
-      await onMediaToggle(type, enabled);
-      setStatusMessage("采集状态已更新");
-    } catch (err) {
-      console.error("Media toggle failed:", err);
-      setStatusMessage("采集状态更新失败");
-    }
-  };
-
-  const handleCareDeliveryStrategyChange = async (next: CareDeliveryStrategy) => {
-    if (next === careDeliveryStrategy) return;
-    if (isGuest) {
-      setStatusMessage("访客模式不可操作");
-      return;
-    }
-    try {
-      await onCareDeliveryStrategyChange(next);
-      setStatusMessage("关怀投递策略已更新");
-    } catch (err) {
-      console.error("Care delivery strategy update failed:", err);
-      setStatusMessage("关怀投递策略更新失败");
-    }
+  const updateNested = <K extends keyof DeviceSettings>(
+    key: K,
+    patch: Partial<DeviceSettings[K]>
+  ) => {
+    setDraft((prev) => ({
+      ...prev,
+      [key]: {
+        ...(prev[key] as Record<string, unknown>),
+        ...(patch as Record<string, unknown>),
+      },
+    }));
   };
 
   return (
     <div className="grid grid-cols-12 gap-6 h-full animate-pop-in">
       <div className="col-span-4 bg-[#0c1222]/50 backdrop-blur-3xl rounded-[2.5rem] border border-white/[0.05] p-8 shadow-2xl flex flex-col gap-6">
         <div>
-          <h3 className="text-[10px] font-black text-slate-500 uppercase tracking-widest mb-6">引擎模式</h3>
+          <h3 className="text-[10px] font-black text-slate-500 uppercase tracking-widest mb-6">设置面板</h3>
           <div className="space-y-3">
             {[
-              { id: "normal", label: "标准感知", icon: Eye },
-              { id: "privacy", label: "隐私加密", icon: Shield },
-              { id: "dnd", label: "免打扰", icon: Volume2 },
+              { id: "normal", label: "标准感知" },
+              { id: "privacy", label: "隐私模式" },
+              { id: "dnd", label: "免打扰" },
             ].map((item) => (
               <button
                 key={item.id}
-                onClick={() => handleModeClick(item.id as EngineMode)}
+                onClick={() => patchDraft({ mode: item.id as DeviceSettings["mode"] })}
                 className={`w-full p-4 rounded-2xl flex items-center gap-4 border transition-all ${
-                  mode === item.id
+                  draft.mode === item.id
                     ? "bg-indigo-500/10 border-indigo-500/30 text-white"
                     : "bg-white/5 border-transparent text-slate-500 hover:text-slate-300"
                 }`}
               >
-                <item.icon size={18} />
+                <Eye size={18} />
                 <span className="text-xs font-black">{item.label}</span>
               </button>
             ))}
           </div>
         </div>
 
-        <div className="mt-auto">
-          <h3 className="text-[10px] font-black text-slate-500 uppercase tracking-widest mb-4">快捷操作</h3>
+        <div className="space-y-3">
           <button
-            onClick={handleManualCare}
-            className="w-full py-4 bg-indigo-500 text-white rounded-2xl flex items-center justify-center gap-3 font-black text-[10px] uppercase tracking-widest shadow-xl shadow-indigo-500/20 q-bounce"
+            onClick={handleSave}
+            disabled={saving}
+            className="w-full py-4 bg-indigo-500 text-white rounded-2xl flex items-center justify-center gap-3 font-black text-[10px] uppercase tracking-widest shadow-xl shadow-indigo-500/20 disabled:opacity-60"
           >
-            <BellRing size={16} /> 手动触发主动关怀
+            <Settings2 size={16} />
+            {saving ? "保存中" : "保存设置"}
           </button>
+          <button
+            onClick={() => void onClose()}
+            className="w-full py-4 bg-white/5 text-slate-200 rounded-2xl flex items-center justify-center gap-3 font-black text-[10px] uppercase tracking-widest border border-white/10"
+          >
+            <X size={16} />
+            关闭设置
+          </button>
+        </div>
+
+        <div className="mt-auto rounded-2xl border border-white/10 bg-white/[0.04] p-4">
+          <div className="text-[10px] font-black uppercase tracking-widest text-slate-400">当前概要</div>
+          <div className="mt-3 text-[12px] text-slate-300 leading-6">
+            唤醒：{draft.wake.enabled ? "开启" : "关闭"}
+            <br />
+            音频：{draft.media.audio_enabled ? "开启" : "关闭"}
+            <br />
+            视频：{draft.media.camera_enabled ? "开启" : "关闭"}
+            <br />
+            设置自动返回：{draft.behavior.settings_auto_return_sec || 0} 秒
+          </div>
         </div>
       </div>
 
@@ -197,17 +129,17 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({
             <div className="grid grid-cols-2 gap-6">
               <MediaToggle
                 title="摄像头"
-                desc="实时控制是否接入视频流"
-                enabled={mediaState.videoEnabled}
+                desc="控制是否采集视频流"
+                enabled={draft.media.camera_enabled}
                 icon={Video}
-                onToggle={(next) => handleMediaChange("video", next)}
+                onToggle={(next) => updateNested("media", { camera_enabled: next })}
               />
               <MediaToggle
                 title="麦克风"
-                desc="实时控制是否接入音频流"
-                enabled={mediaState.audioEnabled}
+                desc="控制是否采集音频流"
+                enabled={draft.media.audio_enabled}
                 icon={Mic}
-                onToggle={(next) => handleMediaChange("audio", next)}
+                onToggle={(next) => updateNested("media", { audio_enabled: next })}
               />
             </div>
           </div>
@@ -216,18 +148,16 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({
             <div className="space-y-4">
               <div className="flex items-center gap-2">
                 <Timer size={14} className="text-indigo-400" />
-                <span className="text-[10px] font-black text-slate-300 uppercase tracking-widest">
-                  触发冷却周期
-                </span>
+                <span className="text-[10px] font-black text-slate-300 uppercase tracking-widest">触发冷却周期</span>
               </div>
               <div className="flex gap-2">
                 {COOLDOWN_OPTIONS.map((t) => (
                   <button
                     key={t}
-                    onClick={() => handleCooldownUpdate(t)}
-                    aria-pressed={cooldownMin === t}
+                    onClick={() => updateNested("behavior", { cooldown_min: t })}
+                    aria-pressed={draft.behavior.cooldown_min === t}
                     className={`flex-1 py-2 rounded-lg text-[9px] font-black border transition-all ${
-                      cooldownMin === t
+                      draft.behavior.cooldown_min === t
                         ? "bg-indigo-500 border-indigo-500 text-white"
                         : "bg-white/5 border-white/5 text-slate-500 hover:text-slate-300"
                     }`}
@@ -239,61 +169,141 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({
             </div>
             <div className="space-y-4">
               <div className="flex items-center gap-2">
-                <PlayCircle size={14} className="text-indigo-400" />
-                <span className="text-[10px] font-black text-slate-300 uppercase tracking-widest">
-                  每日触发上限
-                </span>
+                <BellRing size={14} className="text-indigo-400" />
+                <span className="text-[10px] font-black text-slate-300 uppercase tracking-widest">每日触发上限</span>
               </div>
               <input
                 type="number"
-                value={dailyLimit}
+                value={draft.behavior.daily_trigger_limit}
                 min={1}
                 max={20}
-                onChange={(e) => setDailyLimit(Number(e.target.value))}
-                onBlur={() => applyDailyLimit(dailyLimit)}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter") {
-                    applyDailyLimit(dailyLimit);
-                  }
-                }}
+                onChange={(e) => updateNested("behavior", { daily_trigger_limit: Number(e.target.value) || 1 })}
                 className="w-full bg-white/5 border border-white/10 rounded-xl p-2 text-xs font-mono font-bold text-indigo-300 outline-none focus:border-indigo-500"
               />
             </div>
           </div>
 
-          <div className="pt-8 border-t border-white/5">
-            <div className="flex items-center gap-2 mb-4">
-              <Volume2 size={14} className="text-indigo-400" />
-              <span className="text-[10px] font-black text-slate-300 uppercase tracking-widest">
-                主动关怀投递策略
-              </span>
+          <div className="pt-8 border-t border-white/5 grid grid-cols-2 gap-8">
+            <div className="space-y-4">
+              <div className="flex items-center gap-2">
+                <Volume2 size={14} className="text-indigo-400" />
+                <span className="text-[10px] font-black text-slate-300 uppercase tracking-widest">主动关怀策略</span>
+              </div>
+              <div className="grid grid-cols-3 gap-2">
+                {[
+                  { id: "policy", label: "策略决策" },
+                  { id: "voice_all_day", label: "全天语音" },
+                  { id: "popup_all_day", label: "全天弹窗" },
+                ].map((item) => (
+                  <button
+                    key={item.id}
+                    onClick={() => patchDraft({ care_delivery_strategy: item.id as DeviceSettings["care_delivery_strategy"] })}
+                    aria-pressed={draft.care_delivery_strategy === item.id}
+                    className={`px-2 py-3 rounded-lg text-[9px] font-black border transition-all ${
+                      draft.care_delivery_strategy === item.id
+                        ? "bg-indigo-500 border-indigo-500 text-white"
+                        : "bg-white/5 border-white/10 text-slate-400 hover:text-slate-200"
+                    }`}
+                  >
+                    {item.label}
+                  </button>
+                ))}
+              </div>
             </div>
-            <div className="grid grid-cols-3 gap-2">
-              {[
-                { id: "policy", label: "遵循昼夜策略" },
-                { id: "voice_all_day", label: "全天语音" },
-                { id: "popup_all_day", label: "全天弹窗" },
-              ].map((item) => (
+            <div className="space-y-4">
+              <div className="flex items-center gap-2">
+                <Wand2 size={14} className="text-indigo-400" />
+                <span className="text-[10px] font-black text-slate-300 uppercase tracking-widest">设置页自动返回</span>
+              </div>
+              <input
+                type="number"
+                value={draft.behavior.settings_auto_return_sec}
+                min={0}
+                max={600}
+                onChange={(e) => updateNested("behavior", { settings_auto_return_sec: Number(e.target.value) || 0 })}
+                className="w-full bg-white/5 border border-white/10 rounded-xl p-2 text-xs font-mono font-bold text-indigo-300 outline-none focus:border-indigo-500"
+              />
+            </div>
+          </div>
+
+          <div className="pt-8 border-t border-white/5 grid grid-cols-2 gap-8">
+            <div className="space-y-4">
+              <div className="flex items-center gap-2">
+                <Volume2 size={14} className="text-indigo-400" />
+                <span className="text-[10px] font-black text-slate-300 uppercase tracking-widest">唤醒词设置</span>
+              </div>
+              <label className="flex items-center justify-between rounded-2xl border border-white/10 bg-white/5 px-4 py-3">
+                <span className="text-sm font-bold text-slate-100">启用本地唤醒</span>
                 <button
-                  key={item.id}
-                  onClick={() => handleCareDeliveryStrategyChange(item.id as CareDeliveryStrategy)}
-                  aria-pressed={careDeliveryStrategy === item.id}
-                  className={`px-2 py-3 rounded-lg text-[9px] font-black border transition-all ${
-                    careDeliveryStrategy === item.id
-                      ? "bg-indigo-500 border-indigo-500 text-white"
-                      : "bg-white/5 border-white/10 text-slate-400 hover:text-slate-200"
+                  onClick={() => updateNested("wake", { enabled: !draft.wake.enabled })}
+                  className={`px-4 py-2 rounded-full text-[10px] font-black uppercase tracking-widest border transition-all ${
+                    draft.wake.enabled
+                      ? "bg-indigo-500 text-white border-indigo-500"
+                      : "bg-white/5 text-slate-400 border-white/10"
                   }`}
                 >
-                  {item.label}
+                  {draft.wake.enabled ? "On" : "Off"}
                 </button>
-              ))}
+              </label>
+              <input
+                type="text"
+                value={draft.wake.wake_phrase}
+                onChange={(e) => updateNested("wake", { wake_phrase: e.target.value })}
+                placeholder="唤醒词"
+                className="w-full bg-white/5 border border-white/10 rounded-xl p-3 text-sm font-bold text-slate-100 outline-none focus:border-indigo-500"
+              />
+              <input
+                type="text"
+                value={draft.wake.ack_text}
+                onChange={(e) => updateNested("wake", { ack_text: e.target.value })}
+                placeholder="唤醒应答"
+                className="w-full bg-white/5 border border-white/10 rounded-xl p-3 text-sm font-bold text-slate-100 outline-none focus:border-indigo-500"
+              />
+            </div>
+
+            <div className="space-y-4">
+              <div className="flex items-center gap-2">
+                <Eye size={14} className="text-indigo-400" />
+                <span className="text-[10px] font-black text-slate-300 uppercase tracking-widest">追踪与语音风格</span>
+              </div>
+              <label className="flex items-center justify-between rounded-2xl border border-white/10 bg-white/5 px-4 py-3">
+                <span className="text-sm font-bold text-slate-100">左右跟踪</span>
+                <button
+                  onClick={() => updateNested("tracking", { pan_enabled: !draft.tracking.pan_enabled })}
+                  className={`px-4 py-2 rounded-full text-[10px] font-black uppercase tracking-widest border transition-all ${
+                    draft.tracking.pan_enabled
+                      ? "bg-indigo-500 text-white border-indigo-500"
+                      : "bg-white/5 text-slate-400 border-white/10"
+                  }`}
+                >
+                  {draft.tracking.pan_enabled ? "On" : "Off"}
+                </button>
+              </label>
+              <label className="flex items-center justify-between rounded-2xl border border-white/10 bg-white/5 px-4 py-3">
+                <span className="text-sm font-bold text-slate-100">上下跟踪</span>
+                <button
+                  onClick={() => updateNested("tracking", { tilt_enabled: !draft.tracking.tilt_enabled })}
+                  className={`px-4 py-2 rounded-full text-[10px] font-black uppercase tracking-widest border transition-all ${
+                    draft.tracking.tilt_enabled
+                      ? "bg-indigo-500 text-white border-indigo-500"
+                      : "bg-white/5 text-slate-400 border-white/10"
+                  }`}
+                >
+                  {draft.tracking.tilt_enabled ? "On" : "Off"}
+                </button>
+              </label>
+              <input
+                type="text"
+                value={draft.voice.robot_voice_style}
+                onChange={(e) => updateNested("voice", { robot_voice_style: e.target.value })}
+                placeholder="机器人音色风格"
+                className="w-full bg-white/5 border border-white/10 rounded-xl p-3 text-sm font-bold text-slate-100 outline-none focus:border-indigo-500"
+              />
             </div>
           </div>
         </div>
         {statusMessage && (
-          <div className="mt-6 text-[10px] font-black text-indigo-300 uppercase tracking-[0.3em]">
-            {statusMessage}
-          </div>
+          <div className="mt-6 text-[10px] font-black text-indigo-300 uppercase tracking-[0.3em]">{statusMessage}</div>
         )}
       </div>
     </div>
@@ -314,7 +324,7 @@ const MediaToggle = ({
   onToggle: (next: boolean) => void;
 }) => (
   <div className="bg-white/5 border border-white/10 rounded-2xl p-5 flex flex-col gap-4">
-    <div className="flex items-center justify-between">
+    <div className="flex items-center justify-between gap-4">
       <div className="flex items-center gap-3">
         <div
           className={`w-10 h-10 rounded-full flex items-center justify-center ${
@@ -331,16 +341,12 @@ const MediaToggle = ({
       <button
         onClick={() => onToggle(!enabled)}
         className={`px-4 py-2 rounded-full text-[10px] font-black uppercase tracking-widest border transition-all ${
-          enabled
-            ? "bg-indigo-500 text-white border-indigo-500"
-            : "bg-white/5 text-slate-400 border-white/10"
+          enabled ? "bg-indigo-500 text-white border-indigo-500" : "bg-white/5 text-slate-400 border-white/10"
         }`}
       >
         {enabled ? "On" : "Off"}
       </button>
     </div>
-    <div className="text-[9px] font-bold text-slate-500 uppercase tracking-widest">
-      当前状态：{enabled ? "开启" : "关闭"}
-    </div>
+    <div className="text-[9px] font-bold text-slate-500 uppercase tracking-widest">当前状态：{enabled ? "开启" : "关闭"}</div>
   </div>
 );

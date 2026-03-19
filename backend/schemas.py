@@ -134,6 +134,24 @@ class DeviceStatusResponse(BaseModel):
     error: Optional[str] = None
 
 
+class DeviceSettingsResponse(BaseModel):
+    ok: bool
+    device_id: str
+    settings: dict = Field(default_factory=dict)
+    ui_state: dict = Field(default_factory=dict)
+    updated_at_ms: Optional[int] = None
+
+
+class DeviceSettingsUpdateRequest(BaseModel):
+    device_id: Optional[str] = None
+    settings: dict = Field(default_factory=dict)
+
+
+class DeviceSettingsPageRequest(BaseModel):
+    device_id: Optional[str] = None
+    source: str = "desktop"
+
+
 class DeviceHeartbeatRequest(BaseModel):
     device_id: str
     device_ip: Optional[str] = None

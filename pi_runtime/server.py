@@ -7,6 +7,7 @@ from typing import Optional
 
 import uvicorn
 from fastapi import FastAPI, HTTPException, Response
+from fastapi.responses import HTMLResponse
 from pydantic import BaseModel, Field
 
 from engine.core.types import UserSignal
@@ -53,6 +54,15 @@ class TtsWarmupRequest(BaseModel):
 
 class VoiceTranscribeRequest(BaseModel):
     window_ms: int = 6000
+
+
+class SettingsApplyRequest(BaseModel):
+    settings: dict = Field(default_factory=dict)
+    source: str = "local_ui"
+
+
+class SettingsPageRequest(BaseModel):
+    source: str = "desktop"
 
 
 def build_app(pi_config_path: str, engine_config_path: str) -> FastAPI:
@@ -205,6 +215,124 @@ def build_app(pi_config_path: str, engine_config_path: str) -> FastAPI:
     def voice_transcribe_recent(payload: VoiceTranscribeRequest) -> dict:
         assert runtime is not None
         return runtime.transcribe_recent_audio(payload.window_ms)
+
+    @app.get("/settings/live")
+    def settings_live() -> dict:
+        assert runtime is not None
+        return {
+            "ok": True,
+            "device_id": runtime.pi_config.device.device_id,
+            "settings": runtime.get_settings_state(),
+            "ui_state": runtime.get_ui_state(),
+        }
+
+    @app.post("/settings/apply")
+    def settings_apply(payload: SettingsApplyRequest) -> dict:
+        assert runtime is not None
+        settings = runtime.apply_settings(payload.settings, source=payload.source)
+        return {"ok": True, "settings": settings, "ui_state": runtime.get_ui_state()}
+
+    @app.post("/settings/open")
+    def settings_open(payload: SettingsPageRequest) -> dict:
+        assert runtime is not None
+        return {"ok": True, "ui_state": runtime.open_settings_page(payload.source)}
+
+    @app.post("/settings/close")
+    def settings_close(payload: SettingsPageRequest) -> dict:
+        assert runtime is not None
+        return {"ok": True, "ui_state": runtime.close_settings_page(payload.source)}
+
+    @app.get("/ui/state")
+    def ui_state() -> dict:
+        assert runtime is not None
+        return {
+            "ok": True,
+            "device_id": runtime.pi_config.device.device_id,
+            "ui_state": runtime.get_ui_state(),
+            "settings": runtime.get_settings_state(),
+            "voice_state": runtime.get_voice_status(),
+        }
+
+    @app.get("/ui", response_class=HTMLResponse)
+    def ui_shell() -> str:
+        return """<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Emotion Pi UI</title>
+  <style>
+    body { margin: 0; font-family: 'Microsoft YaHei', sans-serif; background: #080d18; color: #eef2ff; }
+    .screen { min-height: 100vh; display: none; align-items: center; justify-content: center; padding: 32px; box-sizing: border-box; }
+    .screen.active { display: flex; }
+    .card { width: min(960px, 100%); border-radius: 28px; background: rgba(15, 23, 42, 0.82); border: 1px solid rgba(255,255,255,0.08); padding: 28px; box-shadow: 0 24px 80px rgba(0,0,0,0.25); }
+    .expression-face { font-size: 120px; line-height: 1; text-align: center; }
+    .muted { color: #94a3b8; font-size: 14px; }
+    .grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 14px; margin-top: 18px; }
+    .item { background: rgba(255,255,255,0.04); border-radius: 18px; padding: 14px 16px; }
+    .label { color: #a5b4fc; font-size: 12px; text-transform: uppercase; letter-spacing: .18em; }
+    .value { margin-top: 8px; font-size: 20px; font-weight: 700; }
+    pre { white-space: pre-wrap; word-break: break-word; font-size: 13px; color: #dbeafe; }
+  </style>
+</head>
+<body>
+  <div id="expression" class="screen active">
+    <div class="card">
+      <div class="expression-face">◕‿◕</div>
+      <div style="text-align:center;font-size:32px;font-weight:700;">小念正在陪伴</div>
+      <div id="expression-sub" class="muted" style="text-align:center;margin-top:10px;">等待设置或交互</div>
+    </div>
+  </div>
+  <div id="settings" class="screen">
+    <div class="card">
+      <div style="font-size:28px;font-weight:800;">机器人设置</div>
+      <div id="settings-sub" class="muted" style="margin-top:6px;">等待同步</div>
+      <div class="grid" id="settings-grid"></div>
+      <div class="item" style="margin-top:14px;">
+        <div class="label">完整设置</div>
+        <pre id="settings-json">{}</pre>
+      </div>
+    </div>
+  </div>
+  <script>
+    const expression = document.getElementById('expression');
+    const settings = document.getElementById('settings');
+    const exprSub = document.getElementById('expression-sub');
+    const settingsSub = document.getElementById('settings-sub');
+    const settingsGrid = document.getElementById('settings-grid');
+    const settingsJson = document.getElementById('settings-json');
+    function card(label, value) {
+      return `<div class="item"><div class="label">${label}</div><div class="value">${value}</div></div>`;
+    }
+    function render(state) {
+      const ui = state.ui_state || {};
+      const cfg = state.settings || {};
+      const page = ui.page || 'expression';
+      expression.classList.toggle('active', page !== 'settings');
+      settings.classList.toggle('active', page === 'settings');
+      exprSub.textContent = `当前页面：${page} ｜ 来源：${ui.source || 'runtime'}`;
+      settingsSub.textContent = `来源：${ui.source || 'runtime'} ｜ 唤醒：${cfg.wake?.enabled ? '开' : '关'} ｜ 音频：${cfg.media?.audio_enabled ? '开' : '关'} ｜ 视频：${cfg.media?.camera_enabled ? '开' : '关'}`;
+      settingsGrid.innerHTML =
+        card('模式', cfg.mode || 'normal') +
+        card('主动关怀', cfg.care_delivery_strategy || 'policy') +
+        card('唤醒词', cfg.wake?.wake_phrase || '小念') +
+        card('冷却', `${cfg.behavior?.cooldown_min || 30} 分钟`) +
+        card('每日上限', `${cfg.behavior?.daily_trigger_limit || 5}`) +
+        card('自动返回', `${cfg.behavior?.settings_auto_return_sec || 0} 秒`);
+      settingsJson.textContent = JSON.stringify(cfg, null, 2);
+    }
+    async function poll() {
+      try {
+        const resp = await fetch('/ui/state', { cache: 'no-store' });
+        const data = await resp.json();
+        render(data);
+      } catch (err) {}
+    }
+    poll();
+    setInterval(poll, 1500);
+  </script>
+</body>
+</html>"""
 
     return app
 

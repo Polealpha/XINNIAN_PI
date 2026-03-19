@@ -20,12 +20,14 @@ class BackendSyncClient:
         status_provider: Callable[[], Dict[str, object]],
         pending_owner_provider: Callable[[], Optional[Dict[str, object]]],
         mark_owner_synced: Callable[[str], None],
+        signal_handler: Optional[Callable[[Dict[str, object]], None]] = None,
     ) -> None:
         self._config = config
         self._device_id = device_id
         self._status_provider = status_provider
         self._pending_owner_provider = pending_owner_provider
         self._mark_owner_synced = mark_owner_synced
+        self._signal_handler = signal_handler
         self._stop = threading.Event()
         self._event_queue: "queue.Queue[Optional[Dict[str, object]]]" = queue.Queue(maxsize=128)
         self._threads: list[threading.Thread] = []
@@ -42,6 +44,8 @@ class BackendSyncClient:
             threading.Thread(target=self._heartbeat_loop, name="pi-backend-heartbeat", daemon=True),
             threading.Thread(target=self._event_loop, name="pi-backend-events", daemon=True),
         ]
+        if self._signal_handler is not None:
+            self._threads.append(threading.Thread(target=self._signal_loop, name="pi-backend-signals", daemon=True))
         for thread in self._threads:
             thread.start()
 
@@ -114,6 +118,19 @@ class BackendSyncClient:
                 self._post_json("/api/engine/event", item)
             except Exception as exc:
                 logger.debug("backend event push failed: %s", exc)
+
+    def _signal_loop(self) -> None:
+        while not self._stop.is_set():
+            try:
+                signals = self._post_json("/api/engine/signal/pull", {"limit": 16}).get("signals") or []
+                for signal in signals:
+                    if self._stop.is_set():
+                        break
+                    if isinstance(signal, dict) and self._signal_handler is not None:
+                        self._signal_handler(signal)
+            except Exception as exc:
+                logger.debug("backend signal pull failed: %s", exc)
+            self._stop.wait(max(0.2, float(self._config.signal_poll_interval_sec)))
 
     def _post_json(self, path: str, payload: Dict[str, object]) -> Dict[str, object]:
         base = str(self._config.base_url or "").rstrip("/")

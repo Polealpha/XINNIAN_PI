@@ -128,6 +128,65 @@ Example direct-GPIO config pattern:
 - Servo GND must be common with Pi GND.
 - Reference config: `config/pi_zero2w.pca9685.example.json`
 
+### 9. Physical buttons
+
+Recommended first button layout:
+
+- Power toggle button: BCM5, physical pin 29
+- Shutdown button: BCM6, physical pin 31
+- Settings button: BCM16, physical pin 36
+- All three buttons share GND
+
+Recommended wiring style:
+
+- One side of the momentary button -> target GPIO
+- The other side -> GND
+- Keep the software `pull_up` setting enabled
+
+Current software behavior:
+
+- Power toggle button:
+  - toggles the local Pi UI `screen_awake` state
+  - emits `PowerToggleRequested`
+- Shutdown button:
+  - emits `ShutdownRequested`
+  - if `buttons.allow_system_power_commands=true`, the Pi may execute `sudo shutdown -h now`
+- Settings button:
+  - switches the Pi UI from `expression` to `settings`
+  - emits `SettingsPageOpened`
+  - the desktop app listens to the same event and automatically opens its Settings tab
+
+Current config block:
+
+```json
+"buttons": {
+  "enabled": true,
+  "allow_system_power_commands": false,
+  "power_toggle": { "enabled": true, "gpio_pin": 5, "pull_up": true },
+  "shutdown": { "enabled": true, "gpio_pin": 6, "pull_up": true },
+  "settings": { "enabled": true, "gpio_pin": 16, "pull_up": true }
+},
+"ui": {
+  "default_page": "expression",
+  "settings_auto_return_sec": 0
+}
+```
+
+### 10. Settings flow
+
+The current end-to-end settings loop is:
+
+1. Press the physical `settings` button on the Pi.
+2. Pi runtime switches local UI state to `settings`.
+3. Pi runtime emits `SettingsPageOpened`.
+4. Backend forwards that event over the event stream.
+5. Desktop app automatically jumps to the Settings tab.
+6. User edits settings with mouse on desktop.
+7. Desktop saves through `/api/device/settings`.
+8. Backend persists the settings and queues `settings_apply`.
+9. Pi pulls `settings_apply`, applies the new settings live, and updates local UI/status.
+10. When the desktop user clicks close, backend queues `settings_page_close`, and the Pi UI returns to `expression`.
+
 ## Raspberry Pi software setup before connecting motion hardware
 
 - Enable I2C in `raspi-config`.

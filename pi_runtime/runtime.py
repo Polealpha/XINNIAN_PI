@@ -81,6 +81,7 @@ class PiEmotionRuntime:
             self.get_status_payload,
             self._get_pending_owner_sync,
             self._mark_owner_sync_complete,
+            self._handle_backend_signal,
         )
 
         self._audio_seq = 0
@@ -142,6 +143,10 @@ class PiEmotionRuntime:
         }
         self._wake_state: Dict[str, object] = self._build_initial_wake_state()
         self._wake_guard_until_ms = 0
+        self._settings_state: Dict[str, object] = self._build_default_settings()
+        self._ui_state: Dict[str, object] = self._build_default_ui_state()
+        self._settings_return_timer: Optional[threading.Timer] = None
+        self._buttons: List[object] = []
 
         self._rms_mean = 0.0
         self._rms_m2 = 0.0
@@ -161,6 +166,7 @@ class PiEmotionRuntime:
         if self.pi_config.camera.enabled:
             self._threads.append(threading.Thread(target=self._camera_loop, name="pi-camera", daemon=True))
         self._threads.append(threading.Thread(target=self._summary_loop, name="pi-summary", daemon=True))
+        self._init_buttons()
         for thread in self._threads:
             thread.start()
 
@@ -170,7 +176,9 @@ class PiEmotionRuntime:
         for thread in list(self._threads):
             thread.join(timeout=2.0)
         self._threads.clear()
+        self._cancel_settings_auto_return()
         self._backend_sync.stop()
+        self._close_buttons()
         self._hardware.close()
 
     def _ensure_llm(self) -> Optional[LLMResponder]:
@@ -224,6 +232,8 @@ class PiEmotionRuntime:
             "enrollment_active": bool(identity_state.get("enrollment_active")),
             "voice_state": dict(self._voice_state),
             "wake_state": self.get_wake_status(),
+            "settings": self.get_settings_state(),
+            "ui_state": self.get_ui_state(),
         }
         self._last_status_ts_ms = int(payload["timestamp_ms"])
         return payload
@@ -236,6 +246,12 @@ class PiEmotionRuntime:
         state = self._onboarding.get_state()
         state["identity_state"] = self._identity_state.get("identity_state")
         return state
+
+    def get_settings_state(self) -> Dict[str, object]:
+        return self._merge_dicts(self._build_default_settings(), dict(self._settings_state))
+
+    def get_ui_state(self) -> Dict[str, object]:
+        return self._merge_dicts(self._build_default_ui_state(), dict(self._ui_state))
 
     def get_voice_status(self) -> Dict[str, object]:
         state = dict(self._voice_state)
@@ -250,7 +266,125 @@ class PiEmotionRuntime:
     def get_wake_status(self) -> Dict[str, object]:
         state = dict(self._wake_state)
         state["device_id"] = self.pi_config.device.device_id
+        state["enabled"] = bool(self.get_settings_state().get("wake", {}).get("enabled", True))
         return state
+
+    def apply_settings(self, patch: Dict[str, object], source: str = "backend") -> Dict[str, object]:
+        self._settings_state = self._merge_dicts(self.get_settings_state(), dict(patch or {}))
+        settings = self.get_settings_state()
+        media = dict(settings.get("media") or {})
+        wake = dict(settings.get("wake") or {})
+        behavior = dict(settings.get("behavior") or {})
+        tracking = dict(settings.get("tracking") or {})
+
+        next_mode = str(settings.get("mode") or self._mode).strip().lower()
+        if next_mode in {"normal", "privacy", "dnd"}:
+            self._mode = next_mode
+        self.engine_config.trigger.cooldown_min = int(behavior.get("cooldown_min") or self.engine_config.trigger.cooldown_min)
+        self.engine_config.trigger.daily_trigger_limit = int(
+            behavior.get("daily_trigger_limit") or self.engine_config.trigger.daily_trigger_limit
+        )
+        self.engine_config.wake.enabled = bool(wake.get("enabled", True))
+        self.engine_config.wake.wake_phrase = str(wake.get("wake_phrase") or self.engine_config.wake.wake_phrase)
+        self.engine_config.wake.ack_text = str(wake.get("ack_text") or self.engine_config.wake.ack_text)
+        self._ui_state["last_settings_source"] = str(source or "backend")
+        self._ui_state["last_settings_update_ms"] = self._now_ms()
+        self._schedule_settings_auto_return(int(behavior.get("settings_auto_return_sec") or 0))
+        self._emit(
+            "SettingsChanged",
+            self._now_ms(),
+            {
+                "settings": settings,
+                "ui_state": self.get_ui_state(),
+            },
+        )
+        self._emit(
+            "MediaState",
+            self._now_ms(),
+            {
+                "camera_enabled": bool(media.get("camera_enabled", True)),
+                "audio_enabled": bool(media.get("audio_enabled", True)),
+                "wake_enabled": bool(wake.get("enabled", True)),
+                "pan_enabled": bool(tracking.get("pan_enabled", True)),
+                "tilt_enabled": bool(tracking.get("tilt_enabled", True)),
+            },
+        )
+        return settings
+
+    def open_settings_page(self, source: str = "button") -> Dict[str, object]:
+        now_ms = self._now_ms()
+        self._ui_state.update(
+            {
+                "page": "settings",
+                "screen_awake": True,
+                "source": str(source or "button"),
+                "opened_at_ms": now_ms,
+            }
+        )
+        auto_return_sec = int(self.get_settings_state().get("behavior", {}).get("settings_auto_return_sec") or 0)
+        self._schedule_settings_auto_return(auto_return_sec)
+        self._emit(
+            "SettingsPageOpened",
+            now_ms,
+            {
+                "device_id": self.pi_config.device.device_id,
+                "ui_state": self.get_ui_state(),
+                "settings": self.get_settings_state(),
+            },
+        )
+        return self.get_ui_state()
+
+    def close_settings_page(self, source: str = "desktop") -> Dict[str, object]:
+        now_ms = self._now_ms()
+        self._cancel_settings_auto_return()
+        self._ui_state.update(
+            {
+                "page": "expression",
+                "screen_awake": True,
+                "source": str(source or "desktop"),
+                "last_closed_at_ms": now_ms,
+            }
+        )
+        self._emit(
+            "SettingsPageClosed",
+            now_ms,
+            {
+                "device_id": self.pi_config.device.device_id,
+                "ui_state": self.get_ui_state(),
+            },
+        )
+        return self.get_ui_state()
+
+    def toggle_power_state(self, source: str = "button") -> Dict[str, object]:
+        next_awake = not bool(self._ui_state.get("screen_awake", True))
+        self._ui_state["screen_awake"] = next_awake
+        self._ui_state["source"] = str(source or "button")
+        self._ui_state["last_power_toggle_ms"] = self._now_ms()
+        self._emit(
+            "PowerToggleRequested",
+            self._now_ms(),
+            {
+                "device_id": self.pi_config.device.device_id,
+                "screen_awake": next_awake,
+                "ui_state": self.get_ui_state(),
+            },
+        )
+        return self.get_ui_state()
+
+    def request_shutdown(self, source: str = "button") -> Dict[str, object]:
+        timestamp_ms = self._now_ms()
+        payload = {"device_id": self.pi_config.device.device_id, "source": str(source or "button")}
+        self._emit("ShutdownRequested", timestamp_ms, payload)
+        if self.pi_config.buttons.allow_system_power_commands:
+            try:
+                subprocess.Popen(["sudo", "shutdown", "-h", "now"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                payload["executed"] = True
+            except Exception as exc:
+                payload["executed"] = False
+                payload["error"] = str(exc)
+        else:
+            payload["executed"] = False
+        return payload
 
     def start_voice_session(self, mode: str = "assessment") -> Dict[str, object]:
         self._voice_state.update(
@@ -362,9 +496,30 @@ class PiEmotionRuntime:
             self._mode = "normal"
             self._emit("ModeChanged", signal.timestamp_ms, {"mode": self._mode})
             return
+        if signal.type == "do_not_disturb_on":
+            self._mode = "dnd"
+            self._emit("ModeChanged", signal.timestamp_ms, {"mode": self._mode})
+            return
+        if signal.type == "do_not_disturb_off":
+            self._mode = "normal"
+            self._emit("ModeChanged", signal.timestamp_ms, {"mode": self._mode})
+            return
         if signal.type == "manual_care":
             payload = signal.payload if isinstance(signal.payload, dict) else {}
             self.manual_care(str(payload.get("text", "") or ""))
+            return
+        if signal.type in {"config_update", "settings_apply"}:
+            payload = signal.payload if isinstance(signal.payload, dict) else {}
+            settings_patch = payload.get("settings") if isinstance(payload.get("settings"), dict) else payload
+            self.apply_settings(dict(settings_patch or {}), source=str(payload.get("source") or signal.type))
+            return
+        if signal.type == "settings_page_open":
+            payload = signal.payload if isinstance(signal.payload, dict) else {}
+            self.open_settings_page(source=str(payload.get("source") or "backend"))
+            return
+        if signal.type == "settings_page_close":
+            payload = signal.payload if isinstance(signal.payload, dict) else {}
+            self.close_settings_page(source=str(payload.get("source") or "backend"))
             return
         if signal.type == "speak":
             payload = signal.payload if isinstance(signal.payload, dict) else {}
@@ -379,6 +534,19 @@ class PiEmotionRuntime:
             pan = float(payload.get("pan", self._last_pan_turn) or 0.0)
             tilt = float(payload.get("tilt", self._last_tilt_turn) or 0.0)
             self.set_manual_pan_tilt(pan, tilt)
+
+    def _handle_backend_signal(self, signal: Dict[str, object]) -> None:
+        try:
+            user_signal = UserSignal(
+                type=str(signal.get("type") or "").strip(),
+                timestamp_ms=int(signal.get("timestamp_ms") or self._now_ms()),
+                payload=dict(signal.get("payload") or {}),
+            )
+        except Exception:
+            return
+        if not user_signal.type:
+            return
+        self.handle_signal(user_signal)
 
     def set_manual_pan_tilt(self, pan: float, tilt: float) -> Dict[str, object]:
         pan = max(-1.0, min(1.0, float(pan)))
@@ -581,6 +749,9 @@ class PiEmotionRuntime:
             cap.release()
 
     def _push_audio(self, frame: AudioFrame) -> None:
+        if not bool(self.get_settings_state().get("media", {}).get("audio_enabled", True)):
+            self._last_audio_ts = frame.timestamp_ms
+            return
         if self._mode == "privacy":
             return
         self._last_audio_ts = frame.timestamp_ms
@@ -605,6 +776,9 @@ class PiEmotionRuntime:
         self._recompute_risk(frame.timestamp_ms)
 
     def _push_video(self, frame: VideoFrame) -> None:
+        if not bool(self.get_settings_state().get("media", {}).get("camera_enabled", True)):
+            self._last_video_ts = frame.timestamp_ms
+            return
         if self._mode == "privacy":
             return
         self._last_video_ts = frame.timestamp_ms
@@ -754,6 +928,10 @@ class PiEmotionRuntime:
         )
         care_plan = self._care_policy.decide(ctx, frame, list(self._history))
         care_plan = self._maybe_rewrite_care_plan(care_plan, frame, transcript, summary, tags, t_score)
+        override_cooldown_min = int(
+            self.get_settings_state().get("behavior", {}).get("cooldown_min") or self.engine_config.trigger.cooldown_min
+        )
+        care_plan.cooldown_min = max(1, override_cooldown_min)
         self._emit(
             "TriggerFired",
             timestamp_ms,
@@ -870,7 +1048,11 @@ class PiEmotionRuntime:
             return False
         if timestamp_ms < self._cooldown_until_ms:
             return False
-        if self._daily_trigger_count >= self.engine_config.trigger.daily_trigger_limit:
+        daily_limit = int(
+            self.get_settings_state().get("behavior", {}).get("daily_trigger_limit")
+            or self.engine_config.trigger.daily_trigger_limit
+        )
+        if self._daily_trigger_count >= daily_limit:
             return False
         return True
 
@@ -933,6 +1115,9 @@ class PiEmotionRuntime:
         )
 
     def _apply_pan_tilt(self, pan_turn: float, tilt_turn: float) -> None:
+        tracking = dict(self.get_settings_state().get("tracking") or {})
+        pan_turn = 0.0 if not bool(tracking.get("pan_enabled", True)) else float(pan_turn)
+        tilt_turn = 0.0 if not bool(tracking.get("tilt_enabled", True)) else float(tilt_turn)
         self._hardware.set_pan_tilt(float(pan_turn), float(tilt_turn))
         self._last_pan_turn = float(pan_turn)
         self._last_tilt_turn = float(tilt_turn)
@@ -964,6 +1149,133 @@ class PiEmotionRuntime:
             return
         self._identity.mark_sync_complete(embedding_version)
         self._identity_state = self._identity.get_status()
+
+    def _build_default_settings(self) -> Dict[str, object]:
+        return {
+            "mode": "normal",
+            "care_delivery_strategy": "policy",
+            "media": {
+                "camera_enabled": bool(self.pi_config.camera.enabled),
+                "audio_enabled": bool(self.pi_config.audio.enabled),
+            },
+            "wake": {
+                "enabled": bool(self.engine_config.wake.enabled),
+                "wake_phrase": str(self.engine_config.wake.wake_phrase or "").strip(),
+                "ack_text": str(self.engine_config.wake.ack_text or "").strip(),
+            },
+            "behavior": {
+                "cooldown_min": int(self.engine_config.trigger.cooldown_min),
+                "daily_trigger_limit": int(self.engine_config.trigger.daily_trigger_limit),
+                "settings_auto_return_sec": int(self.pi_config.ui.settings_auto_return_sec),
+            },
+            "tracking": {
+                "pan_enabled": True,
+                "tilt_enabled": True,
+            },
+            "voice": {
+                "desktop_stt_provider": "faster_whisper",
+                "desktop_stt_model": "small",
+                "robot_tts_provider": getattr(self._tts, "active_provider", "piper"),
+                "robot_voice_style": "sweet",
+            },
+        }
+
+    def _build_default_ui_state(self) -> Dict[str, object]:
+        return {
+            "page": str(self.pi_config.ui.default_page or "expression"),
+            "screen_awake": True,
+            "source": "runtime",
+            "opened_at_ms": None,
+            "last_closed_at_ms": None,
+        }
+
+    def _merge_dicts(self, base: Dict[str, object], incoming: Dict[str, object]) -> Dict[str, object]:
+        merged = dict(base)
+        for key, value in (incoming or {}).items():
+            if isinstance(value, dict) and isinstance(merged.get(key), dict):
+                merged[key] = self._merge_dicts(dict(merged.get(key) or {}), value)
+            else:
+                merged[key] = value
+        return merged
+
+    def _schedule_settings_auto_return(self, delay_sec: int) -> None:
+        self._cancel_settings_auto_return()
+        delay = max(0, int(delay_sec))
+        if delay <= 0 or str(self._ui_state.get("page")) != "settings":
+            return
+
+        def _auto_close() -> None:
+            if str(self._ui_state.get("page")) == "settings":
+                self.close_settings_page(source="auto_return")
+
+        timer = threading.Timer(delay, _auto_close)
+        timer.daemon = True
+        self._settings_return_timer = timer
+        timer.start()
+
+    def _cancel_settings_auto_return(self) -> None:
+        timer = self._settings_return_timer
+        self._settings_return_timer = None
+        if timer is None:
+            return
+        try:
+            timer.cancel()
+        except Exception:
+            pass
+
+    def _init_buttons(self) -> None:
+        self._close_buttons()
+        cfg = self.pi_config.buttons
+        if not cfg.enabled:
+            return
+        try:
+            from gpiozero import Button  # type: ignore
+        except Exception as exc:
+            logger.warning("gpio buttons unavailable: %s", exc)
+            return
+
+        def _register(button_cfg, callback) -> None:
+            if not getattr(button_cfg, "enabled", False) or getattr(button_cfg, "gpio_pin", None) is None:
+                return
+            try:
+                button = Button(
+                    int(button_cfg.gpio_pin),
+                    pull_up=bool(button_cfg.pull_up),
+                    bounce_time=float(button_cfg.bounce_time),
+                    hold_time=float(button_cfg.hold_sec),
+                )
+                button.when_pressed = callback
+                self._buttons.append(button)
+            except Exception as exc:
+                logger.warning("gpio button init failed on pin %s: %s", getattr(button_cfg, "gpio_pin", None), exc)
+
+        _register(cfg.power_toggle, lambda: self._on_button_pressed("power_toggle"))
+        _register(cfg.shutdown, lambda: self._on_button_pressed("shutdown"))
+        _register(cfg.settings, lambda: self._on_button_pressed("settings"))
+
+    def _close_buttons(self) -> None:
+        for button in list(self._buttons):
+            try:
+                button.close()
+            except Exception:
+                pass
+        self._buttons.clear()
+
+    def _on_button_pressed(self, button_name: str) -> None:
+        timestamp_ms = self._now_ms()
+        self._emit(
+            "HardwareButtonPressed",
+            timestamp_ms,
+            {"device_id": self.pi_config.device.device_id, "button": button_name},
+        )
+        if button_name == "settings":
+            self.open_settings_page(source="button")
+            return
+        if button_name == "shutdown":
+            self.request_shutdown(source="button")
+            return
+        if button_name == "power_toggle":
+            self.toggle_power_state(source="button")
 
     @staticmethod
     def _now_ms() -> int:
@@ -1015,6 +1327,9 @@ class PiEmotionRuntime:
         detector = self._wake_detector
         if detector is None:
             return
+        if not bool(self.get_settings_state().get("wake", {}).get("enabled", True)):
+            self._wake_state["enabled"] = False
+            return
         if not getattr(detector, "ready", False):
             self._wake_state["ready"] = False
             self._wake_state["error"] = str(getattr(detector, "error", "") or "")
@@ -1042,7 +1357,8 @@ class PiEmotionRuntime:
         self._on_wake_detected(frame.timestamp_ms, str(getattr(detector, "last_text", "") or "").strip())
 
     def _on_wake_detected(self, timestamp_ms: int, text: str) -> None:
-        hit_text = text or str(self.engine_config.wake.wake_phrase or "唤醒").strip()
+        wake_cfg = dict(self.get_settings_state().get("wake") or {})
+        hit_text = text or str(wake_cfg.get("wake_phrase") or self.engine_config.wake.wake_phrase or "唤醒").strip()
         self._wake_state.update(
             {
                 "ready": True,
@@ -1065,10 +1381,10 @@ class PiEmotionRuntime:
             {
                 "text": hit_text,
                 "provider": self._wake_state.get("provider"),
-                "wake_phrase": self.engine_config.wake.wake_phrase,
+                "wake_phrase": str(wake_cfg.get("wake_phrase") or self.engine_config.wake.wake_phrase),
             },
         )
-        ack_text = str(self.engine_config.wake.ack_text or "").strip()
+        ack_text = str(wake_cfg.get("ack_text") or self.engine_config.wake.ack_text or "").strip()
         if not ack_text:
             return
         self._voice_state["last_prompt"] = ack_text

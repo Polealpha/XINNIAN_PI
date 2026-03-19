@@ -145,6 +145,23 @@ def init_db() -> None:
         _ensure_column(conn, "devices", "owner_last_seen_ms", "INTEGER")
         cursor.execute(
             """
+            CREATE TABLE IF NOT EXISTS device_settings_profiles (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                device_id TEXT NOT NULL,
+                settings_json TEXT NOT NULL DEFAULT '{}',
+                updated_at INTEGER NOT NULL,
+                created_at INTEGER NOT NULL,
+                UNIQUE(user_id, device_id),
+                FOREIGN KEY(user_id) REFERENCES users(id)
+            )
+            """
+        )
+        _ensure_column(conn, "device_settings_profiles", "settings_json", "TEXT NOT NULL DEFAULT '{}'")
+        _ensure_column(conn, "device_settings_profiles", "updated_at", "INTEGER NOT NULL DEFAULT 0")
+        _ensure_column(conn, "device_settings_profiles", "created_at", "INTEGER NOT NULL DEFAULT 0")
+        cursor.execute(
+            """
             CREATE TABLE IF NOT EXISTS wifi_profiles (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 user_id INTEGER NOT NULL,

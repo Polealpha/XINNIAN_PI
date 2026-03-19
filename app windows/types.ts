@@ -71,6 +71,43 @@ export interface DeviceStatus {
   error?: string;
 }
 
+export interface DeviceSettings {
+  mode: EngineMode;
+  care_delivery_strategy: CareDeliveryStrategy;
+  media: {
+    camera_enabled: boolean;
+    audio_enabled: boolean;
+  };
+  wake: {
+    enabled: boolean;
+    wake_phrase: string;
+    ack_text: string;
+  };
+  behavior: {
+    cooldown_min: number;
+    daily_trigger_limit: number;
+    settings_auto_return_sec: number;
+  };
+  tracking: {
+    pan_enabled: boolean;
+    tilt_enabled: boolean;
+  };
+  voice: {
+    desktop_stt_provider: string;
+    desktop_stt_model: string;
+    robot_tts_provider: string;
+    robot_voice_style: string;
+  };
+}
+
+export interface DeviceUiState {
+  page: "expression" | "settings" | string;
+  screen_awake: boolean;
+  source?: string;
+  opened_at_ms?: number | null;
+  last_closed_at_ms?: number | null;
+}
+
 export interface FaceTrackState {
   found: boolean;
   bbox: [number, number, number, number] | null;

@@ -41,6 +41,26 @@ export const listDevices = async () => {
   return apiGet("/api/device/list", true);
 };
 
+export const getDeviceSettings = async (deviceId?: string) => {
+  const params = new URLSearchParams();
+  if (deviceId) params.set("device_id", deviceId);
+  const query = params.toString();
+  const path = query ? `/api/device/settings?${query}` : "/api/device/settings";
+  return apiGet(path, true);
+};
+
+export const updateDeviceSettings = async (payload: { device_id?: string; settings: Record<string, unknown> }) => {
+  return apiPost("/api/device/settings", payload, true);
+};
+
+export const openDeviceSettingsPage = async (payload: { device_id?: string; source?: string } = {}) => {
+  return apiPost("/api/device/settings/open", payload, true);
+};
+
+export const closeDeviceSettingsPage = async (payload: { device_id?: string; source?: string } = {}) => {
+  return apiPost("/api/device/settings/close", payload, true);
+};
+
 export const heartbeatClientSession = async (payload: {
   client_type: "mobile" | "desktop";
   client_id: string;

@@ -3,7 +3,9 @@ import {
   CareDeliveryStrategy,
   CarePlan,
   ChatMessage,
+  DeviceSettings,
   DeviceStatus,
+  DeviceUiState,
   EmotionEvent,
   EmotionType,
   EngineMode,
@@ -55,7 +57,13 @@ import {
   getEmotionHistoryRange,
 } from "./services/emotionService";
 import { getChatHistory } from "./services/chatService";
-import { getDeviceStatus } from "./services/deviceService";
+import {
+  closeDeviceSettingsPage,
+  getDeviceSettings,
+  getDeviceStatus,
+  openDeviceSettingsPage,
+  updateDeviceSettings,
+} from "./services/deviceService";
 import { connectEventStream, EngineEvent } from "./services/eventService";
 import { getUserProfile, updateUserProfile } from "./services/profileService";
 import { sendEngineSignal } from "./services/engineService";
@@ -533,6 +541,41 @@ const normalizeCareDeliveryStrategy = (value: unknown): CareDeliveryStrategy => 
   return "policy";
 };
 
+const defaultDeviceSettings = (): DeviceSettings => ({
+  mode: "normal",
+  care_delivery_strategy: "policy",
+  media: {
+    camera_enabled: localStorage.getItem("media_video") !== "false",
+    audio_enabled: localStorage.getItem("media_audio") !== "false",
+  },
+  wake: {
+    enabled: true,
+    wake_phrase: "小念",
+    ack_text: "我在",
+  },
+  behavior: {
+    cooldown_min: 30,
+    daily_trigger_limit: 5,
+    settings_auto_return_sec: 0,
+  },
+  tracking: {
+    pan_enabled: true,
+    tilt_enabled: true,
+  },
+  voice: {
+    desktop_stt_provider: "faster_whisper",
+    desktop_stt_model: "small",
+    robot_tts_provider: "piper",
+    robot_voice_style: "sweet",
+  },
+});
+
+const defaultDeviceUiState = (): DeviceUiState => ({
+  page: "expression",
+  screen_awake: true,
+  source: "desktop",
+});
+
 const App: React.FC = () => {
   const [isGuest, setIsGuest] = useState(() => localStorage.getItem("guest_mode") === "true");
   const [isAuthenticated, setIsAuthenticated] = useState(
@@ -695,6 +738,8 @@ const App: React.FC = () => {
     videoEnabled: localStorage.getItem("media_video") !== "false",
     audioEnabled: localStorage.getItem("media_audio") !== "false",
   }));
+  const [deviceSettings, setDeviceSettings] = useState<DeviceSettings>(() => defaultDeviceSettings());
+  const [deviceUiState, setDeviceUiState] = useState<DeviceUiState>(() => defaultDeviceUiState());
   const [faceTrackOverlayEnabled, setFaceTrackOverlayEnabled] = useState(
     () => localStorage.getItem("face_track_overlay") !== "false"
   );
@@ -723,6 +768,12 @@ const App: React.FC = () => {
       setDeviceViewKey((v) => v + 1);
     }
   }, [activeTab]);
+
+  useEffect(() => {
+    if (activeTab !== Tab.CONTROL) {
+      previousTabRef.current = activeTab;
+    }
+  }, [activeTab]);
   const [taskInput, setTaskInput] = useState("");
   const [taskMinutes, setTaskMinutes] = useState(25);
   const [pomodoroWorkMin, setPomodoroWorkMin] = useState(() => {
@@ -738,6 +789,7 @@ const App: React.FC = () => {
     return Number.isFinite(stored) && stored > 0 ? stored : 4;
   });
   const [pomodoroRound, setPomodoroRound] = useState(1);
+  const previousTabRef = useRef<Tab>(Tab.DASHBOARD);
   const [pomodoroMode, setPomodoroMode] = useState<"work" | "break">("work");
   const [pomodoroRunning, setPomodoroRunning] = useState(false);
   const [pomodoroSeconds, setPomodoroSeconds] = useState(() => pomodoroWorkMin * 60);
@@ -881,6 +933,44 @@ const App: React.FC = () => {
     window.setTimeout(() => {
       setTriggerToasts((prev) => prev.filter((toast) => toast.id !== id));
     }, 4200);
+  }, []);
+
+  const applySettingsSnapshot = useCallback((incoming?: Partial<DeviceSettings> | null) => {
+    if (!incoming) return;
+    const merged: DeviceSettings = {
+      ...defaultDeviceSettings(),
+      ...incoming,
+      media: {
+        ...defaultDeviceSettings().media,
+        ...(incoming.media || {}),
+      },
+      wake: {
+        ...defaultDeviceSettings().wake,
+        ...(incoming.wake || {}),
+      },
+      behavior: {
+        ...defaultDeviceSettings().behavior,
+        ...(incoming.behavior || {}),
+      },
+      tracking: {
+        ...defaultDeviceSettings().tracking,
+        ...(incoming.tracking || {}),
+      },
+      voice: {
+        ...defaultDeviceSettings().voice,
+        ...(incoming.voice || {}),
+      },
+    };
+    setDeviceSettings(merged);
+    setMode(normalizeMode(merged.mode));
+    setCareDeliveryStrategy(normalizeCareDeliveryStrategy(merged.care_delivery_strategy));
+    setMediaState({
+      videoEnabled: Boolean(merged.media.camera_enabled),
+      audioEnabled: Boolean(merged.media.audio_enabled),
+    });
+    localStorage.setItem("media_video", String(Boolean(merged.media.camera_enabled)));
+    localStorage.setItem("media_audio", String(Boolean(merged.media.audio_enabled)));
+    localStorage.setItem("care_delivery_strategy", merged.care_delivery_strategy);
   }, []);
 
   const pushSystemLog = useCallback((type: string, payload: Record<string, any>, ts?: number) => {
@@ -1259,6 +1349,41 @@ const App: React.FC = () => {
         });
         return;
       }
+      if (event.type === "SettingsChanged") {
+        if (payload?.settings) {
+          applySettingsSnapshot(payload.settings as Partial<DeviceSettings>);
+        }
+        if (payload?.ui_state) {
+          setDeviceUiState(payload.ui_state as DeviceUiState);
+        }
+        return;
+      }
+      if (event.type === "SettingsPageOpened") {
+        if (payload?.ui_state) {
+          setDeviceUiState(payload.ui_state as DeviceUiState);
+        }
+        setActiveTab(Tab.CONTROL);
+        pushToast("机器人设置", "设备端已打开设置页");
+        return;
+      }
+      if (event.type === "SettingsPageClosed") {
+        if (payload?.ui_state) {
+          setDeviceUiState(payload.ui_state as DeviceUiState);
+        }
+        if (activeTab === Tab.CONTROL) {
+          setActiveTab(previousTabRef.current === Tab.CONTROL ? Tab.DASHBOARD : previousTabRef.current);
+        }
+        pushToast("机器人设置", "设备端已关闭设置页");
+        return;
+      }
+      if (event.type === "HardwareButtonPressed") {
+        const button = String(payload?.button || "").trim();
+        if (button === "settings") {
+          setActiveTab(Tab.CONTROL);
+        }
+        pushToast("实体按键", button ? `按下：${button}` : "收到按钮事件");
+        return;
+      }
 
       if (event.type === "UserProfileUpdated") {
         const displayName = String(payload.display_name || payload.username || profileName || "共鸣旅人");
@@ -1372,6 +1497,8 @@ const App: React.FC = () => {
       }
     },
     [
+      activeTab,
+      applySettingsSnapshot,
       appendMessage,
       isLikelyWakeText,
       profileName,
@@ -1401,6 +1528,58 @@ const App: React.FC = () => {
       setStatusRefreshing(false);
     }
   }, [isGuest]);
+
+  const fetchDeviceSettings = useCallback(async () => {
+    if (isGuest) return;
+    try {
+      const response = await getDeviceSettings(deviceStatus?.device_id);
+      applySettingsSnapshot((response?.settings || {}) as Partial<DeviceSettings>);
+      setDeviceUiState((response?.ui_state || defaultDeviceUiState()) as DeviceUiState);
+    } catch (err) {
+      console.warn("Device settings fetch failed:", err);
+    }
+  }, [applySettingsSnapshot, deviceStatus?.device_id, isGuest]);
+
+  const saveDeviceSettings = useCallback(
+    async (next: DeviceSettings) => {
+      const response = await updateDeviceSettings({
+        device_id: deviceStatus?.device_id,
+        settings: next as unknown as Record<string, unknown>,
+      });
+      applySettingsSnapshot((response?.settings || next) as Partial<DeviceSettings>);
+      if (response?.ui_state) {
+        setDeviceUiState(response.ui_state as DeviceUiState);
+      }
+      pushToast("设置已保存", "机器人设置已同步");
+    },
+    [applySettingsSnapshot, deviceStatus?.device_id, pushToast]
+  );
+
+  const openSettingsFromDesktop = useCallback(async () => {
+    try {
+      const response = await openDeviceSettingsPage({ device_id: deviceStatus?.device_id, source: "desktop" });
+      if (response?.ui_state) {
+        setDeviceUiState(response.ui_state as DeviceUiState);
+      }
+    } catch (err) {
+      console.warn("Open device settings failed:", err);
+    } finally {
+      setActiveTab(Tab.CONTROL);
+    }
+  }, [deviceStatus?.device_id]);
+
+  const closeSettingsFromDesktop = useCallback(async () => {
+    try {
+      const response = await closeDeviceSettingsPage({ device_id: deviceStatus?.device_id, source: "desktop" });
+      if (response?.ui_state) {
+        setDeviceUiState(response.ui_state as DeviceUiState);
+      }
+    } catch (err) {
+      console.warn("Close device settings failed:", err);
+    } finally {
+      setActiveTab(previousTabRef.current === Tab.CONTROL ? Tab.DASHBOARD : previousTabRef.current);
+    }
+  }, [deviceStatus?.device_id]);
 
   useEffect(() => {
     if (!wakeDebug) return;
@@ -1939,6 +2118,11 @@ const App: React.FC = () => {
 
   useEffect(() => {
     if (!isAuthenticated || isGuest) return;
+    fetchDeviceSettings();
+  }, [fetchDeviceSettings, isAuthenticated, isGuest, deviceStatus?.device_id]);
+
+  useEffect(() => {
+    if (!isAuthenticated || isGuest) return;
     const ws = connectEventStream(
       (event) => {
         handleEngineEvent(event);
@@ -1986,13 +2170,6 @@ const App: React.FC = () => {
   useEffect(() => {
     localStorage.setItem("persona_profile_id", selectedPersonaId);
   }, [selectedPersonaId]);
-
-  useEffect(() => {
-    if (!isAuthenticated || isGuest) return;
-    sendEngineSignal("config_update", { care_delivery_strategy: careDeliveryStrategy }).catch((err) => {
-      console.error("Initial care delivery strategy sync failed:", err);
-    });
-  }, [isAuthenticated, isGuest]);
 
   useEffect(() => {
     if (!pomodoroRunning) return;
@@ -2398,7 +2575,7 @@ const App: React.FC = () => {
         />
         <NavButton
           active={activeTab === Tab.CONTROL}
-          onClick={() => setActiveTab(Tab.CONTROL)}
+          onClick={() => void openSettingsFromDesktop()}
           icon={Settings}
         />
         <button onClick={() => setActiveTab(Tab.PROFILE)} className="mt-auto group">
@@ -2916,13 +3093,10 @@ const App: React.FC = () => {
           {activeTab === Tab.CONTROL && (
             <div className="h-full w-full">
               <SettingsPanel
-                mode={mode}
-                onModeChange={setMode}
+                settings={deviceSettings}
                 isGuest={isGuest}
-                careDeliveryStrategy={careDeliveryStrategy}
-                onCareDeliveryStrategyChange={handleCareDeliveryStrategyChange}
-                mediaState={mediaState}
-                onMediaToggle={handleMediaToggle}
+                onSave={saveDeviceSettings}
+                onClose={closeSettingsFromDesktop}
               />
             </div>
           )}

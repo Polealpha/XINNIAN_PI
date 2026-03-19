@@ -93,6 +93,9 @@ from .schemas import (
     DesktopVoiceStatusResponse,
     DesktopVoiceTranscribeResponse,
     DeviceInfoResponse,
+    DeviceSettingsPageRequest,
+    DeviceSettingsResponse,
+    DeviceSettingsUpdateRequest,
     DeviceHeartbeatRequest,
     DeviceHeartbeatResponse,
     DeviceClaimRequest,
@@ -1758,6 +1761,120 @@ def _get_device(conn: Connection, user_id: int, device_id: str) -> Dict:
     )
     row = cur.fetchone()
     return dict(row) if row else {}
+
+
+def _select_device_for_user(conn: Connection, user_id: int, explicit_device_id: Optional[str] = None) -> Dict:
+    if explicit_device_id:
+        return _get_device(conn, user_id, explicit_device_id)
+    devices = _list_devices(conn, user_id)
+    return devices[0] if devices else {}
+
+
+def _default_device_settings() -> Dict[str, object]:
+    return {
+        "mode": "normal",
+        "care_delivery_strategy": "policy",
+        "media": {"camera_enabled": True, "audio_enabled": True},
+        "wake": {"enabled": True, "wake_phrase": "小念", "ack_text": "我在"},
+        "behavior": {"cooldown_min": 30, "daily_trigger_limit": 5, "settings_auto_return_sec": 0},
+        "tracking": {"pan_enabled": True, "tilt_enabled": True},
+        "voice": {
+            "desktop_stt_provider": "faster_whisper",
+            "desktop_stt_model": "small",
+            "robot_tts_provider": "piper",
+            "robot_voice_style": "sweet",
+        },
+    }
+
+
+def _default_device_ui_state() -> Dict[str, object]:
+    return {
+        "page": "expression",
+        "screen_awake": True,
+        "source": "backend",
+        "opened_at_ms": None,
+        "last_closed_at_ms": None,
+    }
+
+
+def _merge_settings(base: Dict[str, object], incoming: Dict[str, object]) -> Dict[str, object]:
+    merged = dict(base)
+    for key, value in (incoming or {}).items():
+        if isinstance(value, dict) and isinstance(merged.get(key), dict):
+            merged[key] = _merge_settings(dict(merged.get(key) or {}), value)
+        else:
+            merged[key] = value
+    return merged
+
+
+def _get_device_settings(conn: Connection, user_id: int, device_id: str) -> Dict[str, object]:
+    row = conn.execute(
+        """
+        SELECT settings_json, updated_at
+        FROM device_settings_profiles
+        WHERE user_id = ? AND device_id = ?
+        """,
+        (int(user_id), str(device_id)),
+    ).fetchone()
+    settings = _default_device_settings()
+    updated_at_ms = None
+    if row:
+        try:
+            stored = json.loads(str(row["settings_json"] or "{}"))
+        except Exception:
+            stored = {}
+        if isinstance(stored, dict):
+            settings = _merge_settings(settings, stored)
+        updated_at_ms = int(row["updated_at"] or 0) or None
+    return {"settings": settings, "updated_at_ms": updated_at_ms}
+
+
+def _upsert_device_settings(conn: Connection, user_id: int, device_id: str, patch: Dict[str, object]) -> Dict[str, object]:
+    current = _get_device_settings(conn, user_id, device_id)
+    merged = _merge_settings(dict(current.get("settings") or {}), dict(patch or {}))
+    now_ms = int(time.time() * 1000)
+    existing = conn.execute(
+        """
+        SELECT id
+        FROM device_settings_profiles
+        WHERE user_id = ? AND device_id = ?
+        """,
+        (int(user_id), str(device_id)),
+    ).fetchone()
+    if existing:
+        conn.execute(
+            """
+            UPDATE device_settings_profiles
+            SET settings_json = ?, updated_at = ?
+            WHERE user_id = ? AND device_id = ?
+            """,
+            (json.dumps(merged, ensure_ascii=False), now_ms, int(user_id), str(device_id)),
+        )
+    else:
+        conn.execute(
+            """
+            INSERT INTO device_settings_profiles (user_id, device_id, settings_json, updated_at, created_at)
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            (int(user_id), str(device_id), json.dumps(merged, ensure_ascii=False), now_ms, now_ms),
+        )
+    conn.commit()
+    return {"settings": merged, "updated_at_ms": now_ms}
+
+
+def _cached_ui_state(device_row: Dict[str, object]) -> Dict[str, object]:
+    ui_state = _default_device_ui_state()
+    if not device_row:
+        return ui_state
+    try:
+        status_payload = json.loads(str(device_row.get("status_json") or "{}"))
+    except Exception:
+        status_payload = {}
+    if isinstance(status_payload, dict):
+        candidate = status_payload.get("ui_state")
+        if isinstance(candidate, dict):
+            ui_state = _merge_settings(ui_state, candidate)
+    return ui_state
 
 
 def _get_device_owner(conn: Connection, device_id: str) -> Dict:
@@ -3760,6 +3877,148 @@ def device_status(
             status=None,
             error=str(exc),
         )
+
+
+@app.get("/api/device/settings", response_model=DeviceSettingsResponse)
+def device_settings(
+    device_id: Optional[str] = None,
+    credentials: HTTPAuthorizationCredentials = Depends(bearer_scheme),
+    conn: Connection = Depends(get_db),
+) -> DeviceSettingsResponse:
+    user = _parse_access_token(credentials, conn)
+    selected = _select_device_for_user(conn, int(user["id"]), device_id)
+    resolved_device_id = str(device_id or selected.get("device_id") or "unbound")
+    settings_state = _get_device_settings(conn, int(user["id"]), resolved_device_id)
+    return DeviceSettingsResponse(
+        ok=bool(selected),
+        device_id=resolved_device_id,
+        settings=dict(settings_state.get("settings") or {}),
+        ui_state=_cached_ui_state(selected),
+        updated_at_ms=settings_state.get("updated_at_ms"),
+    )
+
+
+@app.post("/api/device/settings", response_model=DeviceSettingsResponse)
+async def update_device_settings(
+    payload: DeviceSettingsUpdateRequest,
+    credentials: HTTPAuthorizationCredentials = Depends(bearer_scheme),
+    conn: Connection = Depends(get_db),
+) -> DeviceSettingsResponse:
+    user = _parse_access_token(credentials, conn)
+    selected = _select_device_for_user(conn, int(user["id"]), payload.device_id)
+    if not selected:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Device not bound yet")
+    device_id = str(selected.get("device_id") or "")
+    updated = _upsert_device_settings(conn, int(user["id"]), device_id, dict(payload.settings or {}))
+    now_ms = int(time.time() * 1000)
+    signal_payload = {
+        "device_id": device_id,
+        "settings": dict(updated.get("settings") or {}),
+        "updated_at_ms": int(updated.get("updated_at_ms") or now_ms),
+    }
+    _enqueue_signal({"type": "settings_apply", "timestamp_ms": now_ms, "payload": signal_payload})
+    await event_manager.broadcast(
+        {
+            "type": "SettingsChanged",
+            "timestamp_ms": now_ms,
+            "payload": signal_payload,
+        }
+    )
+    return DeviceSettingsResponse(
+        ok=True,
+        device_id=device_id,
+        settings=dict(updated.get("settings") or {}),
+        ui_state=_cached_ui_state(selected),
+        updated_at_ms=updated.get("updated_at_ms"),
+    )
+
+
+@app.post("/api/device/settings/open", response_model=DeviceSettingsResponse)
+async def open_device_settings_page(
+    payload: DeviceSettingsPageRequest,
+    credentials: HTTPAuthorizationCredentials = Depends(bearer_scheme),
+    conn: Connection = Depends(get_db),
+) -> DeviceSettingsResponse:
+    user = _parse_access_token(credentials, conn)
+    selected = _select_device_for_user(conn, int(user["id"]), payload.device_id)
+    if not selected:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Device not bound yet")
+    device_id = str(selected.get("device_id") or "")
+    settings_state = _get_device_settings(conn, int(user["id"]), device_id)
+    now_ms = int(time.time() * 1000)
+    ui_state = _merge_settings(
+        _cached_ui_state(selected),
+        {
+            "page": "settings",
+            "screen_awake": True,
+            "source": str(payload.source or "desktop"),
+            "opened_at_ms": now_ms,
+        },
+    )
+    outbound_payload = {
+        "device_id": device_id,
+        "ui_state": ui_state,
+        "settings": dict(settings_state.get("settings") or {}),
+    }
+    _enqueue_signal({"type": "settings_page_open", "timestamp_ms": now_ms, "payload": outbound_payload})
+    await event_manager.broadcast(
+        {
+            "type": "SettingsPageOpened",
+            "timestamp_ms": now_ms,
+            "payload": outbound_payload,
+        }
+    )
+    return DeviceSettingsResponse(
+        ok=True,
+        device_id=device_id,
+        settings=dict(settings_state.get("settings") or {}),
+        ui_state=ui_state,
+        updated_at_ms=settings_state.get("updated_at_ms"),
+    )
+
+
+@app.post("/api/device/settings/close", response_model=DeviceSettingsResponse)
+async def close_device_settings_page(
+    payload: DeviceSettingsPageRequest,
+    credentials: HTTPAuthorizationCredentials = Depends(bearer_scheme),
+    conn: Connection = Depends(get_db),
+) -> DeviceSettingsResponse:
+    user = _parse_access_token(credentials, conn)
+    selected = _select_device_for_user(conn, int(user["id"]), payload.device_id)
+    if not selected:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Device not bound yet")
+    device_id = str(selected.get("device_id") or "")
+    settings_state = _get_device_settings(conn, int(user["id"]), device_id)
+    now_ms = int(time.time() * 1000)
+    ui_state = _merge_settings(
+        _cached_ui_state(selected),
+        {
+            "page": "expression",
+            "screen_awake": True,
+            "source": str(payload.source or "desktop"),
+            "last_closed_at_ms": now_ms,
+        },
+    )
+    outbound_payload = {
+        "device_id": device_id,
+        "ui_state": ui_state,
+        "settings": dict(settings_state.get("settings") or {}),
+    }
+    _enqueue_signal({"type": "settings_page_close", "timestamp_ms": now_ms, "payload": outbound_payload})
+    await event_manager.broadcast(
+        {
+            "type": "SettingsPageClosed",
+            "timestamp_ms": now_ms,
+            "payload": outbound_payload,
+        }
+    )
+    return DeviceSettingsResponse(
+        ok=True,
+        device_id=device_id,
+        settings=dict(settings_state.get("settings") or {}),
+        ui_state=ui_state,
+        updated_at_ms=settings_state.get("updated_at_ms"),
+    )
 
 
 @app.get("/api/chat/history", response_model=List[ChatMessageResponse])

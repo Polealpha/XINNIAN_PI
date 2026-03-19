@@ -24,6 +24,7 @@ class BackendSyncConfig:
     base_url: str = ""
     heartbeat_interval_sec: int = 15
     timeout_sec: int = 5
+    signal_poll_interval_sec: float = 1.0
 
 
 @dataclass
@@ -135,6 +136,30 @@ class HardwareConfig:
 
 
 @dataclass
+class ButtonInputConfig:
+    enabled: bool = False
+    gpio_pin: Optional[int] = None
+    pull_up: bool = True
+    hold_sec: float = 0.0
+    bounce_time: float = 0.08
+
+
+@dataclass
+class ButtonsConfig:
+    enabled: bool = False
+    allow_system_power_commands: bool = False
+    power_toggle: ButtonInputConfig = field(default_factory=ButtonInputConfig)
+    shutdown: ButtonInputConfig = field(default_factory=ButtonInputConfig)
+    settings: ButtonInputConfig = field(default_factory=ButtonInputConfig)
+
+
+@dataclass
+class UiConfig:
+    default_page: str = "expression"
+    settings_auto_return_sec: int = 0
+
+
+@dataclass
 class PiRuntimeConfig:
     service: ServiceConfig = field(default_factory=ServiceConfig)
     device: DeviceConfig = field(default_factory=DeviceConfig)
@@ -144,6 +169,8 @@ class PiRuntimeConfig:
     audio: AudioCaptureConfig = field(default_factory=AudioCaptureConfig)
     camera: CameraCaptureConfig = field(default_factory=CameraCaptureConfig)
     hardware: HardwareConfig = field(default_factory=HardwareConfig)
+    buttons: ButtonsConfig = field(default_factory=ButtonsConfig)
+    ui: UiConfig = field(default_factory=UiConfig)
 
     @classmethod
     def from_dict(cls, data: dict) -> "PiRuntimeConfig":
@@ -167,6 +194,15 @@ class PiRuntimeConfig:
             tilt_servo=tilt_servo,
             pca9685=pca9685,
         )
+        buttons_raw = data.get("buttons") or {}
+        buttons = ButtonsConfig(
+            enabled=bool(buttons_raw.get("enabled", False)),
+            allow_system_power_commands=bool(buttons_raw.get("allow_system_power_commands", False)),
+            power_toggle=ButtonInputConfig(**(buttons_raw.get("power_toggle") or {})),
+            shutdown=ButtonInputConfig(**(buttons_raw.get("shutdown") or {})),
+            settings=ButtonInputConfig(**(buttons_raw.get("settings") or {})),
+        )
+        ui = UiConfig(**(data.get("ui") or {}))
         return cls(
             service=service,
             device=device,
@@ -176,6 +212,8 @@ class PiRuntimeConfig:
             audio=audio,
             camera=camera,
             hardware=hardware,
+            buttons=buttons,
+            ui=ui,
         )
 
 
