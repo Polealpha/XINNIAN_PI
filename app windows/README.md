@@ -1,40 +1,64 @@
-# Windows 前端（EmoResonance）
+# EmoResonance Windows App
 
-本目录是 Windows 端控制台 UI（Vite + React + TS），用于展示情绪引擎实时状态、事件日志、设备状态与主动关怀聊天。
+This folder contains the current Windows desktop client for the Pi-first robot build.
 
-## 运行方式
+## Current role
 
-1. 安装依赖
+- Native login, activation, psychometric assessment, and owner binding
+- OpenClaw desktop conversation entry
+- Desktop-local speech transcription
+- Device monitoring, settings sync, and remote robot control
+- Emotion and proactive care visualization
+
+## Dev run
+
+1. Install dependencies
    ```bash
    npm install
    ```
-2. 配置后端地址
-   - 修改 `.env.local` 的 `VITE_API_BASE`（默认 `http://localhost:8000`）。
-3. 启动开发服务器
+2. Start the frontend
    ```bash
    npm run dev
    ```
-   默认端口 `3001`。
+3. Default frontend port is `3001`
 
-## 依赖后端
+## Backend contract
 
-请先启动后端（`backend`）并确保以下接口可用：
+The desktop app is designed to work with the local backend launched by Electron, or with a remote backend that implements the same contract.
+
+Important endpoints:
 
 - `POST /api/auth/login`
-- `POST /api/auth/register`
+- `GET /api/activation/state`
+- `POST /api/assistant/send`
+- `GET /api/assistant/session/status`
+- `GET /api/desktop/runtime/status`
+- `GET /api/desktop/voice/status`
+- `POST /api/desktop/voice/transcribe`
 - `GET /api/emotion/history`
 - `GET /api/emotion/realtime`
 - `GET /api/device/status`
-- `GET /api/chat/history`
-- `POST /api/chat/history`
-- `POST /api/llm/care`
-- `POST /api/llm/daily_summary`
+- `GET /api/device/settings`
+- `POST /api/device/settings`
 - WebSocket `ws://<host>:8000/ws/events`
 
-## 设备流接入（可选）
+## First-time device onboarding
 
-如果需要让引擎接入 ESP32-S3 的视频/音频流并推送事件：
+The old ESP BLE / SoftAP provisioning flow is no longer the active path.
 
-```bash
-py scripts/bridge_device_to_backend.py --device-ip <ESP_IP> --backend-url http://localhost:8000
-```
+The current provisioning component targets the Pi local onboarding API:
+
+- `GET http://<pi-host>:8090/onboarding/state`
+- `GET http://<pi-host>:8090/onboarding/networks`
+- `POST http://<pi-host>:8090/onboarding/wifi`
+
+Typical onboarding host while connected to the robot hotspot:
+
+- `192.168.4.1:8090`
+
+After Wi-Fi onboarding succeeds, the rest of setup continues in the native desktop activation flow:
+
+1. Login
+2. Identity confirmation
+3. 8-dimension assessment
+4. Owner face binding

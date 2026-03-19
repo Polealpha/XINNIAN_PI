@@ -1,31 +1,48 @@
 import { apiGet, apiPost } from "./apiClient";
 
-export const provisionDevice = async (
-  deviceId: string,
-  ssid: string,
-  password: string,
-  deviceIp?: string,
-  options?: {
-    transport?: "ble" | "softap";
-    serviceName?: string;
-    pop?: string;
-    timeoutSec?: number;
+const normalizeDeviceRuntimeBase = (hostOrUrl: string) => {
+  const raw = String(hostOrUrl || "").trim();
+  if (!raw) throw new Error("device_runtime_host_required");
+  const withScheme = /^https?:\/\//i.test(raw) ? raw : `http://${raw}`;
+  return withScheme.replace(/\/+$/, "");
+};
+
+const fetchDeviceRuntime = async (hostOrUrl: string, path: string, init?: RequestInit) => {
+  const base = normalizeDeviceRuntimeBase(hostOrUrl);
+  const response = await fetch(`${base}${path}`, {
+    ...init,
+    headers: {
+      "Content-Type": "application/json",
+      ...(init?.headers || {}),
+    },
+  });
+  if (!response.ok) {
+    const text = await response.text();
+    throw new Error(text || `device_runtime_http_${response.status}`);
   }
-) => {
-  return apiPost(
-    "/api/device/provision/execute",
-    {
-      device_id: deviceId,
+  return response.json();
+};
+
+export const getDeviceOnboardingState = async (deviceHost: string) => {
+  return fetchDeviceRuntime(deviceHost, "/onboarding/state", {
+    method: "GET",
+  });
+};
+
+export const listDeviceOnboardingNetworks = async (deviceHost: string) => {
+  return fetchDeviceRuntime(deviceHost, "/onboarding/networks", {
+    method: "GET",
+  });
+};
+
+export const configureDeviceWifiLocal = async (deviceHost: string, ssid: string, password: string) => {
+  return fetchDeviceRuntime(deviceHost, "/onboarding/wifi", {
+    method: "POST",
+    body: JSON.stringify({
       ssid,
       password,
-      device_ip: deviceIp || undefined,
-      transport: options?.transport || "ble",
-      service_name: options?.serviceName,
-      pop: options?.pop,
-      timeout_sec: options?.timeoutSec,
-    },
-    true
-  );
+    }),
+  });
 };
 
 export const getDeviceStatus = async (deviceId?: string, deviceIp?: string) => {
