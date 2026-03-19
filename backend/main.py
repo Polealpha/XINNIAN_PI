@@ -15,7 +15,7 @@ from collections import deque
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from fastapi import Depends, FastAPI, File, HTTPException, Request, UploadFile, status, WebSocket, WebSocketDisconnect
+from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, UploadFile, status, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, StreamingResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
@@ -54,6 +54,7 @@ from .assessment_prompts import (
 )
 from .personality_prompts import PERSONALITY_EXTRACTION_PROMPT, PERSONALITY_SYSTEM_PROMPT
 from .assistant_service import AssistantService, build_session_key, normalize_surface
+from .desktop_speech import DesktopSpeechService
 from .db import get_db, init_db
 from .openclaw_gateway import OpenClawGatewayError
 from .schemas import (
@@ -89,6 +90,8 @@ from .schemas import (
     CareResponse,
     DailySummaryRequest,
     DailySummaryResponse,
+    DesktopVoiceStatusResponse,
+    DesktopVoiceTranscribeResponse,
     DeviceInfoResponse,
     DeviceHeartbeatRequest,
     DeviceHeartbeatResponse,
@@ -242,6 +245,7 @@ class EventManager:
 
 event_manager = EventManager()
 assistant_service = AssistantService()
+desktop_speech_service = DesktopSpeechService()
 
 
 @app.on_event("startup")
@@ -255,6 +259,15 @@ def runtime_version() -> Dict[str, object]:
     payload = _runtime_version_payload()
     payload["ok"] = True
     return payload
+
+
+@app.get("/api/desktop/voice/status", response_model=DesktopVoiceStatusResponse)
+def desktop_voice_status(
+    credentials: HTTPAuthorizationCredentials = Depends(bearer_scheme),
+    conn: Connection = Depends(get_db),
+) -> DesktopVoiceStatusResponse:
+    _parse_access_token(credentials, conn)
+    return DesktopVoiceStatusResponse(**desktop_speech_service.status())
 
 
 def _wifi_cipher() -> Fernet:
@@ -3840,6 +3853,32 @@ async def chat_upload(
             "size": size,
         },
     }
+
+
+@app.post("/api/desktop/voice/transcribe", response_model=DesktopVoiceTranscribeResponse)
+async def desktop_voice_transcribe(
+    file: UploadFile = File(...),
+    context: str = Form("chat"),
+    credentials: HTTPAuthorizationCredentials = Depends(bearer_scheme),
+    conn: Connection = Depends(get_db),
+) -> DesktopVoiceTranscribeResponse:
+    _parse_access_token(credentials, conn)
+    content_type = str(file.content_type or "").lower()
+    if not (content_type.startswith("audio/") or str(file.filename or "").lower().endswith(".wav")):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Only audio uploads are supported")
+    try:
+        audio_bytes = await file.read()
+        payload = desktop_speech_service.transcribe_upload(
+            audio_bytes=audio_bytes,
+            filename=str(file.filename or ""),
+            content_type=content_type,
+            context=str(context or "chat"),
+        )
+        return DesktopVoiceTranscribeResponse(**payload)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(exc)) from exc
 
 
 async def _assistant_send_impl(

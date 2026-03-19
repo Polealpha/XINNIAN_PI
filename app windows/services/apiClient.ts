@@ -17,6 +17,7 @@ const SERVER_PATH_PREFIXES = [
   "/api/chat/",
   "/api/activation/",
   "/api/assistant/",
+  "/api/desktop/",
   "/api/device/",
   "/api/client/",
   "/api/llm/",

@@ -410,6 +410,34 @@ class AssistantMemorySearchResponse(BaseModel):
     results: list[dict] = Field(default_factory=list)
 
 
+class DesktopVoiceStatusResponse(BaseModel):
+    ok: bool
+    ready: bool = False
+    provider_preference: str = "faster_whisper"
+    fallback_provider: str = "sherpa_onnx"
+    active_provider: str = ""
+    primary_ready: bool = False
+    primary_engine: str = ""
+    primary_error: Optional[str] = None
+    fallback_ready: bool = False
+    fallback_engine: str = ""
+    fallback_error: Optional[str] = None
+    language: str = "zh"
+    max_sec: int = 45
+    model_name: str = "small"
+
+
+class DesktopVoiceTranscribeResponse(BaseModel):
+    ok: bool
+    transcript: str = ""
+    provider: str = ""
+    used_fallback: bool = False
+    duration_ms: int = 0
+    latency_ms: int = 0
+    context: str = "chat"
+    ready: bool = False
+
+
 class AssistantBridgeSendRequest(BaseModel):
     sender_id: str
     text: str

@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
   Bot,
   Brain,
@@ -30,6 +30,7 @@ import {
   type ActivationAssessmentState,
   type ActivationIdentityInference,
 } from "../services/activationService";
+import { createDesktopVoiceRecorder, transcribeDesktopAudio } from "../services/desktopVoiceService";
 
 interface ActivationGateProps {
   onActivated: () => Promise<void> | void;
@@ -97,6 +98,8 @@ export const ActivationGate: React.FC<ActivationGateProps> = ({ onActivated }) =
   const [busy, setBusy] = useState(false);
   const [finishing, setFinishing] = useState(false);
   const [voiceBusy, setVoiceBusy] = useState(false);
+  const [desktopVoiceBusy, setDesktopVoiceBusy] = useState(false);
+  const [desktopVoiceRecording, setDesktopVoiceRecording] = useState(false);
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
   const [identityReady, setIdentityReady] = useState(false);
@@ -107,6 +110,7 @@ export const ActivationGate: React.FC<ActivationGateProps> = ({ onActivated }) =
   const [observedName, setObservedName] = useState("");
   const [answerDraft, setAnswerDraft] = useState("");
   const [scanState, setScanState] = useState("");
+  const desktopVoiceRecorderRef = useRef<{ stop: () => Promise<Blob> } | null>(null);
 
   const loadState = async () => {
     const [activation, assessment] = await Promise.all([getActivationState(), getAssessmentState()]);
@@ -289,8 +293,9 @@ export const ActivationGate: React.FC<ActivationGateProps> = ({ onActivated }) =
     }
   };
 
-  const handleSubmitAnswer = async () => {
-    if (!answerDraft.trim()) {
+  const submitAssessmentAnswer = async (rawAnswer: string, voiceMode: "text" | "robot" | "desktop" = "text") => {
+    const normalizedAnswer = String(rawAnswer || "").trim();
+    if (!normalizedAnswer) {
       setError("先输入这一轮回答。");
       return;
     }
@@ -299,10 +304,10 @@ export const ActivationGate: React.FC<ActivationGateProps> = ({ onActivated }) =
     setSuccess("");
     try {
       const nextState = await submitAssessmentTurn({
-        answer: answerDraft.trim(),
-        transcript: answerDraft.trim(),
+        answer: normalizedAnswer,
+        transcript: normalizedAnswer,
         surface: "desktop",
-        voice_mode: assessmentState.voice_session_active ? "robot" : "text",
+        voice_mode: voiceMode === "desktop" ? "text" : voiceMode,
       });
       setAssessmentState(nextState);
       setAnswerDraft("");
@@ -316,6 +321,51 @@ export const ActivationGate: React.FC<ActivationGateProps> = ({ onActivated }) =
       setError(err instanceof Error ? err.message : String(err));
     } finally {
       setBusy(false);
+    }
+  };
+
+  const handleSubmitAnswer = async () =>
+    submitAssessmentAnswer(answerDraft, assessmentState.voice_session_active ? "robot" : "text");
+
+  const handleDesktopVoiceAnswer = async () => {
+    if (!identityReady || psychometricCompleted) {
+      return;
+    }
+    setError("");
+    if (desktopVoiceRecording && desktopVoiceRecorderRef.current) {
+      setDesktopVoiceBusy(true);
+      try {
+        const blob = await desktopVoiceRecorderRef.current.stop();
+        desktopVoiceRecorderRef.current = null;
+        setDesktopVoiceRecording(false);
+        const result = await transcribeDesktopAudio(blob, "activation_assessment");
+        const transcript = String(result.transcript || "").trim();
+        if (!transcript) {
+          setError("没有识别到有效语音，请重试");
+          return;
+        }
+        setAnswerDraft(transcript);
+        await submitAssessmentAnswer(transcript, "desktop");
+      } catch (err) {
+        setError(err instanceof Error ? err.message : String(err));
+        setDesktopVoiceRecording(false);
+        desktopVoiceRecorderRef.current = null;
+      } finally {
+        setDesktopVoiceBusy(false);
+      }
+      return;
+    }
+    setDesktopVoiceBusy(true);
+    try {
+      desktopVoiceRecorderRef.current = await createDesktopVoiceRecorder();
+      setDesktopVoiceRecording(true);
+      setSuccess("电脑端本地录音已开始，说完后再按一次按钮结束并提交");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+      desktopVoiceRecorderRef.current = null;
+      setDesktopVoiceRecording(false);
+    } finally {
+      setDesktopVoiceBusy(false);
     }
   };
 
@@ -604,6 +654,20 @@ export const ActivationGate: React.FC<ActivationGateProps> = ({ onActivated }) =
                   <PlayCircle size={16} />
                 )}
                 {assessmentState.voice_session_active ? "停止机器人语音测评" : "开启机器人语音测评"}
+              </button>
+              <button
+                onClick={handleDesktopVoiceAnswer}
+                disabled={!identityReady || desktopVoiceBusy || busy || psychometricCompleted}
+                className="rounded-2xl border border-amber-400/25 bg-amber-500/10 text-amber-200 px-5 py-3 text-sm font-black flex items-center gap-2 disabled:opacity-50"
+              >
+                {desktopVoiceBusy ? (
+                  <LoaderCircle className="animate-spin" size={16} />
+                ) : desktopVoiceRecording ? (
+                  <PauseCircle size={16} />
+                ) : (
+                  <Mic size={16} />
+                )}
+                {desktopVoiceRecording ? "结束本地语音回答" : "本地语音回答"}
               </button>
               <button
                 onClick={handleForceFinish}

@@ -1,8 +1,9 @@
 ﻿import React, { useEffect, useRef, useState } from "react";
 import { ChatAttachment, ChatMessage, EmotionType } from "../types";
-import { Send, Sparkles, User, Bot, Activity, Paperclip, X } from "lucide-react";
+import { Send, Sparkles, User, Bot, Activity, Paperclip, X, Mic, Square, LoaderCircle } from "lucide-react";
 import { generateCareMessage, generateCareMessageStream } from "../services/llmService";
 import { uploadChatAttachment } from "../services/chatService";
+import { createDesktopVoiceRecorder, transcribeDesktopAudio } from "../services/desktopVoiceService";
 
 interface ChatInterfaceProps {
   currentEmotion: EmotionType;
@@ -134,6 +135,10 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
   const streamPendingTextRef = useRef("");
   const streamLastFlushMsRef = useRef(0);
   const historyHydratedRef = useRef(false);
+  const voiceRecorderRef = useRef<{ stop: () => Promise<Blob> } | null>(null);
+  const [voiceRecording, setVoiceRecording] = useState(false);
+  const [voiceBusy, setVoiceBusy] = useState(false);
+  const [voiceError, setVoiceError] = useState("");
 
   useEffect(() => {
     const next = initialMessages.filter((msg) => hasRenderableContent(msg));
@@ -248,8 +253,8 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
     await addAttachmentsFromFiles(files);
   };
 
-  const handleSend = async () => {
-    const trimmed = input.trim();
+  const handleSend = async (overrideText?: string) => {
+    const trimmed = String(overrideText ?? input).trim();
     const outgoingAttachments = pendingAttachments.slice(0, 6);
     if (!trimmed && outgoingAttachments.length === 0) return;
 
@@ -286,9 +291,12 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
 
     setMessages((prev) => [...prev, userMsg]);
     if (onSendMessage) onSendMessage(userMsg);
-    setInput("");
+    if (!overrideText) {
+      setInput("");
+    }
     setPendingAttachments([]);
     setAttachmentError("");
+    setVoiceError("");
     setIsTyping(true);
     streamAbortRef.current?.abort();
     const abortCtrl = new AbortController();
@@ -456,6 +464,44 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
     }
   };
 
+  const handleVoiceToggle = async () => {
+    setVoiceError("");
+    if (voiceRecording && voiceRecorderRef.current) {
+      setVoiceBusy(true);
+      try {
+        const blob = await voiceRecorderRef.current.stop();
+        voiceRecorderRef.current = null;
+        setVoiceRecording(false);
+        const result = await transcribeDesktopAudio(blob, "chat");
+        const transcript = String(result.transcript || "").trim();
+        if (!transcript) {
+          setVoiceError("没有识别到有效语音，请重试");
+          return;
+        }
+        await handleSend(transcript);
+      } catch (err) {
+        setVoiceError(err instanceof Error ? err.message : String(err));
+        setVoiceRecording(false);
+        voiceRecorderRef.current = null;
+      } finally {
+        setVoiceBusy(false);
+      }
+      return;
+    }
+
+    setVoiceBusy(true);
+    try {
+      voiceRecorderRef.current = await createDesktopVoiceRecorder();
+      setVoiceRecording(true);
+    } catch (err) {
+      setVoiceError(err instanceof Error ? err.message : String(err));
+      voiceRecorderRef.current = null;
+      setVoiceRecording(false);
+    } finally {
+      setVoiceBusy(false);
+    }
+  };
+
   return (
     <div
       className={`relative flex flex-col h-full backdrop-blur-3xl shadow-2xl border border-white/5 overflow-hidden animate-pop-in ${
@@ -608,11 +654,26 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
           <button
             type="button"
             onClick={pickAttachments}
-            disabled={uploading}
+            disabled={uploading || voiceBusy}
             className="text-slate-300 hover:text-white disabled:opacity-40"
             title="上传图片或视频"
           >
             <Paperclip size={compact ? 16 : 18} />
+          </button>
+          <button
+            type="button"
+            onClick={handleVoiceToggle}
+            disabled={uploading || isTyping || voiceBusy}
+            className={`disabled:opacity-40 ${voiceRecording ? "text-rose-300 hover:text-rose-200" : "text-slate-300 hover:text-white"}`}
+            title={voiceRecording ? "结束录音并转写" : "本地语音输入"}
+          >
+            {voiceBusy ? (
+              <LoaderCircle size={compact ? 16 : 18} className="animate-spin" />
+            ) : voiceRecording ? (
+              <Square size={compact ? 16 : 18} fill="currentColor" />
+            ) : (
+              <Mic size={compact ? 16 : 18} />
+            )}
           </button>
           <input
             type="text"
@@ -636,6 +697,8 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
           </button>
         </div>
         {attachmentError && <p className="text-[10px] font-bold text-rose-400 mt-2">{attachmentError}</p>}
+        {voiceError && <p className="text-[10px] font-bold text-rose-400 mt-2">{voiceError}</p>}
+        {voiceRecording && <p className="text-[10px] font-bold text-amber-300 mt-2">正在本地录音，再按一次麦克风即可结束并自动发送</p>}
         {!compact && (
           <p className="text-[9px] text-center mt-3 text-slate-600 font-black uppercase tracking-tighter">
             机器人动作指令（语音/动作/表情）由本地引擎实时处理
