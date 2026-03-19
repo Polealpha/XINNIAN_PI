@@ -62,8 +62,9 @@ class OpenClawGatewayClient:
         runtime = self._load_runtime()
         timeout_ms = max(5000, int(self.config.timeout_ms))
         async with self._connect(runtime) as ws:
-            await self._connect_session(ws, runtime)
-            baseline = await self._latest_assistant_message(ws, str(session_key))
+            inbox: List[Dict[str, object]] = []
+            await self._connect_session(ws, runtime, inbox)
+            baseline = await self._latest_assistant_message(ws, str(session_key), inbox)
             run_id = f"assistant-{int(time.time() * 1000)}-{uuid.uuid4().hex[:8]}"
             response = await self._rpc_request(
                 ws,
@@ -75,17 +76,25 @@ class OpenClawGatewayClient:
                     "timeoutMs": timeout_ms,
                     "idempotencyKey": run_id,
                 },
+                inbox,
                 timeout_ms=max(timeout_ms, 15000),
             )
             if not response.get("ok"):
                 raise OpenClawGatewayError(f"OpenClaw chat.send failed: {response.get('error')}")
-            return await self._wait_for_reply(ws, str(session_key), run_id, baseline, timeout_ms)
+            return await self._wait_for_reply(ws, str(session_key), run_id, baseline, inbox, timeout_ms)
 
     async def reset_session(self, session_key: str) -> None:
         runtime = self._load_runtime()
         async with self._connect(runtime) as ws:
-            await self._connect_session(ws, runtime)
-            response = await self._rpc_request(ws, "sessions.reset", {"key": str(session_key)}, timeout_ms=10000)
+            inbox: List[Dict[str, object]] = []
+            await self._connect_session(ws, runtime, inbox)
+            response = await self._rpc_request(
+                ws,
+                "sessions.reset",
+                {"key": str(session_key)},
+                inbox,
+                timeout_ms=10000,
+            )
             if not response.get("ok"):
                 raise OpenClawGatewayError(f"OpenClaw sessions.reset failed: {response.get('error')}")
 
@@ -121,7 +130,7 @@ class OpenClawGatewayClient:
             raise OpenClawGatewayError("websockets dependency missing")
         return websockets.connect(runtime["url"], origin=runtime["origin"], max_size=20_000_000)
 
-    async def _connect_session(self, ws, runtime: Dict[str, str]) -> None:
+    async def _connect_session(self, ws, runtime: Dict[str, str], inbox: List[Dict[str, object]]) -> None:
         private_key = load_pem_private_key(runtime["private_key_pem"].encode("utf-8"), password=None)
         public_key = load_pem_public_key(runtime["public_key_pem"].encode("utf-8"))
         public_raw = public_key.public_bytes(Encoding.Raw, PublicFormat.Raw)
@@ -130,7 +139,7 @@ class OpenClawGatewayClient:
             raise OpenClawGatewayError("OpenClaw device id missing")
         nonce: Optional[str] = None
         try:
-            first = json.loads(await asyncio.wait_for(ws.recv(), timeout=1.2))
+            first, _ = await self._recv_json(ws, inbox, timeout=min(1.2, max(0.1, 1.2)))
             if first.get("type") == "event" and first.get("event") == "connect.challenge":
                 nonce = str((first.get("payload") or {}).get("nonce") or "") or None
         except Exception:
@@ -176,6 +185,7 @@ class OpenClawGatewayClient:
                 "userAgent": "chonggou-backend",
                 "locale": "zh-CN",
             },
+            inbox,
             timeout_ms=10000,
         )
         if not response.get("ok"):
@@ -187,6 +197,7 @@ class OpenClawGatewayClient:
         session_key: str,
         run_id: str,
         baseline: Optional[Dict[str, object]],
+        inbox: List[Dict[str, object]],
         timeout_ms: int,
     ) -> str:
         deadline = time.monotonic() + timeout_ms / 1000.0
@@ -194,16 +205,15 @@ class OpenClawGatewayClient:
         while time.monotonic() < deadline:
             now = time.monotonic()
             if now >= next_history_poll:
-                latest = await self._latest_assistant_message(ws, session_key)
+                latest = await self._latest_assistant_message(ws, session_key, inbox)
                 if self._is_new_assistant_message(latest, baseline):
                     return str(latest.get("text") or "").strip()
                 next_history_poll = now + 1.5
             remaining = deadline - time.monotonic()
             try:
-                raw = await asyncio.wait_for(ws.recv(), timeout=min(remaining, 2.0))
+                msg, _ = await self._recv_json(ws, inbox, timeout=min(remaining, 2.0))
             except asyncio.TimeoutError:
                 continue
-            msg = json.loads(raw)
             if msg.get("type") != "event" or msg.get("event") != "chat":
                 continue
             payload = msg.get("payload") or {}
@@ -215,16 +225,28 @@ class OpenClawGatewayClient:
             if state in {"error", "aborted"}:
                 raise OpenClawGatewayError(f"OpenClaw chat {state}: {payload.get('errorMessage')}")
         try:
-            await self._rpc_request(ws, "chat.abort", {"sessionKey": session_key, "runId": run_id}, timeout_ms=3000)
+            await self._rpc_request(
+                ws,
+                "chat.abort",
+                {"sessionKey": session_key, "runId": run_id},
+                inbox,
+                timeout_ms=3000,
+            )
         except Exception:
             pass
         raise OpenClawGatewayError("OpenClaw chat timed out")
 
-    async def _latest_assistant_message(self, ws, session_key: str) -> Optional[Dict[str, object]]:
+    async def _latest_assistant_message(
+        self,
+        ws,
+        session_key: str,
+        inbox: List[Dict[str, object]],
+    ) -> Optional[Dict[str, object]]:
         response = await self._rpc_request(
             ws,
             "chat.history",
             {"sessionKey": session_key, "limit": 20},
+            inbox,
             timeout_ms=8000,
         )
         payload = response.get("payload") if isinstance(response, dict) else None
@@ -264,7 +286,14 @@ class OpenClawGatewayClient:
             return True
         return str(latest.get("text") or "").strip() != str(baseline.get("text") or "").strip()
 
-    async def _rpc_request(self, ws, method: str, params: Dict[str, object], timeout_ms: int) -> Dict[str, object]:
+    async def _rpc_request(
+        self,
+        ws,
+        method: str,
+        params: Dict[str, object],
+        inbox: List[Dict[str, object]],
+        timeout_ms: int,
+    ) -> Dict[str, object]:
         req_id = str(uuid.uuid4())
         await ws.send(json.dumps({"type": "req", "id": req_id, "method": method, "params": params}, ensure_ascii=False))
         deadline = time.monotonic() + max(1.0, timeout_ms / 1000.0)
@@ -272,10 +301,22 @@ class OpenClawGatewayClient:
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 raise OpenClawGatewayError(f"OpenClaw rpc timeout: {method}")
-            raw = await asyncio.wait_for(ws.recv(), timeout=min(remaining, 2.0))
-            msg = json.loads(raw)
+            msg, from_inbox = await self._recv_json(ws, inbox, timeout=min(remaining, 2.0))
             if msg.get("type") == "res" and msg.get("id") == req_id:
                 return msg
+            if not from_inbox:
+                inbox.append(msg)
+
+    async def _recv_json(
+        self,
+        ws,
+        inbox: List[Dict[str, object]],
+        timeout: float,
+    ) -> tuple[Dict[str, object], bool]:
+        if inbox:
+            return inbox.pop(0), True
+        raw = await asyncio.wait_for(ws.recv(), timeout=max(0.05, float(timeout)))
+        return json.loads(raw), False
 
     @staticmethod
     def _extract_text_from_message(message_obj: Dict[str, object]) -> str:

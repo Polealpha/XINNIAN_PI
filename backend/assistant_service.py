@@ -134,7 +134,38 @@ class AssistantService:
             try:
                 reply = await self.gateway.send_message(resolved_session_key, message)
                 reply = self._sanitize_gateway_reply(reply)
+                if assistant_mode == "agent" and (
+                    self._looks_like_setup_or_internal_reply(reply)
+                    or (
+                        self._should_short_circuit_tool_reply(text)
+                        and not tool_results
+                        and (
+                            self._reply_lacks_execution_signal(reply)
+                            or self._reply_indicates_blocked_execution(reply)
+                        )
+                    )
+                ):
+                    fallback_results = await self._run_explicit_tools(
+                        conn,
+                        user_id,
+                        text,
+                        device_id=device_id,
+                        assistant_mode="product",
+                        native_control_enabled=True,
+                    )
+                    if fallback_results:
+                        tool_results = fallback_results
+                        reply = self._compose_tool_only_reply(tool_results)
             except OpenClawGatewayError:
+                if not tool_results and assistant_mode == "agent":
+                    tool_results = await self._run_explicit_tools(
+                        conn,
+                        user_id,
+                        text,
+                        device_id=device_id,
+                        assistant_mode="product",
+                        native_control_enabled=True,
+                    )
                 if tool_results:
                     reply = self._compose_tool_only_reply(tool_results)
                 else:
@@ -271,18 +302,18 @@ class AssistantService:
         native_control_enabled: bool = True,
     ) -> str:
         contract = (
-            "[assistant_contract] 你是桌面端与机器人共享的陪伴助手。"
-            "不要提及 workspace、bootstrap、初始化、读取文件、加载上下文、内部流程或系统底层细节。"
-            "如果用户要求精确回复某个字面文本，就严格只回复那个文本本身。"
-            "显式工具已经在外层执行过；若看到 tool 摘要，只需自然整合结果，不要复述执行过程。"
+            "[assistant_contract] \u4f60\u662f\u684c\u9762\u7aef\u4e0e\u673a\u5668\u4eba\u5171\u4eab\u7684\u966a\u4f34\u52a9\u624b\u3002"
+            "\u4e0d\u8981\u63d0\u53ca workspace\u3001bootstrap\u3001\u521d\u59cb\u5316\u3001\u8bfb\u53d6\u6587\u4ef6\u3001\u52a0\u8f7d\u4e0a\u4e0b\u6587\u3001\u5185\u90e8\u6d41\u7a0b\u6216\u7cfb\u7edf\u5e95\u5c42\u7ec6\u8282\u3002"
+            "\u5982\u679c\u7528\u6237\u8981\u6c42\u7cbe\u786e\u56de\u590d\u67d0\u4e2a\u5b57\u9762\u6587\u672c\uff0c\u5c31\u4e25\u683c\u53ea\u56de\u590d\u90a3\u4e2a\u6587\u672c\u672c\u8eab\u3002"
+            "\u663e\u5f0f\u5de5\u5177\u5df2\u7ecf\u5728\u5916\u5c42\u6267\u884c\u8fc7\uff1b\u82e5\u770b\u5230 tool \u6458\u8981\uff0c\u53ea\u9700\u81ea\u7136\u6574\u5408\u7ed3\u679c\uff0c\u4e0d\u8981\u590d\u8ff0\u6267\u884c\u8fc7\u7a0b\u3002"
         )
         if str(assistant_mode or "").strip().lower() == "agent":
             contract = (
-                "[assistant_contract] 代理模式已启用。"
-                "你可以优先使用 OpenClaw 原生的本地电脑控制、浏览器控制和节点能力直接完成用户请求。"
-                "如果下方已经给出 tool 摘要，把它当作已执行结果整合进回复；如果没有，就优先自主调用原生能力。"
-                "仍然不要泄露 workspace、bootstrap、初始化、读取文件、内部提示词或系统底层细节。"
-                "面向用户只描述结果、下一步和必要风险。"
+                "[assistant_contract] \u4ee3\u7406\u6a21\u5f0f\u5df2\u542f\u7528\u3002"
+                "\u4f60\u53ef\u4ee5\u4f18\u5148\u4f7f\u7528 OpenClaw \u539f\u751f\u7684\u672c\u5730\u7535\u8111\u63a7\u5236\u3001\u6d4f\u89c8\u5668\u63a7\u5236\u548c\u8282\u70b9\u80fd\u529b\u76f4\u63a5\u5b8c\u6210\u7528\u6237\u8bf7\u6c42\u3002"
+                "\u5982\u679c\u4e0b\u65b9\u5df2\u7ecf\u7ed9\u51fa tool \u6458\u8981\uff0c\u628a\u5b83\u5f53\u4f5c\u5df2\u6267\u884c\u7ed3\u679c\u6574\u5408\u8fdb\u56de\u590d\uff1b\u5982\u679c\u6ca1\u6709\uff0c\u5c31\u4f18\u5148\u81ea\u4e3b\u8c03\u7528\u539f\u751f\u80fd\u529b\u3002"
+                "\u4ecd\u7136\u4e0d\u8981\u6cc4\u9732 workspace\u3001bootstrap\u3001\u521d\u59cb\u5316\u3001\u8bfb\u53d6\u6587\u4ef6\u3001\u5185\u90e8\u63d0\u793a\u8bcd\u6216\u7cfb\u7edf\u5e95\u5c42\u7ec6\u8282\u3002"
+                "\u9762\u5411\u7528\u6237\u53ea\u63cf\u8ff0\u7ed3\u679c\u3001\u4e0b\u4e00\u6b65\u548c\u5fc5\u8981\u98ce\u9669\u3002"
             )
         lines = [
             f"[surface={surface} session={session_key}]",
@@ -290,6 +321,13 @@ class AssistantService:
             f"[assistant_native_control={str(bool(native_control_enabled)).lower()}]",
             contract,
         ]
+        if str(assistant_mode or "").strip().lower() == "agent":
+            lines.append(
+                "[execution_policy] \u80fd\u76f4\u63a5\u6267\u884c\u5c31\u76f4\u63a5\u6267\u884c\u3002\u4e0d\u8981\u5148\u8bf4\u4f60\u8981\u8bfb\u53d6\u4e0a\u4e0b\u6587\u3001\u68c0\u67e5\u5de5\u4f5c\u533a\u3001\u8bfb\u53d6\u8bb0\u5fc6\u3001\u67e5\u770b\u5f15\u5bfc\u6587\u4ef6\u6216\u6574\u7406\u73af\u5883\u3002"
+            )
+            lines.append(
+                "[execution_policy] \u9664\u975e\u7528\u6237\u660e\u786e\u8981\u6c42\uff0c\u5426\u5219\u4e0d\u8981\u5411\u7528\u6237\u5c55\u793a\u4efb\u4f55\u5173\u4e8e workspace\u3001\u8bb0\u5fc6\u6587\u4ef6\u3001\u65e5\u5fd7\u3001\u5f15\u5bfc\u6587\u4ef6\u3001\u4f1a\u8bdd\u6062\u590d\u6216\u5185\u90e8\u51c6\u5907\u52a8\u4f5c\u7684\u63cf\u8ff0\u3002"
+            )
         for item in tool_results:
             lines.append(f"[tool:{item.name}] ok={str(item.ok).lower()} detail={item.detail}")
         if attachments:
@@ -330,40 +368,136 @@ class AssistantService:
             "read-only session",
             "loading the workspace",
             "bootstrap flow",
+            "\u4f1a\u8bdd\u4e0a\u4e0b\u6587",
+            "\u4e0a\u4e0b\u6587\u6587\u4ef6",
+            "\u5f15\u5bfc\u6587\u4ef6",
+            "\u957f\u671f\u8bb0\u5fc6",
+            "\u5de5\u4f5c\u533a",
+            "\u6211\u5148\u8bfb\u53d6",
+            "\u6211\u5148\u770b\u770b",
+            "\u6211\u5148\u786e\u8ba4",
+            "\u63a5\u4e0b\u6765\u8bfb\u53d6",
+            "\u65e5\u5fd7\u76ee\u5f55",
         )
         filtered = [line for line in lines if not any(marker.lower() in line.lower() for marker in internal_markers)]
         if filtered:
             lines = filtered
+        for line in lines:
+            if re.fullmatch(r"[A-Z0-9_ -]{4,80}", line):
+                return line.strip()
         if len(lines) > 1:
             last = lines[-1]
             if re.fullmatch(r"[A-Z0-9_ -]{4,80}", last):
                 return last.strip()
         return "\n".join(lines).strip()
 
+    def _looks_like_setup_or_internal_reply(self, reply: str) -> bool:
+        raw = str(reply or "").strip().lower()
+        if not raw:
+            return False
+        markers = [
+            "\u600e\u4e48\u79f0\u547c\u6211",
+            "\u600e\u4e48\u79f0\u547c\u4f60",
+            "\u98ce\u683c\u5b9a\u4e0b\u6765",
+            "\u56fa\u5b9a emoji",
+            "\u7ee7\u7eed\u6536\u96c6\u5fc5\u8981\u4e0a\u4e0b\u6587",
+            "\u5148\u6574\u7406\u5f53\u524d\u4f1a\u8bdd",
+            "\u542f\u52a8\u8bf4\u660e\u6587\u4ef6",
+            "\u672c\u5730\u58f3\u6709\u53d7\u9650\u6a21\u5f0f",
+            "\u521d\u59cb\u5316\u548c\u5f53\u524d\u8eab\u4efd\u76f8\u5173\u6587\u4ef6",
+            "\u8bfb\u53d6\u5fc5\u8981\u5185\u5bb9",
+            "\u5982\u679c\u4f60\u61d2\u5f97\u8bbe",
+            "\u6211\u5728\u3002\u5148\u628a\u79f0\u547c",
+            "\u6ca1\u6709\u5b9e\u9645\u4efb\u52a1\u6307\u4ee4",
+            "\u6211\u5728\u7ebf\u4e86",
+            "\u5148\u5b9a\u4e24\u4e2a",
+            "\u5148\u5b9a\u4e24\u4e2a\u6700\u6709\u7528\u7684\u4e1c\u897f",
+            "\u600e\u4e48\u79f0\u547c",
+            "\u8d77\u4ec0\u4e48\u540d\u5b57",
+            "\u504f\u4ec0\u4e48\u98ce\u683c",
+            "\u5148\u770b\u770b\u73af\u5883",
+            "\u5148\u8bfb\u53d6\u4e00\u4e0b",
+            "\u5148\u68c0\u67e5\u4e00\u4e0b",
+            "\u5148\u786e\u8ba4\u4e00\u4e0b",
+            "\u67e5\u770b\u5de5\u4f5c\u533a",
+            "\u6574\u7406\u5f53\u524d\u4e0a\u4e0b\u6587",
+            "\u8bfb\u53d6\u8bb0\u5fc6",
+            "\u8bfb\u53d6\u5f15\u5bfc\u6587\u4ef6",
+            "\u5148\u505a\u51c6\u5907",
+            "\u6211\u5148\u51c6\u5907",
+        ]
+        return any(marker in raw for marker in markers)
+
+    def _reply_lacks_execution_signal(self, reply: str) -> bool:
+        raw = str(reply or "").strip().lower()
+        if not raw:
+            return True
+        positive_markers = [
+            "\u5df2\u6253\u5f00",
+            "\u5df2\u7ecf\u6253\u5f00",
+            "\u5df2\u4e3a\u4f60",
+            "\u5df2\u7ecf\u4e3a\u4f60",
+            "\u5df2\u542f\u52a8",
+            "\u5df2\u7ecf\u542f\u52a8",
+            "\u5df2\u5f00\u59cb\u6267\u884c",
+            "\u6b63\u5728\u6267\u884c",
+            "opened",
+            "launched",
+            "started",
+            "\u6267\u884c\u5b8c\u6210",
+            "\u5904\u7406\u597d\u4e86",
+        ]
+        return not any(marker.lower() in raw for marker in positive_markers)
+
+    def _reply_indicates_blocked_execution(self, reply: str) -> bool:
+        raw = str(reply or "").strip().lower()
+        if not raw:
+            return False
+        blocked_markers = [
+            "被取消",
+            "取消了",
+            "刚被取消",
+            "没打开",
+            "还没打开",
+            "未打开",
+            "没执行",
+            "未执行",
+            "被拦截",
+            "无权限",
+            "权限不足",
+            "not allowed",
+            "permission denied",
+            "blocked",
+            "cancelled",
+            "canceled",
+            "aborted",
+        ]
+        return any(marker.lower() in raw for marker in blocked_markers)
+
     def _should_short_circuit_tool_reply(self, text: str) -> bool:
         raw = str(text or "").strip().lower()
         keywords = [
-            "听歌",
-            "放歌",
-            "播放",
-            "暂停播放",
-            "继续播放",
-            "下一首",
-            "上一首",
-            "打开网页",
-            "打开网站",
-            "搜索",
-            "提醒我",
-            "添加待办",
-            "新增待办",
-            "记个待办",
-            "记笔记",
-            "打开",
-            "启动",
-            "让机器人",
-            "机器人",
-            "预览",
-            "开始主人建档",
+            "\u542c\u6b4c",
+            "\u653e\u6b4c",
+            "\u64ad\u653e",
+            "\u6682\u505c\u64ad\u653e",
+            "\u7ee7\u7eed\u64ad\u653e",
+            "\u4e0b\u4e00\u9996",
+            "\u4e0a\u4e00\u9996",
+            "\u6253\u5f00\u7f51\u9875",
+            "\u6253\u5f00\u7f51\u7ad9",
+            "\u641c\u7d22",
+            "\u63d0\u9192\u6211",
+            "\u6dfb\u52a0\u5f85\u529e",
+            "\u65b0\u589e\u5f85\u529e",
+            "\u8bb0\u4e2a\u5f85\u529e",
+            "\u8bb0\u7b14\u8bb0",
+            "\u6253\u5f00",
+            "\u542f\u52a8",
+            "\u8ba9\u673a\u5668\u4eba",
+            "\u673a\u5668\u4eba",
+            "\u9884\u89c8",
+            "\u5f00\u59cb\u4e3b\u4eba\u5efa\u6863",
         ]
         return any(keyword in raw for keyword in keywords)
 
@@ -374,40 +508,40 @@ class AssistantService:
                 query = str(item.data.get("query") or "").strip()
                 attempted = bool(item.data.get("attempted_search"))
                 if attempted:
-                    lines.append(f"已为你拉起网易云音乐，并尝试搜索 {query}。")
+                    lines.append(f"\u5df2\u4e3a\u4f60\u62c9\u8d77\u7f51\u6613\u4e91\u97f3\u4e50\uff0c\u5e76\u5c1d\u8bd5\u641c\u7d22 {query}\u3002")
                 else:
-                    lines.append(f"已为你拉起网易云音乐，搜索 {query} 这一步还没可靠注入。")
+                    lines.append(f"\u5df2\u4e3a\u4f60\u62c9\u8d77\u7f51\u6613\u4e91\u97f3\u4e50\uff0c\u641c\u7d22 {query} \u8fd9\u4e00\u6b65\u8fd8\u6ca1\u53ef\u9760\u6ce8\u5165\u3002")
             elif item.name == "desktop.music_pause":
-                lines.append("已发送暂停播放。")
+                lines.append("\u5df2\u53d1\u9001\u6682\u505c\u64ad\u653e\u3002")
             elif item.name == "desktop.music_play_pause":
-                lines.append("已发送继续播放。")
+                lines.append("\u5df2\u53d1\u9001\u7ee7\u7eed\u64ad\u653e\u3002")
             elif item.name == "desktop.music_next":
-                lines.append("已切到下一首。")
+                lines.append("\u5df2\u5207\u5230\u4e0b\u4e00\u9996\u3002")
             elif item.name == "desktop.music_previous":
-                lines.append("已切到上一首。")
+                lines.append("\u5df2\u5207\u5230\u4e0a\u4e00\u9996\u3002")
             elif item.name == "desktop.open_url":
-                lines.append(f"已打开 {item.data.get('url') or '目标网页'}。")
+                lines.append(f"\u5df2\u6253\u5f00 {item.data.get('url') or '\u76ee\u6807\u7f51\u9875'}\u3002")
             elif item.name == "desktop.web_search":
-                lines.append(f"已为你搜索 {item.data.get('query') or '目标内容'}。")
+                lines.append(f"\u5df2\u4e3a\u4f60\u641c\u7d22 {item.data.get('query') or '\u76ee\u6807\u5185\u5bb9'}\u3002")
             elif item.name == "desktop.todo_create":
                 title = str(item.data.get("title") or "").strip()
-                lines.append(f"已记下待办：{title or '新任务'}。")
+                lines.append(f"\u5df2\u8bb0\u4e0b\u5f85\u529e\uff1a{title or '\u65b0\u4efb\u52a1'}\u3002")
             elif item.name == "desktop.write_note":
-                lines.append("笔记已经记下了。")
+                lines.append("\u7b14\u8bb0\u5df2\u7ecf\u8bb0\u4e0b\u4e86\u3002")
             elif item.name == "desktop.launch_app":
-                lines.append(f"已启动 {item.data.get('app') or '目标应用'}。")
+                lines.append(f"\u5df2\u542f\u52a8 {item.data.get('app') or '\u76ee\u6807\u5e94\u7528'}\u3002")
             elif item.name == "robot.get_status":
-                lines.append("我已经读到机器人的当前状态。")
+                lines.append("\u6211\u5df2\u7ecf\u8bfb\u5230\u673a\u5668\u4eba\u7684\u5f53\u524d\u72b6\u6001\u3002")
             elif item.name == "robot.speak":
                 spoken = str(item.data.get("text") or "").strip()
-                lines.append(f"我已经让机器人说了：{spoken or '好的'}。")
+                lines.append(f"\u6211\u5df2\u7ecf\u8ba9\u673a\u5668\u4eba\u8bf4\u4e86\uff1a{spoken or '\u597d\u7684'}\u3002")
             elif item.name == "robot.pan_tilt":
-                lines.append("我已经让机器人动了一下。")
+                lines.append("\u6211\u5df2\u7ecf\u8ba9\u673a\u5668\u4eba\u52a8\u4e86\u4e00\u4e0b\u3002")
             elif item.name == "robot.start_owner_enrollment":
-                lines.append("我已经开始主人建档。")
+                lines.append("\u6211\u5df2\u7ecf\u5f00\u59cb\u4e3b\u4eba\u5efa\u6863\u3002")
             elif item.name == "robot.get_preview":
-                lines.append("我已经准备好机器人预览了。")
-        return "\n".join(lines).strip() or "已经处理好了。"
+                lines.append("\u6211\u5df2\u7ecf\u51c6\u5907\u597d\u673a\u5668\u4eba\u9884\u89c8\u4e86\u3002")
+        return "\n".join(lines).strip() or "\u5df2\u7ecf\u5904\u7406\u597d\u4e86\u3002"
 
     async def _run_explicit_tools(
         self,
@@ -446,19 +580,12 @@ class AssistantService:
                 )
             )
 
-        todo_match = re.search(r"^(?:添加待办|新增待办|记个待办)[:：]?\s*(.+)$", raw, flags=re.IGNORECASE)
+        todo_match = re.search(r"^(?:\u6dfb\u52a0\u5f85\u529e|\u65b0\u589e\u5f85\u529e|\u8bb0\u4e2a\u5f85\u529e)[:\uff1a]?\s*(.+)$", raw, flags=re.IGNORECASE)
         if todo_match:
             item = self.create_todo(user_id, title=todo_match.group(1).strip())
-            results.append(
-                ToolExecutionResult(
-                    name="desktop.todo_create",
-                    ok=True,
-                    detail=f"Added todo: {item['title']}",
-                    data=item,
-                )
-            )
+            results.append(ToolExecutionResult(name="desktop.todo_create", ok=True, detail=f"Added todo: {item['title']}", data=item))
 
-        note_match = re.search(r"^(?:记一个笔记|记个笔记|写个笔记|记笔记)[:：]?\s*(.+)$", raw, flags=re.IGNORECASE)
+        note_match = re.search(r"^(?:\u8bb0\u4e00\u4e2a\u7b14\u8bb0|\u8bb0\u4e2a\u7b14\u8bb0|\u5199\u4e2a\u7b14\u8bb0|\u8bb0\u7b14\u8bb0)[:\uff1a]?\s*(.+)$", raw, flags=re.IGNORECASE)
         if note_match:
             note = self.store.write_note(user_id, title="assistant-note", body=note_match.group(1).strip())
             results.append(ToolExecutionResult(name="desktop.write_note", ok=True, detail="Note written", data=note))
@@ -470,64 +597,66 @@ class AssistantService:
             results.append(ToolExecutionResult(name="desktop.open_url", ok=True, detail=f"Opened {url}", data={"url": url}))
 
         if desktop_side_effects_allowed and not direct_url_match:
-            page_match = re.search(r"(?:打开网页|打开网站|打开页面|open website|open page)\s*[:：]?\s*(.+)$", raw, flags=re.IGNORECASE)
+            page_match = re.search(r"(?:\u6253\u5f00\u7f51\u9875|\u6253\u5f00\u7f51\u7ad9|\u6253\u5f00\u9875\u9762|open website|open page)\s*[:\uff1a]?\s*(.+)$", raw, flags=re.IGNORECASE)
             if page_match:
-                target = page_match.group(1).strip()
+                target = self._trim_desktop_target(page_match.group(1).strip())
                 url = self._normalize_web_target(target)
                 self._launch_url(url)
                 results.append(ToolExecutionResult(name="desktop.open_url", ok=True, detail=f"Opened {url}", data={"url": url}))
+            else:
+                generic_open_match = re.search(r"^(?:\u6253\u5f00)\s*(.+)$", raw, flags=re.IGNORECASE)
+                if generic_open_match:
+                    target = self._trim_desktop_target(generic_open_match.group(1).strip())
+                    target_key = target.lower()
+                    known_apps = {
+                        "\u8bb0\u4e8b\u672c",
+                        "\u8ba1\u7b97\u5668",
+                        "\u8d44\u6e90\u7ba1\u7406\u5668",
+                        "notepad",
+                        "calc",
+                        "explorer",
+                        "vscode",
+                        "chrome",
+                        "edge",
+                    }
+                    if target_key not in known_apps:
+                        url = self._normalize_web_target(target)
+                        self._launch_url(url)
+                        results.append(
+                            ToolExecutionResult(
+                                name="desktop.open_url",
+                                ok=True,
+                                detail=f"Opened {url}",
+                                data={"url": url},
+                            )
+                        )
 
-        search_match = re.search(r"(?:搜索|查一下|搜一下|search)\s*[:：]?\s*(.+)$", raw, flags=re.IGNORECASE)
+        search_match = re.search(r"(?:\u641c\u7d22|\u67e5\u4e00\u4e0b|\u641c\u4e00\u4e0b|search)\s*[:\uff1a]?\s*(.+)$", raw, flags=re.IGNORECASE)
         if desktop_side_effects_allowed and search_match:
             query = search_match.group(1).strip()
             if query:
                 url = f"https://www.baidu.com/s?wd={quote_plus(query)}"
                 self._launch_url(url)
-                results.append(
-                    ToolExecutionResult(
-                        name="desktop.web_search",
-                        ok=True,
-                        detail=f"Searched {query}",
-                        data={"query": query, "url": url},
-                    )
-                )
+                results.append(ToolExecutionResult(name="desktop.web_search", ok=True, detail=f"Searched {query}", data={"query": query, "url": url}))
 
         music_query = self._parse_music_request(raw)
         if desktop_side_effects_allowed and music_query:
             launch_result = self._launch_music_app(music_query)
-            results.append(
-                ToolExecutionResult(
-                    name="desktop.play_music",
-                    ok=True,
-                    detail=launch_result["detail"],
-                    data=launch_result,
-                )
-            )
+            results.append(ToolExecutionResult(name="desktop.play_music", ok=True, detail=launch_result["detail"], data=launch_result))
 
         music_control = self._parse_music_control(raw)
         if desktop_side_effects_allowed and music_control:
             action_result = self._send_media_control(music_control)
-            results.append(
-                ToolExecutionResult(
-                    name=f"desktop.music_{music_control}",
-                    ok=True,
-                    detail=action_result["detail"],
-                    data=action_result,
-                )
-            )
+            results.append(ToolExecutionResult(name=f"desktop.music_{music_control}", ok=True, detail=action_result["detail"], data=action_result))
 
-        app_match = re.search(
-            r"(?:打开|启动|launch)\s*(记事本|计算器|资源管理器|vscode|chrome|edge|notepad|calc|explorer)\b",
-            raw,
-            flags=re.IGNORECASE,
-        )
+        app_match = re.search(r"(?:\u6253\u5f00|\u542f\u52a8|launch)\s*(\u8bb0\u4e8b\u672c|\u8ba1\u7b97\u5668|\u8d44\u6e90\u7ba1\u7406\u5668|vscode|chrome|edge|notepad|calc|explorer)\b", raw, flags=re.IGNORECASE)
         if desktop_side_effects_allowed and app_match:
             alias_map = {
-                "记事本": "notepad",
+                "\u8bb0\u4e8b\u672c": "notepad",
                 "notepad": "notepad",
-                "计算器": "calc",
+                "\u8ba1\u7b97\u5668": "calc",
                 "calc": "calc",
-                "资源管理器": "explorer",
+                "\u8d44\u6e90\u7ba1\u7406\u5668": "explorer",
                 "explorer": "explorer",
                 "vscode": "vscode",
                 "chrome": "chrome",
@@ -536,104 +665,47 @@ class AssistantService:
             label = str(app_match.group(1) or "").strip()
             key = alias_map.get(label.lower(), alias_map.get(label, label.lower()))
             self._launch_app(key)
-            results.append(
-                ToolExecutionResult(
-                    name="desktop.launch_app",
-                    ok=True,
-                    detail=f"Launched {label}",
-                    data={"app": key},
-                )
-            )
+            results.append(ToolExecutionResult(name="desktop.launch_app", ok=True, detail=f"Launched {label}", data={"app": key}))
 
-        if self._contains_any(raw, ["机器人状态", "机器人的状态", "robot status"]):
+        if self._contains_any(raw, ["\u673a\u5668\u4eba\u72b6\u6001", "\u673a\u5668\u4eba\u7684\u72b6\u6001", "robot status"]):
             status_payload = await self._robot_get_status(conn, user_id, device_id=device_id)
-            results.append(
-                ToolExecutionResult(
-                    name="robot.get_status",
-                    ok=True,
-                    detail="Fetched robot status",
-                    data=status_payload,
-                )
-            )
+            results.append(ToolExecutionResult(name="robot.get_status", ok=True, detail="Fetched robot status", data=status_payload))
 
-        speak_match = re.search(
-            r"(?:让机器人(?:说|播报|讲话)(?:一句|一下)?|机器人(?:说|播报|讲话))\s*[:：]?\s*(.+)$",
-            raw,
-            flags=re.IGNORECASE,
-        )
+        speak_match = re.search(r"(?:\u8ba9\u673a\u5668\u4eba(?:\u8bf4|\u64ad\u62a5|\u8bb2\u8bdd)(?:\u4e00\u53e5|\u4e00\u4e0b)?|\u673a\u5668\u4eba(?:\u8bf4|\u64ad\u62a5|\u8bb2\u8bdd))\s*[:\uff1a]?\s*(.+)$", raw, flags=re.IGNORECASE)
         if speak_match:
-            say_text = self._strip_punctuation(str(speak_match.group(1) or ""))
-            if say_text:
-                response = await self._robot_post(conn, user_id, "/speak", {"text": say_text}, device_id=device_id)
-                results.append(
-                    ToolExecutionResult(
-                        name="robot.speak",
-                        ok=True,
-                        detail=f"Robot will say: {say_text}",
-                        data=response or {"text": say_text},
-                    )
-                )
+            spoken = speak_match.group(1).strip()
+            if spoken:
+                payload = await self._robot_post(conn, user_id, "/speak", {"text": spoken}, device_id=device_id)
+                results.append(ToolExecutionResult(name="robot.speak", ok=True, detail="Spoke via robot", data={"text": spoken, **payload}))
 
         pan, tilt = self._parse_robot_pan_tilt(raw)
         if pan is not None or tilt is not None:
-            response = await self._robot_post(
-                conn,
-                user_id,
-                "/pan_tilt",
-                {"pan": pan or 0.0, "tilt": tilt or 0.0},
-                device_id=device_id,
-            )
-            results.append(
-                ToolExecutionResult(
-                    name="robot.pan_tilt",
-                    ok=True,
-                    detail=f"Robot moved pan={pan or 0.0:.2f} tilt={tilt or 0.0:.2f}",
-                    data=response or {"pan": pan or 0.0, "tilt": tilt or 0.0},
-                )
-            )
+            payload = {"pan": pan or 0.0, "tilt": tilt or 0.0}
+            result = await self._robot_post(conn, user_id, "/pan_tilt", payload, device_id=device_id)
+            results.append(ToolExecutionResult(name="robot.pan_tilt", ok=True, detail="Moved robot pan/tilt", data=result or payload))
 
-        if self._contains_any(raw, ["开始主人建档", "开始建档", "录入主人", "start owner enrollment"]):
-            response = await self._robot_post(
-                conn,
-                user_id,
-                "/owner/enrollment/start",
-                {"owner_label": "owner"},
-                device_id=device_id,
-            )
-            results.append(
-                ToolExecutionResult(
-                    name="robot.start_owner_enrollment",
-                    ok=True,
-                    detail="Started owner enrollment",
-                    data=response,
-                )
-            )
+        if self._contains_any(raw, ["\u5f00\u59cb\u4e3b\u4eba\u5efa\u6863", "\u5f00\u59cb\u626b\u8138", "start owner enrollment"]):
+            payload = await self._robot_post(conn, user_id, "/owner/enrollment/start", {}, device_id=device_id)
+            results.append(ToolExecutionResult(name="robot.start_owner_enrollment", ok=True, detail="Started owner enrollment", data=payload))
 
-        if self._contains_any(raw, ["预览", "查看画面", "看摄像头", "camera preview"]):
+        if self._contains_any(raw, ["\u9884\u89c8", "\u770b\u770b\u76f8\u673a", "camera preview"]):
             preview = self._robot_preview(conn, user_id, device_id=device_id)
-            results.append(
-                ToolExecutionResult(
-                    name="robot.get_preview",
-                    ok=True,
-                    detail="Prepared preview URL",
-                    data=preview,
-                )
-            )
+            results.append(ToolExecutionResult(name="robot.get_preview", ok=True, detail="Prepared robot preview", data=preview))
 
         return results
 
     def _parse_robot_pan_tilt(self, raw: str) -> Tuple[Optional[float], Optional[float]]:
         pan: Optional[float] = None
         tilt: Optional[float] = None
-        if self._contains_any(raw, ["左转", "向左看", "看左边", "turn left"]):
+        if self._contains_any(raw, ["\u5de6\u8f6c", "\u5411\u5de6\u770b", "\u770b\u5de6\u8fb9", "turn left"]):
             pan = -0.35
-        if self._contains_any(raw, ["右转", "向右看", "看右边", "turn right"]):
+        if self._contains_any(raw, ["\u53f3\u8f6c", "\u5411\u53f3\u770b", "\u770b\u53f3\u8fb9", "turn right"]):
             pan = 0.35
-        if self._contains_any(raw, ["抬头", "看上面", "look up"]):
+        if self._contains_any(raw, ["\u62ac\u5934", "\u770b\u4e0a\u9762", "look up"]):
             tilt = 0.35
-        if self._contains_any(raw, ["低头", "看下面", "look down"]):
+        if self._contains_any(raw, ["\u4f4e\u5934", "\u770b\u4e0b\u9762", "look down"]):
             tilt = -0.35
-        if self._contains_any(raw, ["动一动", "活动一下", "move a bit"]):
+        if self._contains_any(raw, ["\u52a8\u4e00\u52a8", "\u6d3b\u52a8\u4e00\u4e0b", "move a bit"]):
             pan = 0.25 if pan is None else pan
             tilt = 0.18 if tilt is None else tilt
         return pan, tilt
@@ -646,12 +718,20 @@ class AssistantService:
             return f"https://{value}"
         return f"https://www.baidu.com/s?wd={quote_plus(value)}"
 
+    def _trim_desktop_target(self, target: str) -> str:
+        value = str(target or "").strip()
+        if not value:
+            return value
+        parts = re.split(r"(?:并且|并|然后|再|，并|, and | and then )", value, maxsplit=1, flags=re.IGNORECASE)
+        trimmed = parts[0].strip()
+        return trimmed or value
+
     def _parse_music_request(self, raw: str) -> Optional[str]:
         value = str(raw or "").strip()
         patterns = [
-            r"(?:听歌|放首歌|播放音乐|播放歌曲|play music)\s*[:：]?\s*(.+)$",
-            r"(?:帮我听歌|帮我放歌|帮我播放)\s*[:：]?\s*(.+)$",
-            r"(?:想听|我想听)\s*(.+)$",
+            r"(?:\u542c\u6b4c|\u653e\u9996\u6b4c|\u64ad\u653e\u97f3\u4e50|\u64ad\u653e\u6b4c\u66f2|play music)\s*[:\uff1a]?\s*(.+)$",
+            r"(?:\u5e2e\u6211\u542c\u6b4c|\u5e2e\u6211\u653e\u6b4c|\u5e2e\u6211\u64ad\u653e)\s*[:\uff1a]?\s*(.+)$",
+            r"(?:\u60f3\u542c|\u6211\u60f3\u542c)\s*(.+)$",
         ]
         for pattern in patterns:
             match = re.search(pattern, value, flags=re.IGNORECASE)
@@ -663,56 +743,40 @@ class AssistantService:
         return None
 
     def _parse_music_control(self, raw: str) -> Optional[str]:
-        if self._contains_any(raw, ["暂停播放", "暂停音乐", "暂停一下", "pause music", "pause playback"]):
+        if self._contains_any(raw, ["\u6682\u505c\u64ad\u653e", "\u6682\u505c\u97f3\u4e50", "\u6682\u505c\u4e00\u4e0b", "pause music", "pause playback"]):
             return "pause"
-        if self._contains_any(raw, ["继续播放", "恢复播放", "继续音乐", "resume music", "resume playback"]):
+        if self._contains_any(raw, ["\u7ee7\u7eed\u64ad\u653e", "\u6062\u590d\u64ad\u653e", "\u7ee7\u7eed\u97f3\u4e50", "resume music", "resume playback"]):
             return "play_pause"
-        if self._contains_any(raw, ["下一首", "切下一首", "next song", "next track"]):
+        if self._contains_any(raw, ["\u4e0b\u4e00\u9996", "\u5207\u4e0b\u4e00\u9996", "next song", "next track"]):
             return "next"
-        if self._contains_any(raw, ["上一首", "切上一首", "previous song", "previous track"]):
+        if self._contains_any(raw, ["\u4e0a\u4e00\u9996", "\u5207\u4e0a\u4e00\u9996", "previous song", "previous track"]):
             return "previous"
         return None
 
     def _parse_reminder(self, raw: str) -> Optional[Tuple[str, int, Dict[str, object]]]:
         value = str(raw or "").strip()
-        relative_match = re.search(
-            r"(?:提醒我)\s*(.+?)\s*(?:在|过)\s*(\d+)\s*(秒|分钟|分|小时|时|天)后",
-            value,
-            flags=re.IGNORECASE,
-        )
+        relative_match = re.search(r"(?:\u63d0\u9192\u6211)\s*(.+?)\s*(?:\u5728|\u8fc7)\s*(\d+)\s*(\u79d2|\u5206\u949f|\u5206|\u5c0f\u65f6|\u65f6|\u5929)\u540e", value, flags=re.IGNORECASE)
         if relative_match:
             title = str(relative_match.group(1) or "").strip()
             amount = int(relative_match.group(2))
             unit = str(relative_match.group(3) or "")
             return title, _now_ms() + (self._unit_to_seconds(amount, unit) * 1000), {"type": "reminder"}
 
-        relative_after_match = re.search(
-            r"(?:提醒我)\s*(\d+)\s*(秒|分钟|分|小时|时|天)后\s*(.+)$",
-            value,
-            flags=re.IGNORECASE,
-        )
+        relative_after_match = re.search(r"(?:\u63d0\u9192\u6211)\s*(\d+)\s*(\u79d2|\u5206\u949f|\u5206|\u5c0f\u65f6|\u65f6|\u5929)\u540e\s*(.+)$", value, flags=re.IGNORECASE)
         if relative_after_match:
             amount = int(relative_after_match.group(1))
             unit = str(relative_after_match.group(2) or "")
             title = str(relative_after_match.group(3) or "").strip()
             return title, _now_ms() + (self._unit_to_seconds(amount, unit) * 1000), {"type": "reminder"}
 
-        english_match = re.search(
-            r"(?:remind me to)\s*(.+?)\s*(?:in)\s*(\d+)\s*(seconds?|minutes?|hours?|days?)",
-            value,
-            flags=re.IGNORECASE,
-        )
+        english_match = re.search(r"(?:remind me to)\s*(.+?)\s*(?:in)\s*(\d+)\s*(seconds?|minutes?|hours?|days?)", value, flags=re.IGNORECASE)
         if english_match:
             title = str(english_match.group(1) or "").strip()
             amount = int(english_match.group(2))
             unit = str(english_match.group(3) or "")
             return title, _now_ms() + (self._unit_to_seconds(amount, unit) * 1000), {"type": "reminder"}
 
-        absolute_match = re.search(
-            r"(?:提醒我)\s*(.+?)\s*(今天|明天)?\s*(上午|下午|晚上)?\s*(\d{1,2})[:点时]?(\d{1,2})?",
-            value,
-            flags=re.IGNORECASE,
-        )
+        absolute_match = re.search(r"(?:\u63d0\u9192\u6211)\s*(.+?)\s*(\u4eca\u5929|\u660e\u5929)?\s*(\u4e0a\u5348|\u4e0b\u5348|\u665a\u4e0a)?\s*(\d{1,2})[:\u70b9\u65f6]?(\d{1,2})?", value, flags=re.IGNORECASE)
         if absolute_match:
             title = str(absolute_match.group(1) or "").strip()
             if not title:
@@ -721,11 +785,11 @@ class AssistantService:
             period = str(absolute_match.group(3) or "").strip()
             hour = int(absolute_match.group(4))
             minute = int(absolute_match.group(5) or 0)
-            if period in {"下午", "晚上"} and hour < 12:
+            if period in {"\u4e0b\u5348", "\u665a\u4e0a"} and hour < 12:
                 hour += 12
             now = datetime.now()
             target = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
-            if day_hint == "明天":
+            if day_hint == "\u660e\u5929":
                 target = target + timedelta(days=1)
             elif target <= now:
                 target = target + timedelta(days=1)
@@ -734,11 +798,11 @@ class AssistantService:
 
     def _unit_to_seconds(self, amount: int, unit: str) -> int:
         normalized = str(unit or "").strip().lower()
-        if normalized in {"秒", "second", "seconds"}:
+        if normalized in {"\u79d2", "second", "seconds"}:
             return max(1, amount)
-        if normalized in {"小时", "时", "hour", "hours"}:
+        if normalized in {"\u5c0f\u65f6", "\u65f6", "hour", "hours"}:
             return max(1, amount) * 3600
-        if normalized in {"天", "day", "days"}:
+        if normalized in {"\u5929", "day", "days"}:
             return max(1, amount) * 86400
         return max(1, amount) * 60
 
@@ -747,7 +811,7 @@ class AssistantService:
         return any(keyword.lower() in lowered for keyword in keywords)
 
     def _strip_punctuation(self, text: str) -> str:
-        return str(text or "").strip().strip("。！？!?，,；;：:")
+        return str(text or "").strip().strip("\u3002\uff01\uff1f!?\uff0c,\uff1b;\uff1a:")
 
     def _robot_endpoint(self, value: str) -> str:
         raw = str(value or "").strip()

@@ -1,6 +1,6 @@
 # TOOLS.md
 
-可用工具由 backend 显式执行并回填摘要：
+Stable product tools exposed by the backend:
 
 - desktop.launch_app
 - desktop.open_url
@@ -13,3 +13,6 @@
 - robot.pan_tilt
 - robot.start_owner_enrollment
 - robot.get_preview
+
+Use these tools directly in product mode.
+In agent mode, native OpenClaw actions can be tried first, but these tools remain the safe fallback.

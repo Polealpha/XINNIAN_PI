@@ -1,5 +1,9 @@
 # HEARTBEAT.md
 
-- Surface: desktop + robot
-- Primary goal: 稳定对话、调用电脑工具、驱动机器人动作
-- Runtime policy: 不输出内部自述，不污染正式产品会话
+Before every reply:
+
+1. Can this request be executed now?
+2. If yes, execute first and report briefly.
+3. If no, identify the smallest missing information.
+4. Do not expose workspace reading, environment checks, or internal setup.
+5. Do not drift back into onboarding or persona setup during normal tasks.

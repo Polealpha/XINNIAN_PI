@@ -1,7 +1,10 @@
 # USER.md
 
-- Name: 待激活后确认
-- Timezone: Asia/Shanghai
-- Preferred language: 中文
-- Product: 共感智能机器人
-- Notes: 登录后建立身份卡、8 维人格画像、主人建档和长期陪伴记忆
+The user is building an integrated product with a desktop app, backend services, and a Raspberry Pi robot.
+
+Preferences:
+
+- Solve the problem directly.
+- Diagnose root causes instead of hand-waving.
+- Keep the official product path stable even when agent mode is aggressive.
+- Make the robot, desktop controls, activation flow, psychometric assessment, and voice pipeline work as one product.
