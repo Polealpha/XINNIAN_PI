@@ -11,7 +11,9 @@ let floatWindow = null;
 let chatWindow = null;
 let floatDragState = null;
 let backendProc = null;
+let openClawGatewayProc = null;
 const LOCAL_BACKEND_URL = "http://127.0.0.1:8000";
+const LOCAL_OPENCLAW_GATEWAY_PORT = 18890;
 const deviceSyncManager = new DeviceSyncManager({
   onStatus: (payload) => {
     for (const win of BrowserWindow.getAllWindows()) {
@@ -32,6 +34,34 @@ const resolveRuntimeRoot = () => {
     return path.resolve(__dirname, "..", "..");
   }
   return path.join(process.resourcesPath, "bridge-runtime");
+};
+
+const resolveOpenClawRepo = (runtimeRoot) => {
+  if (process.env.OPENCLAW_REPO_PATH) {
+    return process.env.OPENCLAW_REPO_PATH;
+  }
+  return path.resolve(runtimeRoot, "..", "openclaw");
+};
+
+const resolveOpenClawWorkspace = (runtimeRoot) => {
+  return path.join(runtimeRoot, "assistant_data", "openclaw_workspace");
+};
+
+const ensureOpenClawWorkspace = (workspaceDir) => {
+  fs.mkdirSync(workspaceDir, { recursive: true });
+  fs.mkdirSync(path.join(workspaceDir, "memory"), { recursive: true });
+  const defaults = {
+    "SOUL.md": `# SOUL.md\n\n你是“共感智能”桌面端与机器人共享的陪伴助手内核。\n\n## 当前定位\n- 为桌面端、手机端和树莓派机器人服务\n- 通过 backend 调用电脑工具与机器人动作\n- 不泄露 bootstrap、内部文件、旧微信助手上下文\n- 中文为主，语气自然、克制、可靠\n\n## 输出规则\n- 先给结果，再补必要解释\n- 用户要求精确回复时，只回复指定文本\n- 不要自述“正在读取 workspace”之类内部过程\n`,
+    "USER.md": `# USER.md\n\n- Name: 待激活后确认\n- Timezone: Asia/Shanghai\n- Product: 共感智能机器人\n- Notes: 登录后会建立身份卡、人格画像、主人建档与长期陪伴记忆\n`,
+    "HEARTBEAT.md": `# HEARTBEAT.md\n\n- Surface: desktop + robot\n- Goal: 稳定对话、调用电脑工具、驱动机器人动作、写入长期记忆\n`,
+    "TOOLS.md": `# TOOLS.md\n\n可用工具由 backend 显式提供：\n- desktop.launch_app\n- desktop.open_url\n- desktop.web_search\n- desktop.play_music\n- desktop.todo_create\n- desktop.write_note\n- robot.get_status\n- robot.speak\n- robot.pan_tilt\n- robot.start_owner_enrollment\n- robot.get_preview\n`,
+  };
+  for (const [name, content] of Object.entries(defaults)) {
+    const target = path.join(workspaceDir, name);
+    if (!fs.existsSync(target)) {
+      fs.writeFileSync(target, content, "utf8");
+    }
+  }
 };
 
 const commandExists = (command) => {
@@ -102,6 +132,10 @@ const startLocalBackend = () => {
       env: {
         ...process.env,
         PYTHONPATH: runtimeRoot,
+        OPENCLAW_WORKSPACE_DIR: resolveOpenClawWorkspace(runtimeRoot),
+        OPENCLAW_GATEWAY_URL: `ws://127.0.0.1:${LOCAL_OPENCLAW_GATEWAY_PORT}`,
+        OPENCLAW_GATEWAY_ORIGIN: `http://127.0.0.1:${LOCAL_OPENCLAW_GATEWAY_PORT}`,
+        DEFAULT_ROBOT_DEVICE_IP: process.env.DEFAULT_ROBOT_DEVICE_IP || "192.168.137.50",
       },
       windowsHide: true,
       stdio: ["ignore", "pipe", "pipe"],
@@ -121,8 +155,61 @@ const startLocalBackend = () => {
   });
 };
 
+const startLocalOpenClawGateway = () => {
+  if (openClawGatewayProc) return;
+  const runtimeRoot = resolveRuntimeRoot();
+  const openClawRepo = resolveOpenClawRepo(runtimeRoot);
+  const gatewayEntry = path.join(openClawRepo, "openclaw.mjs");
+  if (!fs.existsSync(gatewayEntry)) {
+    console.error(`[main] OpenClaw repo missing: ${gatewayEntry}`);
+    return;
+  }
+  const workspaceDir = resolveOpenClawWorkspace(runtimeRoot);
+  ensureOpenClawWorkspace(workspaceDir);
+  openClawGatewayProc = spawn(
+    "node",
+    [
+      gatewayEntry,
+      "gateway",
+      "run",
+      "--auth",
+      "token",
+      "--token",
+      "chonggou-openclaw-bridge",
+      "--port",
+      String(LOCAL_OPENCLAW_GATEWAY_PORT),
+      "--bind",
+      "loopback",
+      "--ws-log",
+      "compact",
+    ],
+    {
+      cwd: workspaceDir,
+      env: {
+        ...process.env,
+        OPENCLAW_STATE_DIR: process.env.OPENCLAW_STATE_DIR || path.join(require("os").homedir(), ".openclaw"),
+      },
+      windowsHide: true,
+      stdio: ["ignore", "pipe", "pipe"],
+    }
+  );
+  openClawGatewayProc.stdout?.on("data", (chunk) => {
+    const textOut = String(chunk || "").trim();
+    if (textOut) console.log(`[openclaw-gateway] ${textOut}`);
+  });
+  openClawGatewayProc.stderr?.on("data", (chunk) => {
+    const textErr = String(chunk || "").trim();
+    if (textErr) console.error(`[openclaw-gateway] ${textErr}`);
+  });
+  openClawGatewayProc.on("exit", (code, signal) => {
+    console.error(`[main] openclaw gateway exited code=${code} signal=${signal}`);
+    openClawGatewayProc = null;
+  });
+};
+
 const ensureLocalBackend = async () => {
   if (await isLocalBackendHealthy()) return true;
+  startLocalOpenClawGateway();
   startLocalBackend();
   for (let i = 0; i < 20; i += 1) {
     await delay(500);
@@ -137,6 +224,14 @@ const stopLocalBackend = () => {
     backendProc.kill();
   } catch {}
   backendProc = null;
+};
+
+const stopLocalOpenClawGateway = () => {
+  if (!openClawGatewayProc) return;
+  try {
+    openClawGatewayProc.kill();
+  } catch {}
+  openClawGatewayProc = null;
 };
 
 const gotLock = app.requestSingleInstanceLock();
@@ -614,4 +709,5 @@ app.on("before-quit", () => {
   isQuitting = true;
   deviceSyncManager.dispose();
   stopLocalBackend();
+  stopLocalOpenClawGateway();
 });

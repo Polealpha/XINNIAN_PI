@@ -20,6 +20,7 @@ from .openclaw_gateway import (
     discover_openclaw_state_dir,
 )
 from .settings import (
+    DEFAULT_ROBOT_DEVICE_IP,
     DESKTOP_APP_ALLOWLIST_JSON,
     OPENCLAW_CLIENT_ID,
     OPENCLAW_CLIENT_MODE,
@@ -114,6 +115,7 @@ class AssistantService:
             metadata,
         )
         reply = await self.gateway.send_message(resolved_session_key, message)
+        reply = self._sanitize_gateway_reply(reply)
         return {
             "surface": normalized_surface,
             "session_key": resolved_session_key,
@@ -243,7 +245,12 @@ class AssistantService:
         attachments: Optional[List[dict]],
         metadata: Optional[Dict[str, object]],
     ) -> str:
-        lines = [f"[surface={surface} session={session_key}]"]
+        lines = [
+            f"[surface={surface} session={session_key}]",
+            "[assistant_contract] 你正在服务一个桌面端陪伴机器人产品。不要泄露 workspace/bootstrap/内部文件/加载过程。"
+            "如果用户要求精确回复某个字面文本，就只回复那个文本本身，不要添加解释。"
+            "显式工具已经在外层执行过，若看到 tool 摘要，只需自然整合结果。",
+        ]
         for item in tool_results:
             lines.append(f"[tool:{item.name}] ok={str(item.ok).lower()} detail={item.detail}")
         if attachments:
@@ -252,6 +259,32 @@ class AssistantService:
             lines.append(f"[metadata] {json.dumps(metadata, ensure_ascii=False)}")
         lines.append("")
         lines.append(str(text).strip())
+        return "\n".join(lines).strip()
+
+    def _sanitize_gateway_reply(self, reply: str) -> str:
+        raw = str(reply or "").strip()
+        if not raw:
+            return raw
+        lines = [line.strip() for line in raw.splitlines() if line.strip()]
+        if not lines:
+            return raw
+        internal_markers = (
+            "BOOTSTRAP.md",
+            "HEARTBEAT.md",
+            "USER.md",
+            "MEMORY.md",
+            "workspace context",
+            "read-only session",
+            "loading the workspace",
+            "bootstrap flow",
+        )
+        filtered = [line for line in lines if not any(marker.lower() in line.lower() for marker in internal_markers)]
+        if filtered:
+            lines = filtered
+        if len(lines) > 1:
+            last = lines[-1]
+            if re.fullmatch(r"[A-Z0-9_ -]{4,80}", last):
+                return last.strip()
         return "\n".join(lines).strip()
 
     async def _run_explicit_tools(
@@ -298,29 +331,24 @@ class AssistantService:
                 )
             )
 
-        note_match = re.search(r"^(?:记一个|记个笔记|写个笔记|记笔记)[:：]?\s*(.+)$", raw, flags=re.IGNORECASE)
+        note_match = re.search(r"^(?:记一个笔记|记个笔记|写个笔记|记笔记)[:：]?\s*(.+)$", raw, flags=re.IGNORECASE)
         if note_match:
             note = self.store.write_note(user_id, title="assistant-note", body=note_match.group(1).strip())
-            results.append(
-                ToolExecutionResult(name="desktop.write_note", ok=True, detail="Note written", data=note)
-            )
+            results.append(ToolExecutionResult(name="desktop.write_note", ok=True, detail="Note written", data=note))
 
         direct_url_match = re.search(r"(https?://\S+)", raw, flags=re.IGNORECASE)
         if direct_url_match:
             url = direct_url_match.group(1).strip()
             self._launch_url(url)
-            results.append(
-                ToolExecutionResult(name="desktop.open_url", ok=True, detail=f"Opened {url}", data={"url": url})
-            )
+            results.append(ToolExecutionResult(name="desktop.open_url", ok=True, detail=f"Opened {url}", data={"url": url}))
 
-        page_match = re.search(r"(?:打开网页|打开网站|打开页面|open website|open page)\s*[:：]?\s*(.+)$", raw, flags=re.IGNORECASE)
-        if page_match:
-            target = page_match.group(1).strip()
-            url = self._normalize_web_target(target)
-            self._launch_url(url)
-            results.append(
-                ToolExecutionResult(name="desktop.open_url", ok=True, detail=f"Opened {url}", data={"url": url})
-            )
+        if not direct_url_match:
+            page_match = re.search(r"(?:打开网页|打开网站|打开页面|open website|open page)\s*[:：]?\s*(.+)$", raw, flags=re.IGNORECASE)
+            if page_match:
+                target = page_match.group(1).strip()
+                url = self._normalize_web_target(target)
+                self._launch_url(url)
+                results.append(ToolExecutionResult(name="desktop.open_url", ok=True, detail=f"Opened {url}", data={"url": url}))
 
         search_match = re.search(r"(?:搜索|查一下|搜一下|search)\s*[:：]?\s*(.+)$", raw, flags=re.IGNORECASE)
         if search_match:
@@ -379,8 +407,7 @@ class AssistantService:
                 )
             )
 
-        lowered = raw.lower()
-        if any(keyword in raw for keyword in ["机器人状态", "机器人的状态", "robot status"]):
+        if self._contains_any(raw, ["机器人状态", "机器人的状态", "robot status"]):
             status_payload = await self._robot_get_status(conn, user_id, device_id=device_id)
             results.append(
                 ToolExecutionResult(
@@ -392,12 +419,12 @@ class AssistantService:
             )
 
         speak_match = re.search(
-            r"(?:让机器人|机器人)(?:说|播报|讲话)\s*(?:一句|一下)?[:：]?\s*(.+)$",
+            r"(?:让机器人(?:说|播报|讲话)?(?:一句|一下)?|机器人(?:说|播报|讲话))\s*[:：]?\s*(.+)$",
             raw,
             flags=re.IGNORECASE,
         )
         if speak_match:
-            say_text = str(speak_match.group(1) or "").strip().strip("。.!！?？")
+            say_text = self._strip_punctuation(str(speak_match.group(1) or ""))
             if say_text:
                 response = await self._robot_post(conn, user_id, "/speak", {"text": say_text}, device_id=device_id)
                 results.append(
@@ -427,7 +454,7 @@ class AssistantService:
                 )
             )
 
-        if any(keyword in raw for keyword in ["开始主人建档", "开始建档", "录入主人", "start owner enrollment"]):
+        if self._contains_any(raw, ["开始主人建档", "开始建档", "录入主人", "start owner enrollment"]):
             response = await self._robot_post(
                 conn,
                 user_id,
@@ -444,7 +471,7 @@ class AssistantService:
                 )
             )
 
-        if any(keyword in raw for keyword in ["预览", "查看画面", "看摄像头", "camera preview"]):
+        if self._contains_any(raw, ["预览", "查看画面", "看摄像头", "camera preview"]):
             preview = self._robot_preview(conn, user_id, device_id=device_id)
             results.append(
                 ToolExecutionResult(
@@ -460,15 +487,15 @@ class AssistantService:
     def _parse_robot_pan_tilt(self, raw: str) -> Tuple[Optional[float], Optional[float]]:
         pan: Optional[float] = None
         tilt: Optional[float] = None
-        if any(keyword in raw for keyword in ["左转", "向左看", "看左边", "turn left"]):
+        if self._contains_any(raw, ["左转", "向左看", "看左边", "turn left"]):
             pan = -0.35
-        if any(keyword in raw for keyword in ["右转", "向右看", "看右边", "turn right"]):
+        if self._contains_any(raw, ["右转", "向右看", "看右边", "turn right"]):
             pan = 0.35
-        if any(keyword in raw for keyword in ["抬头", "看上面", "look up"]):
+        if self._contains_any(raw, ["抬头", "看上面", "look up"]):
             tilt = 0.35
-        if any(keyword in raw for keyword in ["低头", "看下面", "look down"]):
+        if self._contains_any(raw, ["低头", "看下面", "look down"]):
             tilt = -0.35
-        if "动一动" in raw or "move a bit" in raw.lower():
+        if self._contains_any(raw, ["动一动", "活动一下", "move a bit"]):
             pan = 0.25 if pan is None else pan
             tilt = 0.18 if tilt is None else tilt
         return pan, tilt
@@ -491,46 +518,59 @@ class AssistantService:
             match = re.search(pattern, value, flags=re.IGNORECASE)
             if not match:
                 continue
-            query = str(match.group(1) or "").strip().strip("。.!！?？")
+            query = self._strip_punctuation(str(match.group(1) or ""))
             if query:
                 return query
         return None
 
     def _parse_reminder(self, raw: str) -> Optional[Tuple[str, int, Dict[str, object]]]:
         value = str(raw or "").strip()
-        match = re.search(
-            r"(?:提醒我)\s*(.+?)\s*(?:在)?\s*(\d+)\s*(秒|分钟|分|小时|时|天)后",
+        relative_match = re.search(
+            r"(?:提醒我)\s*(.+?)\s*(?:在|过)\s*(\d+)\s*(秒|分钟|分|小时|时|天)后",
             value,
             flags=re.IGNORECASE,
         )
-        if match:
-            title = str(match.group(1) or "").strip()
-            amount = int(match.group(2))
-            unit = str(match.group(3) or "")
+        if relative_match:
+            title = str(relative_match.group(1) or "").strip()
+            amount = int(relative_match.group(2))
+            unit = str(relative_match.group(3) or "")
             return title, _now_ms() + (self._unit_to_seconds(amount, unit) * 1000), {"type": "reminder"}
-        match = re.search(
+
+        relative_after_match = re.search(
+            r"(?:提醒我)\s*(\d+)\s*(秒|分钟|分|小时|时|天)后\s*(.+)$",
+            value,
+            flags=re.IGNORECASE,
+        )
+        if relative_after_match:
+            amount = int(relative_after_match.group(1))
+            unit = str(relative_after_match.group(2) or "")
+            title = str(relative_after_match.group(3) or "").strip()
+            return title, _now_ms() + (self._unit_to_seconds(amount, unit) * 1000), {"type": "reminder"}
+
+        english_match = re.search(
             r"(?:remind me to)\s*(.+?)\s*(?:in)\s*(\d+)\s*(seconds?|minutes?|hours?|days?)",
             value,
             flags=re.IGNORECASE,
         )
-        if match:
-            title = str(match.group(1) or "").strip()
-            amount = int(match.group(2))
-            unit = str(match.group(3) or "")
+        if english_match:
+            title = str(english_match.group(1) or "").strip()
+            amount = int(english_match.group(2))
+            unit = str(english_match.group(3) or "")
             return title, _now_ms() + (self._unit_to_seconds(amount, unit) * 1000), {"type": "reminder"}
-        match = re.search(
+
+        absolute_match = re.search(
             r"(?:提醒我)\s*(.+?)\s*(今天|明天)?\s*(上午|下午|晚上)?\s*(\d{1,2})[:点时]?(\d{1,2})?",
             value,
             flags=re.IGNORECASE,
         )
-        if match:
-            title = str(match.group(1) or "").strip()
+        if absolute_match:
+            title = str(absolute_match.group(1) or "").strip()
             if not title:
                 return None
-            day_hint = str(match.group(2) or "").strip()
-            period = str(match.group(3) or "").strip()
-            hour = int(match.group(4))
-            minute = int(match.group(5) or 0)
+            day_hint = str(absolute_match.group(2) or "").strip()
+            period = str(absolute_match.group(3) or "").strip()
+            hour = int(absolute_match.group(4))
+            minute = int(absolute_match.group(5) or 0)
             if period in {"下午", "晚上"} and hour < 12:
                 hour += 12
             now = datetime.now()
@@ -552,10 +592,24 @@ class AssistantService:
             return max(1, amount) * 86400
         return max(1, amount) * 60
 
+    def _contains_any(self, raw: str, keywords: List[str]) -> bool:
+        lowered = raw.lower()
+        return any(keyword.lower() in lowered for keyword in keywords)
+
+    def _strip_punctuation(self, text: str) -> str:
+        return str(text or "").strip().strip("。！？!?，,；;：:")
+
+    def _robot_endpoint(self, value: str) -> str:
+        raw = str(value or "").strip()
+        if ":" in raw:
+            return raw
+        return f"{raw}:8090"
+
     async def _robot_get_status(self, conn: Connection, user_id: int, device_id: Optional[str] = None) -> Dict[str, object]:
         device = self._resolve_device(conn, user_id, device_id=device_id)
-        url = f"http://{device['device_ip']}/status"
-        async with httpx.AsyncClient(timeout=3.0) as client:
+        endpoint = self._robot_endpoint(str(device["device_ip"]))
+        url = f"http://{endpoint}/status"
+        async with httpx.AsyncClient(timeout=5.0, trust_env=False) as client:
             response = await client.get(url)
             response.raise_for_status()
             data = response.json()
@@ -570,8 +624,9 @@ class AssistantService:
         device_id: Optional[str] = None,
     ) -> Dict[str, object]:
         device = self._resolve_device(conn, user_id, device_id=device_id)
-        url = f"http://{device['device_ip']}{path}"
-        async with httpx.AsyncClient(timeout=4.0) as client:
+        endpoint = self._robot_endpoint(str(device["device_ip"]))
+        url = f"http://{endpoint}{path}"
+        async with httpx.AsyncClient(timeout=20.0, trust_env=False) as client:
             response = await client.post(url, json=payload)
             response.raise_for_status()
             data = response.json()
@@ -579,7 +634,8 @@ class AssistantService:
 
     def _robot_preview(self, conn: Connection, user_id: int, device_id: Optional[str] = None) -> Dict[str, object]:
         device = self._resolve_device(conn, user_id, device_id=device_id)
-        return {"preview_url": f"http://{device['device_ip']}/camera/preview.jpg", "device_id": device["device_id"]}
+        endpoint = self._robot_endpoint(str(device["device_ip"]))
+        return {"preview_url": f"http://{endpoint}/camera/preview.jpg", "device_id": device["device_id"]}
 
     def _resolve_device(self, conn: Connection, user_id: int, device_id: Optional[str] = None) -> Dict[str, object]:
         params: List[Any] = [int(user_id)]
@@ -589,12 +645,17 @@ class AssistantService:
             params.append(str(device_id))
         query += " ORDER BY updated_at DESC LIMIT 1"
         row = conn.execute(query, params).fetchone()
-        if not row:
-            raise RuntimeError("No bound robot device found")
-        device = dict(row)
-        if not str(device.get("device_ip") or "").strip():
-            raise RuntimeError("Robot device IP missing")
-        return device
+        if row:
+            device = dict(row)
+            if str(device.get("device_ip") or "").strip():
+                return device
+        fallback_ip = str(DEFAULT_ROBOT_DEVICE_IP or "").strip()
+        if fallback_ip:
+            return {
+                "device_id": str(device_id or "polealpha-zero2w"),
+                "device_ip": fallback_ip,
+            }
+        raise RuntimeError("No bound robot device found")
 
     def _launch_url(self, url: str) -> None:
         subprocess.Popen(["cmd", "/c", "start", "", url], shell=False)
