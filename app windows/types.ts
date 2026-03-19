@@ -9,6 +9,7 @@ export enum EmotionType {
 
 export type EngineMode = "normal" | "privacy" | "dnd";
 export type CareDeliveryStrategy = "policy" | "voice_all_day" | "popup_all_day";
+export type AssistantMode = "product" | "agent";
 
 export interface RiskScores {
   V: number;
@@ -74,6 +75,10 @@ export interface DeviceStatus {
 export interface DeviceSettings {
   mode: EngineMode;
   care_delivery_strategy: CareDeliveryStrategy;
+  assistant: {
+    mode: AssistantMode;
+    native_control_enabled: boolean;
+  };
   media: {
     camera_enabled: boolean;
     audio_enabled: boolean;

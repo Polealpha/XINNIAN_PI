@@ -1774,6 +1774,7 @@ def _default_device_settings() -> Dict[str, object]:
     return {
         "mode": "normal",
         "care_delivery_strategy": "policy",
+        "assistant": {"mode": "product", "native_control_enabled": True},
         "media": {"camera_enabled": True, "audio_enabled": True},
         "wake": {"enabled": True, "wake_phrase": "小念", "ack_text": "我在"},
         "behavior": {"cooldown_min": 30, "daily_trigger_limit": 5, "settings_auto_return_sec": 0},
@@ -1827,6 +1828,22 @@ def _get_device_settings(conn: Connection, user_id: int, device_id: str) -> Dict
             settings = _merge_settings(settings, stored)
         updated_at_ms = int(row["updated_at"] or 0) or None
     return {"settings": settings, "updated_at_ms": updated_at_ms}
+
+
+def _get_user_assistant_settings(
+    conn: Connection,
+    user_id: int,
+    explicit_device_id: Optional[str] = None,
+) -> Dict[str, object]:
+    selected = _select_device_for_user(conn, int(user_id), explicit_device_id)
+    if not selected:
+        return dict(_default_device_settings().get("assistant") or {})
+    payload = _get_device_settings(conn, int(user_id), str(selected.get("device_id") or ""))
+    settings = payload.get("settings") if isinstance(payload, dict) else {}
+    assistant = settings.get("assistant") if isinstance(settings, dict) else {}
+    if isinstance(assistant, dict):
+        return _merge_settings(dict(_default_device_settings().get("assistant") or {}), assistant)
+    return dict(_default_device_settings().get("assistant") or {})
 
 
 def _upsert_device_settings(conn: Connection, user_id: int, device_id: str, patch: Dict[str, object]) -> Dict[str, object]:
@@ -4149,6 +4166,11 @@ async def _assistant_send_impl(
     if not raw_text:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="text is required")
     merged_metadata = dict(payload.metadata or {})
+    assistant_runtime = _get_user_assistant_settings(conn, int(user_id), payload.device_id)
+    if "assistant_mode" not in merged_metadata:
+        merged_metadata["assistant_mode"] = str(assistant_runtime.get("mode") or "product")
+    if "assistant_native_control" not in merged_metadata:
+        merged_metadata["assistant_native_control"] = bool(assistant_runtime.get("native_control_enabled", True))
     merged_metadata["user_profile"] = _build_assistant_identity_context(conn, int(user_id))
     response_payload = await assistant_service.send_message(
         conn,

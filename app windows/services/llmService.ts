@@ -28,6 +28,8 @@ const buildAssistantPayload = (
   attachments,
   metadata: {
     entrypoint: "desktop_chat",
+    assistant_mode: localStorage.getItem("assistant_mode") || "product",
+    assistant_native_control: localStorage.getItem("assistant_native_control") !== "false",
     current_emotion: currentEmotion,
     current_ts_ms: currentTsMs,
     history: history.slice(-6),

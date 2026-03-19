@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useState } from "react";
 import {
   BellRing,
-  Eye,
+  Bot,
   Mic,
   ScanFace,
   Settings2,
@@ -24,26 +24,67 @@ interface SettingsPanelProps {
 const COOLDOWN_OPTIONS = [15, 30, 60, 120];
 
 const MODE_OPTIONS: Array<{ id: DeviceSettings["mode"]; label: string; desc: string }> = [
-  { id: "normal", label: "标准陪伴", desc: "保留主动关怀、语音互动和轻度感知。" },
-  { id: "privacy", label: "隐私优先", desc: "降低采集频率，尽量少打扰。" },
-  { id: "dnd", label: "免打扰", desc: "暂停主动提醒，只保留必要响应。" },
+  {
+    id: "normal",
+    label: "标准陪伴",
+    desc: "保持主动关怀、语音互动和轻度感知，适合作为默认运行模式。",
+  },
+  {
+    id: "privacy",
+    label: "隐私优先",
+    desc: "降低采集频率，尽量减少打扰，更适合长时间安静办公。",
+  },
+  {
+    id: "dnd",
+    label: "免打扰",
+    desc: "暂停主动提醒，只保留明确唤醒和必要响应。",
+  },
+];
+
+const ASSISTANT_MODE_OPTIONS: Array<{
+  id: DeviceSettings["assistant"]["mode"];
+  label: string;
+  desc: string;
+}> = [
+  {
+    id: "product",
+    label: "产品模式",
+    desc: "优先走受控工具层，稳定、可回执，适合日常正式使用。",
+  },
+  {
+    id: "agent",
+    label: "代理模式",
+    desc: "优先放开 OpenClaw 原生电脑控制和浏览器能力，动作更猛，但波动更大。",
+  },
 ];
 
 const CARE_OPTIONS: Array<{ id: DeviceSettings["care_delivery_strategy"]; label: string; desc: string }> = [
-  { id: "policy", label: "智能策略", desc: "由风险和场景自动决定弹窗或语音。" },
-  { id: "voice_all_day", label: "语音优先", desc: "更偏向机器人直接语音关怀。" },
-  { id: "popup_all_day", label: "弹窗优先", desc: "更多在电脑端显示提示和建议。" },
+  {
+    id: "policy",
+    label: "智能策略",
+    desc: "由风险分数和当前场景决定走语音、弹窗还是安静观察。",
+  },
+  {
+    id: "voice_all_day",
+    label: "语音优先",
+    desc: "更偏向机器人直接说话，适合更强陪伴感的体验。",
+  },
+  {
+    id: "popup_all_day",
+    label: "桌面优先",
+    desc: "更多在电脑端弹设置、提醒和待办，而不是让机器人频繁打断。",
+  },
 ];
 
 const STT_OPTIONS = [
   { id: "faster_whisper", label: "faster-whisper", desc: "电脑端优先，准确率更高。" },
-  { id: "sherpa_onnx", label: "sherpa-onnx", desc: "全本地链路，延迟更稳。" },
+  { id: "sherpa_onnx", label: "sherpa-onnx", desc: "更靠近本地链路，延迟更稳。" },
 ];
 
 const VOICE_STYLES = [
-  { id: "sweet", label: "甜妹", desc: "更柔和，更适合陪伴与测评。" },
-  { id: "warm", label: "温柔", desc: "偏稳重，适合日常陪伴。" },
-  { id: "bright", label: "明快", desc: "更轻快，适合提醒与问候。" },
+  { id: "sweet", label: "甜妹", desc: "更轻、更软，适合首次激活和陪伴对话。" },
+  { id: "warm", label: "温柔", desc: "更稳、更克制，适合长时间陪伴。" },
+  { id: "bright", label: "明快", desc: "更有精神，适合提醒和日常互动。" },
 ];
 
 export const SettingsPanel: React.FC<SettingsPanelProps> = ({ settings, isGuest, onSave, onClose }) => {
@@ -57,13 +98,15 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({ settings, isGuest,
 
   useEffect(() => {
     if (!statusMessage) return;
-    const timer = setTimeout(() => setStatusMessage(""), 2600);
-    return () => clearTimeout(timer);
+    const timer = window.setTimeout(() => setStatusMessage(""), 2600);
+    return () => window.clearTimeout(timer);
   }, [statusMessage]);
 
   const summary = useMemo(
     () => [
-      draft.wake.enabled ? "本地唤醒已开启" : "本地唤醒已关闭",
+      draft.assistant.mode === "agent" ? "OpenClaw 代理模式已开启" : "OpenClaw 产品模式已开启",
+      draft.assistant.native_control_enabled ? "原生电脑控制已允许" : "原生电脑控制已限制",
+      draft.wake.enabled ? "树莓派本地唤醒已开启" : "树莓派本地唤醒已关闭",
       draft.media.audio_enabled ? "麦克风采集开启" : "麦克风采集关闭",
       draft.media.camera_enabled ? "摄像头采集开启" : "摄像头采集关闭",
       `设置页自动返回 ${draft.behavior.settings_auto_return_sec || 0} 秒`,
@@ -87,13 +130,13 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({ settings, isGuest,
 
   const handleSave = async () => {
     if (isGuest) {
-      setStatusMessage("游客模式不能修改设备设置。");
+      setStatusMessage("访客模式不能修改设备设置。");
       return;
     }
     setSaving(true);
     try {
       await onSave(draft);
-      setStatusMessage("设置已经同步到机器人。");
+      setStatusMessage("设置已经同步到电脑端和机器人。");
     } catch (err) {
       console.error("Save settings failed:", err);
       setStatusMessage("保存失败，请稍后重试。");
@@ -111,7 +154,7 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({ settings, isGuest,
               <div className="text-[11px] font-black uppercase tracking-[0.35em] text-cyan-300/70">Device Settings</div>
               <h2 className="mt-4 text-3xl font-black text-white">机器人设置中心</h2>
               <p className="mt-3 text-sm leading-7 text-slate-300">
-                电脑端是主设置入口，保存后会同步到树莓派，并驱动本地屏幕切换回表情页。
+                电脑端是主设置入口。保存后会同步到本地 backend、OpenClaw 和树莓派运行层；关闭设置后，机器人屏幕会自动回到表情页。
               </p>
             </div>
             <div className="rounded-2xl border border-cyan-400/20 bg-cyan-400/10 p-3 text-cyan-200">
@@ -169,6 +212,40 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({ settings, isGuest,
 
         <section className="col-span-12 xl:col-span-8 space-y-6">
           <Panel
+            icon={Bot}
+            title="助手控制层"
+            subtitle="决定当前是走稳定的产品模式，还是放开更强的 OpenClaw 代理模式。"
+          >
+            <div className="grid gap-4 lg:grid-cols-2">
+              {ASSISTANT_MODE_OPTIONS.map((item) => (
+                <SelectableCard
+                  key={item.id}
+                  active={draft.assistant.mode === item.id}
+                  title={item.label}
+                  desc={item.desc}
+                  onClick={() =>
+                    updateNested("assistant", {
+                      mode: item.id,
+                    })
+                  }
+                />
+              ))}
+            </div>
+            <div className="mt-4">
+              <ToggleRow
+                title="允许 OpenClaw 原生本地控制"
+                desc="开启后，代理模式可直接尝试操作本地应用、浏览器和窗口；关闭后仍走代理思考，但会尽量避免直接动你的桌面。"
+                enabled={draft.assistant.native_control_enabled}
+                onToggle={() =>
+                  updateNested("assistant", {
+                    native_control_enabled: !draft.assistant.native_control_enabled,
+                  })
+                }
+              />
+            </div>
+          </Panel>
+
+          <Panel
             icon={Sparkles}
             title="主动关怀"
             subtitle="决定机器人在电脑端和本体上如何陪伴、何时提醒、提醒得多主动。"
@@ -189,20 +266,20 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({ settings, isGuest,
           <Panel
             icon={Video}
             title="感知与采集"
-            subtitle="控制麦克风和摄像头采集。当前你没接摄像头，所以建议先保持关闭。"
+            subtitle="控制麦克风和摄像头采集。你现在没接相机，所以建议先保持关闭。"
           >
             <div className="grid gap-4 lg:grid-cols-2">
               <ToggleCard
                 icon={Mic}
                 title="麦克风采集"
-                desc="本地语音问答、唤醒后识别、人格测评语音都依赖它。"
+                desc="本地语音问答、人格测评语音和唤醒后识别都依赖它。"
                 enabled={draft.media.audio_enabled}
                 onToggle={(next) => updateNested("media", { audio_enabled: next })}
               />
               <ToggleCard
                 icon={Video}
                 title="摄像头采集"
-                desc="接上相机后再打开，避免板子不断探测报错。"
+                desc="等你把相机接上后再打开，避免板子空跑探测相机。"
                 enabled={draft.media.camera_enabled}
                 onToggle={(next) => updateNested("media", { camera_enabled: next })}
               />
@@ -213,12 +290,12 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({ settings, isGuest,
             <Panel
               icon={Volume2}
               title="语音与唤醒"
-              subtitle="保留树莓派本地唤醒，同时把高质量语音转写主链放到电脑端。"
+              subtitle="保留树莓派本地唤醒，同时把高质量转写主链放在电脑端。"
             >
               <div className="space-y-4">
                 <ToggleRow
                   title="启用本地唤醒"
-                  desc="树莓派可离线待命，唤醒后进入本地问答或测评会话。"
+                  desc="树莓派可离线待命，唤醒后进入本地问答、设置控制或人格测评。"
                   enabled={draft.wake.enabled}
                   onToggle={() => updateNested("wake", { enabled: !draft.wake.enabled })}
                 />
@@ -236,7 +313,7 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({ settings, isGuest,
                 />
                 <div className="grid gap-3 md:grid-cols-2">
                   <OptionGroup
-                    label="电脑端转写主链"
+                    label="电脑端语音转写"
                     options={STT_OPTIONS}
                     value={draft.voice.desktop_stt_provider}
                     onChange={(value) => updateNested("voice", { desktop_stt_provider: value })}
@@ -254,18 +331,18 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({ settings, isGuest,
             <Panel
               icon={ScanFace}
               title="云台与回屏"
-              subtitle="给双轴云台、设置页自动返回、后续扫脸建档留接口。"
+              subtitle="给双轴云台、设置页自动返回和后续扫脸建档留好位置。"
             >
               <div className="space-y-4">
                 <ToggleRow
-                  title="左右追踪"
-                  desc="控制 pan 舵机，适合左右跟随。"
+                  title="左右跟随"
+                  desc="控制 pan 舵机，适合左右转头和简单位移反馈。"
                   enabled={draft.tracking.pan_enabled}
                   onToggle={() => updateNested("tracking", { pan_enabled: !draft.tracking.pan_enabled })}
                 />
                 <ToggleRow
-                  title="上下追踪"
-                  desc="控制 tilt 舵机，适合抬头低头。"
+                  title="上下跟随"
+                  desc="控制 tilt 舵机，适合抬头、低头和点头动作。"
                   enabled={draft.tracking.tilt_enabled}
                   onToggle={() => updateNested("tracking", { tilt_enabled: !draft.tracking.tilt_enabled })}
                 />
@@ -281,7 +358,7 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({ settings, isGuest,
           </div>
 
           <div className="grid gap-6 lg:grid-cols-2">
-            <Panel icon={Timer} title="节奏控制" subtitle="控制机器人的主动频率，避免过于频繁打扰。">
+            <Panel icon={Timer} title="节奏控制" subtitle="限制机器人主动频率，避免陪伴系统过度打扰。">
               <div className="space-y-5">
                 <div>
                   <div className="mb-3 text-xs font-black uppercase tracking-[0.28em] text-slate-400">触发冷却</div>
@@ -311,20 +388,42 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({ settings, isGuest,
               </div>
             </Panel>
 
-            <Panel icon={BellRing} title="实际结果" subtitle="这些设置会同时影响电脑端、Pi 本体和 OpenClaw 的产品行为。">
+            <Panel
+              icon={BellRing}
+              title="实际影响"
+              subtitle="这些设置会同时影响桌面端、Pi 本体、OpenClaw 和后端行为。"
+            >
               <div className="grid gap-3">
                 <ResultCard title="电脑端">
-                  修改后会影响设置页显示、桌面端语音转写策略、提醒和待办交互。
+                  会影响设置页显示、桌面语音转写主链、提醒弹窗，以及 OpenClaw 是更稳地走工具层还是更猛地走代理模式。
                 </ResultCard>
                 <ResultCard title="机器人本体">
-                  会影响树莓派本地 UI、唤醒词、TTS 风格、音频采集和云台跟随。
+                  会影响树莓派本地唤醒、TTS 音色、音频采集、按钮切页、设置页回表情页的时机，以及双轴云台是否参与动作反馈。
                 </ResultCard>
-                <ResultCard title="后端与 OpenClaw">
-                  会影响机器人动作桥、主动关怀策略、人格测评语音入口和后续提示词上下文。
+                <ResultCard title="OpenClaw / 后端">
+                  会影响工具优先级、原生电脑控制权限、第一次激活与人格测评的语音入口，以及后续主动关怀的提示词与节奏。
                 </ResultCard>
               </div>
             </Panel>
           </div>
+
+          <Panel
+            icon={Wand2}
+            title="后续接线提醒"
+            subtitle="实体设置键接好后，点击设置键会让 Pi 屏幕切到设置页，同时电脑端自动打开这里。"
+          >
+            <div className="grid gap-4 lg:grid-cols-3">
+              <ResultCard title="设置键">
+                用于直接切到设置页。电脑端会收到事件并自动弹出主设置面板。
+              </ResultCard>
+              <ResultCard title="开关键 / 关机键">
+                用于板端上电、软关机和长按保护。真正接线后再做实机去抖和长按逻辑联调。
+              </ResultCard>
+              <ResultCard title="屏幕镜像">
+                Pi 屏幕只显示镜像页和状态页，真正完整设置仍由电脑端承担，避免你在小屏幕上做复杂配置。
+              </ResultCard>
+            </div>
+          </Panel>
         </section>
       </div>
     </div>

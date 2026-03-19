@@ -1,5 +1,6 @@
 ﻿import React, { useCallback, useEffect, useRef, useState } from "react";
 import {
+  AssistantMode,
   CareDeliveryStrategy,
   CarePlan,
   ChatMessage,
@@ -544,6 +545,10 @@ const normalizeCareDeliveryStrategy = (value: unknown): CareDeliveryStrategy => 
 const defaultDeviceSettings = (): DeviceSettings => ({
   mode: "normal",
   care_delivery_strategy: "policy",
+  assistant: {
+    mode: (localStorage.getItem("assistant_mode") as AssistantMode) || "product",
+    native_control_enabled: localStorage.getItem("assistant_native_control") !== "false",
+  },
   media: {
     camera_enabled: localStorage.getItem("media_video") !== "false",
     audio_enabled: localStorage.getItem("media_audio") !== "false",
@@ -944,6 +949,10 @@ const App: React.FC = () => {
         ...defaultDeviceSettings().media,
         ...(incoming.media || {}),
       },
+      assistant: {
+        ...defaultDeviceSettings().assistant,
+        ...(incoming.assistant || {}),
+      },
       wake: {
         ...defaultDeviceSettings().wake,
         ...(incoming.wake || {}),
@@ -971,6 +980,8 @@ const App: React.FC = () => {
     localStorage.setItem("media_video", String(Boolean(merged.media.camera_enabled)));
     localStorage.setItem("media_audio", String(Boolean(merged.media.audio_enabled)));
     localStorage.setItem("care_delivery_strategy", merged.care_delivery_strategy);
+    localStorage.setItem("assistant_mode", merged.assistant.mode);
+    localStorage.setItem("assistant_native_control", String(Boolean(merged.assistant.native_control_enabled)));
   }, []);
 
   const pushSystemLog = useCallback((type: string, payload: Record<string, any>, ts?: number) => {
