@@ -15,6 +15,12 @@ export interface DesktopVoiceStatus {
   language: string;
   max_sec: number;
   model_name: string;
+  beam_size: number;
+  best_of: number;
+  preprocess_enabled: boolean;
+  trim_silence_enabled: boolean;
+  initial_prompt_enabled: boolean;
+  hotwords_enabled: boolean;
 }
 
 export interface DesktopVoiceTranscribeResult {

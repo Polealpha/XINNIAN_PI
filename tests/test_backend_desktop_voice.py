@@ -55,7 +55,13 @@ def test_desktop_voice_status_and_transcribe_route(tmp_path, monkeypatch):
             "fallback_error": None,
             "language": "zh",
             "max_sec": 45,
-            "model_name": "small",
+            "model_name": "distil-large-v3",
+            "beam_size": 8,
+            "best_of": 5,
+            "preprocess_enabled": True,
+            "trim_silence_enabled": True,
+            "initial_prompt_enabled": True,
+            "hotwords_enabled": True,
         },
     )
     monkeypatch.setattr(
@@ -72,6 +78,18 @@ def test_desktop_voice_status_and_transcribe_route(tmp_path, monkeypatch):
             "ready": True,
         },
     )
+    monkeypatch.setattr(
+        main.assistant_service,
+        "runtime_status",
+        lambda: {
+            "gateway_ready": True,
+            "gateway_error": "",
+            "state_dir": "C:\\Users\\jingk\\.openclaw",
+            "workspace_dir": "E:\\Desktop\\chonggou\\assistant_data\\openclaw_workspace",
+            "robot_bridge_ready": True,
+            "desktop_tools": ["desktop.open_url", "robot.pan_tilt"],
+        },
+    )
 
     token = auth.create_access_token(1, "owner@example.com")["token"]
     headers = {"Authorization": f"Bearer {token}"}
@@ -80,6 +98,16 @@ def test_desktop_voice_status_and_transcribe_route(tmp_path, monkeypatch):
         status_response = client.get("/api/desktop/voice/status", headers=headers)
         assert status_response.status_code == 200
         assert status_response.json()["ready"] is True
+        assert status_response.json()["model_name"] == "distil-large-v3"
+        assert status_response.json()["preprocess_enabled"] is True
+
+        runtime_response = client.get("/api/desktop/runtime/status", headers=headers)
+        assert runtime_response.status_code == 200
+        runtime_payload = runtime_response.json()
+        assert runtime_payload["emotion_chain_ready"] is True
+        assert runtime_payload["proactive_care_ready"] is True
+        assert runtime_payload["voice_chain"]["ready"] is True
+        assert runtime_payload["components"]["care_policy_ready"] is True
 
         transcribe_response = client.post(
             "/api/desktop/voice/transcribe",

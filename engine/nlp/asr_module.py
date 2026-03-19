@@ -86,7 +86,14 @@ class AsrModule:
             return "dashscope" if self._dashscope_ready else "dashscope_unavailable"
         return engine or "unknown"
 
-    def transcribe(self, pcm_s16le: bytes, sample_rate: int) -> str:
+    def transcribe(
+        self,
+        pcm_s16le: bytes,
+        sample_rate: int,
+        *,
+        initial_prompt: Optional[str] = None,
+        hotwords: Optional[str] = None,
+    ) -> str:
         if not self.config.enabled:
             return ""
         transcript = ""
@@ -101,7 +108,12 @@ class AsrModule:
             transcript = self._transcribe_vosk(pcm_s16le, sample_rate)
             return self._normalize_transcript(transcript)
         if self.config.engine in ("whisper", "faster_whisper"):
-            transcript = self._transcribe_whisper(pcm_s16le, sample_rate)
+            transcript = self._transcribe_whisper(
+                pcm_s16le,
+                sample_rate,
+                initial_prompt=initial_prompt,
+                hotwords=hotwords,
+            )
             return self._normalize_transcript(transcript)
         if self.config.engine in ("dashscope", "dashscope_realtime", "aliyun"):
             transcript = self._transcribe_dashscope(pcm_s16le, sample_rate)
@@ -321,7 +333,14 @@ class AsrModule:
         except json.JSONDecodeError:
             return ""
 
-    def _transcribe_whisper(self, pcm_s16le: bytes, sample_rate: int) -> str:
+    def _transcribe_whisper(
+        self,
+        pcm_s16le: bytes,
+        sample_rate: int,
+        *,
+        initial_prompt: Optional[str] = None,
+        hotwords: Optional[str] = None,
+    ) -> str:
         if not self._whisper_ready:
             return ""
         try:
@@ -336,12 +355,24 @@ class AsrModule:
             return ""
 
         samples = np.frombuffer(pcm, dtype=np.int16).astype(np.float32) / 32768.0
+        prompt = str(initial_prompt if initial_prompt is not None else self.config.initial_prompt or "").strip() or None
+        hotwords_value = str(hotwords if hotwords is not None else self.config.hotwords or "").strip() or None
+        chunk_length = int(self.config.chunk_length or 0) or None
         segments, _info = self._whisper_model.transcribe(
             samples,
             language=self.config.language,
             beam_size=self.config.beam_size,
+            best_of=max(1, int(self.config.best_of or self.config.beam_size or 1)),
+            patience=float(self.config.patience or 1.0),
+            repetition_penalty=float(self.config.repetition_penalty or 1.0),
+            no_speech_threshold=float(self.config.no_speech_threshold),
+            log_prob_threshold=float(self.config.log_prob_threshold),
+            compression_ratio_threshold=float(self.config.compression_ratio_threshold),
             vad_filter=self.config.vad_filter,
             condition_on_previous_text=False,
+            initial_prompt=prompt,
+            hotwords=hotwords_value,
+            chunk_length=chunk_length,
         )
         texts = []
         for segment in segments:

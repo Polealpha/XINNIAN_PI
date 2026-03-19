@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import audioop
 import io
+import re
 import time
 import threading
 import wave
@@ -12,14 +13,27 @@ from engine.nlp.asr_module import AsrModule
 
 from .settings import (
     DESKTOP_STT_BEAM_SIZE,
+    DESKTOP_STT_BEST_OF,
+    DESKTOP_STT_CHUNK_LENGTH,
+    DESKTOP_STT_COMPRESSION_RATIO_THRESHOLD,
     DESKTOP_STT_COMPUTE_TYPE,
     DESKTOP_STT_DEVICE,
     DESKTOP_STT_FALLBACK_PROVIDER,
+    DESKTOP_STT_HOTWORDS,
+    DESKTOP_STT_INITIAL_PROMPT,
     DESKTOP_STT_LANGUAGE,
+    DESKTOP_STT_LOG_PROB_THRESHOLD,
     DESKTOP_STT_MAX_SEC,
     DESKTOP_STT_MODEL_NAME,
+    DESKTOP_STT_NO_SPEECH_THRESHOLD,
     DESKTOP_STT_NUM_THREADS,
+    DESKTOP_STT_PATIENCE,
+    DESKTOP_STT_PREPROCESS,
     DESKTOP_STT_PROVIDER,
+    DESKTOP_STT_REPETITION_PENALTY,
+    DESKTOP_STT_SILENCE_THRESHOLD,
+    DESKTOP_STT_TARGET_PEAK,
+    DESKTOP_STT_TRIM_SILENCE,
     DESKTOP_STT_VAD_FILTER,
 )
 
@@ -66,7 +80,16 @@ class DesktopSpeechService:
                     device=DESKTOP_STT_DEVICE,
                     compute_type=DESKTOP_STT_COMPUTE_TYPE,
                     beam_size=DESKTOP_STT_BEAM_SIZE,
+                    best_of=DESKTOP_STT_BEST_OF,
+                    patience=DESKTOP_STT_PATIENCE,
+                    repetition_penalty=DESKTOP_STT_REPETITION_PENALTY,
+                    no_speech_threshold=DESKTOP_STT_NO_SPEECH_THRESHOLD,
+                    log_prob_threshold=DESKTOP_STT_LOG_PROB_THRESHOLD,
+                    compression_ratio_threshold=DESKTOP_STT_COMPRESSION_RATIO_THRESHOLD,
+                    chunk_length=DESKTOP_STT_CHUNK_LENGTH,
                     vad_filter=DESKTOP_STT_VAD_FILTER,
+                    initial_prompt=DESKTOP_STT_INITIAL_PROMPT,
+                    hotwords=DESKTOP_STT_HOTWORDS,
                 )
             )
         if provider in {"sherpa", "sherpa_onnx"}:
@@ -92,6 +115,11 @@ class DesktopSpeechService:
 
     def status(self) -> Dict[str, Any]:
         if not self._initialized:
+            try:
+                self._ensure_modules()
+            except Exception:
+                pass
+        if not self._initialized:
             return {
                 "ok": True,
                 "ready": False,
@@ -107,6 +135,12 @@ class DesktopSpeechService:
                 "language": DESKTOP_STT_LANGUAGE,
                 "max_sec": DESKTOP_STT_MAX_SEC,
                 "model_name": DESKTOP_STT_MODEL_NAME,
+                "beam_size": DESKTOP_STT_BEAM_SIZE,
+                "best_of": DESKTOP_STT_BEST_OF,
+                "preprocess_enabled": DESKTOP_STT_PREPROCESS,
+                "trim_silence_enabled": DESKTOP_STT_TRIM_SILENCE,
+                "initial_prompt_enabled": bool(str(DESKTOP_STT_INITIAL_PROMPT or "").strip()),
+                "hotwords_enabled": bool(str(DESKTOP_STT_HOTWORDS or "").strip()),
             }
         primary = self._primary_asr
         fallback = self._fallback_asr
@@ -126,6 +160,12 @@ class DesktopSpeechService:
             "language": DESKTOP_STT_LANGUAGE,
             "max_sec": DESKTOP_STT_MAX_SEC,
             "model_name": DESKTOP_STT_MODEL_NAME,
+            "beam_size": DESKTOP_STT_BEAM_SIZE,
+            "best_of": DESKTOP_STT_BEST_OF,
+            "preprocess_enabled": DESKTOP_STT_PREPROCESS,
+            "trim_silence_enabled": DESKTOP_STT_TRIM_SILENCE,
+            "initial_prompt_enabled": bool(str(DESKTOP_STT_INITIAL_PROMPT or "").strip()),
+            "hotwords_enabled": bool(str(DESKTOP_STT_HOTWORDS or "").strip()),
         }
 
     def transcribe_upload(
@@ -139,6 +179,8 @@ class DesktopSpeechService:
         self._ensure_modules()
         started = time.perf_counter()
         pcm, sample_rate, duration_ms = self._decode_audio(audio_bytes, filename=filename, content_type=content_type)
+        pcm = self._preprocess_pcm(pcm, sample_rate)
+        duration_ms = int((len(pcm) / 2) / max(1, sample_rate) * 1000) if pcm else 0
         if not pcm:
             raise ValueError("empty_audio")
         provider = self._resolve_active_provider()
@@ -147,11 +189,28 @@ class DesktopSpeechService:
         primary = self._primary_asr
         fallback = self._fallback_asr
 
+        initial_prompt = self._build_context_prompt(context)
+        hotwords = self._build_context_hotwords(context)
+
         if primary and primary.ready:
-            transcript = self._normalize_text(primary.transcribe(pcm, sample_rate))
+            transcript = self._normalize_text(
+                primary.transcribe(
+                    pcm,
+                    sample_rate,
+                    initial_prompt=initial_prompt,
+                    hotwords=hotwords,
+                )
+            )
             provider = primary.active_engine
         if not transcript and fallback and fallback.ready:
-            transcript = self._normalize_text(fallback.transcribe(pcm, sample_rate))
+            transcript = self._normalize_text(
+                fallback.transcribe(
+                    pcm,
+                    sample_rate,
+                    initial_prompt=initial_prompt,
+                    hotwords=hotwords,
+                )
+            )
             provider = fallback.active_engine
             used_fallback = True
         latency_ms = int((time.perf_counter() - started) * 1000)
@@ -222,4 +281,92 @@ class DesktopSpeechService:
         raw = str(text or "").strip()
         if not raw:
             return ""
-        return " ".join(raw.split())
+        normalized = " ".join(raw.split())
+        normalized = re.sub(r"([一-龥])\s+([一-龥])", r"\1\2", normalized)
+        normalized = re.sub(r"\s+([，。！？：；、,.!?])", r"\1", normalized)
+        return normalized.strip()
+
+    def _build_context_prompt(self, context: str) -> str:
+        base = str(DESKTOP_STT_INITIAL_PROMPT or "").strip()
+        key = str(context or "chat").strip().lower()
+        context_prompts = {
+            "chat": "这是中文陪伴机器人和主人的自然口语对话，请优先识别控制意图、人物称呼和情绪表达。",
+            "activation_assessment": "这是机器人首次激活和人格测评时的中文回答，请准确识别人名、关系、性格描述和生活习惯。",
+            "activation_identity": "这是机器人首次登录后的身份确认，请准确识别人名、称呼、与机器人的关系和自我介绍。",
+            "command": "这是中文控制指令，请优先准确识别动作、设置项、应用名和设备名。",
+        }
+        parts = [part for part in [base, context_prompts.get(key)] if str(part or "").strip()]
+        return " ".join(parts).strip()
+
+    def _build_context_hotwords(self, context: str) -> str:
+        base_terms = [item.strip() for item in str(DESKTOP_STT_HOTWORDS or "").split(",") if item.strip()]
+        key = str(context or "chat").strip().lower()
+        extra = {
+            "chat": ["关怀", "陪伴", "主动关怀"],
+            "activation_assessment": ["主人", "人格", "绑定", "测评", "性格"],
+            "activation_identity": ["主人", "绑定", "机器人", "小念"],
+            "command": ["云台", "跟踪", "设置页", "网易云音乐", "打开", "关闭"],
+        }.get(key, [])
+        merged: list[str] = []
+        for item in [*base_terms, *extra]:
+            if item and item not in merged:
+                merged.append(item)
+        return ",".join(merged)
+
+    def _preprocess_pcm(self, pcm: bytes, sample_rate: int) -> bytes:
+        if not pcm or sample_rate <= 0 or not DESKTOP_STT_PREPROCESS:
+            return pcm
+        processed = pcm
+        if DESKTOP_STT_TRIM_SILENCE:
+            processed = self._trim_edge_silence(processed, sample_rate)
+        processed = self._normalize_peak(processed)
+        return processed
+
+    def _trim_edge_silence(self, pcm: bytes, sample_rate: int) -> bytes:
+        if not pcm:
+            return pcm
+        frame_size = 320
+        threshold = max(32, int(DESKTOP_STT_SILENCE_THRESHOLD))
+        total_samples = len(pcm) // 2
+        if total_samples <= frame_size:
+            return pcm
+        ints = memoryview(pcm).cast("h")
+        start = 0
+        end = total_samples
+        while start + frame_size < total_samples:
+            window = ints[start:start + frame_size]
+            if max(abs(int(v)) for v in window) >= threshold:
+                break
+            start += frame_size
+        while end - frame_size > start:
+            window = ints[end - frame_size:end]
+            if max(abs(int(v)) for v in window) >= threshold:
+                break
+            end -= frame_size
+        # Keep a small pad so clipped syllables are less likely.
+        pad = int(sample_rate * 0.12)
+        start = max(0, start - pad)
+        end = min(total_samples, end + pad)
+        if end <= start:
+            return pcm
+        return pcm[start * 2:end * 2]
+
+    def _normalize_peak(self, pcm: bytes) -> bytes:
+        if not pcm:
+            return pcm
+        target_peak = max(2048, int(DESKTOP_STT_TARGET_PEAK))
+        try:
+            peak = audioop.max(pcm, 2)
+        except Exception:
+            return pcm
+        if peak <= 0:
+            return pcm
+        if peak >= target_peak:
+            return pcm
+        gain = min(6.0, target_peak / max(1.0, float(peak)))
+        if gain <= 1.05:
+            return pcm
+        try:
+            return audioop.mul(pcm, 2, gain)
+        except Exception:
+            return pcm

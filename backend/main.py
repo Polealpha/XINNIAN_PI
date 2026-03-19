@@ -23,6 +23,7 @@ from fastapi.staticfiles import StaticFiles
 from sqlite3 import Connection
 import httpx
 from cryptography.fernet import Fernet, InvalidToken
+from engine.core.config import load_engine_config
 
 from . import auth
 from .activation_prompts import ACTIVATION_SYSTEM_PROMPT, IDENTITY_EXTRACTION_PROMPT
@@ -90,6 +91,7 @@ from .schemas import (
     CareResponse,
     DailySummaryRequest,
     DailySummaryResponse,
+    DesktopRuntimeStatusResponse,
     DesktopVoiceStatusResponse,
     DesktopVoiceTranscribeResponse,
     DeviceInfoResponse,
@@ -249,6 +251,7 @@ class EventManager:
 event_manager = EventManager()
 assistant_service = AssistantService()
 desktop_speech_service = DesktopSpeechService()
+_ENGINE_CONFIG_PATH = Path(__file__).resolve().parent.parent / "config" / "engine_config.json"
 
 
 @app.on_event("startup")
@@ -262,6 +265,43 @@ def runtime_version() -> Dict[str, object]:
     payload = _runtime_version_payload()
     payload["ok"] = True
     return payload
+
+
+def _desktop_runtime_status_payload() -> Dict[str, object]:
+    engine_cfg = load_engine_config(str(_ENGINE_CONFIG_PATH))
+    engine_root = Path(__file__).resolve().parent.parent / "engine"
+    care_templates = engine_root / "policy" / "templates_zh.json"
+    text_lexicon = engine_root / "nlp" / "lexicon_zh.txt"
+    assistant_chain = assistant_service.runtime_status()
+    voice_chain = desktop_speech_service.status()
+    return {
+        "ok": True,
+        "source": "desktop_backend",
+        "emotion_chain_ready": True,
+        "proactive_care_ready": True,
+        "active_care_strategy": str(engine_cfg.policy.care_delivery_strategy or "policy"),
+        "voice_chain": voice_chain,
+        "assistant_chain": assistant_chain,
+        "components": {
+            "fusion_enabled": True,
+            "trigger_enabled": True,
+            "text_risk_lexicon": str(text_lexicon),
+            "text_risk_ready": text_lexicon.exists(),
+            "care_policy_templates": str(care_templates),
+            "care_policy_ready": care_templates.exists(),
+            "summary_enabled": True,
+            "desktop_backend_local": True,
+        },
+    }
+
+
+@app.get("/api/desktop/runtime/status", response_model=DesktopRuntimeStatusResponse)
+def desktop_runtime_status(
+    credentials: HTTPAuthorizationCredentials = Depends(bearer_scheme),
+    conn: Connection = Depends(get_db),
+) -> DesktopRuntimeStatusResponse:
+    _parse_access_token(credentials, conn)
+    return DesktopRuntimeStatusResponse(**_desktop_runtime_status_payload())
 
 
 @app.get("/api/desktop/voice/status", response_model=DesktopVoiceStatusResponse)

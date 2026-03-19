@@ -446,6 +446,12 @@ class DesktopVoiceStatusResponse(BaseModel):
     language: str = "zh"
     max_sec: int = 45
     model_name: str = "small"
+    beam_size: int = 5
+    best_of: int = 5
+    preprocess_enabled: bool = True
+    trim_silence_enabled: bool = True
+    initial_prompt_enabled: bool = False
+    hotwords_enabled: bool = False
 
 
 class DesktopVoiceTranscribeResponse(BaseModel):
@@ -457,6 +463,17 @@ class DesktopVoiceTranscribeResponse(BaseModel):
     latency_ms: int = 0
     context: str = "chat"
     ready: bool = False
+
+
+class DesktopRuntimeStatusResponse(BaseModel):
+    ok: bool
+    source: str = "desktop_backend"
+    emotion_chain_ready: bool = True
+    proactive_care_ready: bool = True
+    active_care_strategy: str = "policy"
+    voice_chain: dict = Field(default_factory=dict)
+    assistant_chain: dict = Field(default_factory=dict)
+    components: dict = Field(default_factory=dict)
 
 
 class AssistantBridgeSendRequest(BaseModel):
