@@ -1,5 +1,6 @@
 const path = require("path");
 const fs = require("fs");
+const os = require("os");
 const { spawn, spawnSync } = require("child_process");
 const { app, BrowserWindow, shell, ipcMain, Tray, Menu, nativeImage, screen, Notification } = require("electron");
 const { DeviceSyncManager } = require("./deviceSync.cjs");
@@ -47,6 +48,10 @@ const resolveOpenClawWorkspace = (runtimeRoot) => {
   return path.join(runtimeRoot, "assistant_data", "openclaw_workspace");
 };
 
+const resolveOpenClawStateDir = (runtimeRoot) => {
+  return path.join(runtimeRoot, "assistant_data", "openclaw_state");
+};
+
 const ensureOpenClawWorkspace = (workspaceDir) => {
   fs.mkdirSync(workspaceDir, { recursive: true });
   fs.mkdirSync(path.join(workspaceDir, "memory"), { recursive: true });
@@ -61,6 +66,38 @@ const ensureOpenClawWorkspace = (workspaceDir) => {
     if (!fs.existsSync(target)) {
       fs.writeFileSync(target, content, "utf8");
     }
+  }
+};
+
+const ensureOpenClawState = (stateDir) => {
+  const sourceState = path.join(os.homedir(), ".openclaw");
+  fs.mkdirSync(stateDir, { recursive: true });
+  fs.mkdirSync(path.join(stateDir, "identity"), { recursive: true });
+  fs.mkdirSync(path.join(stateDir, "logs"), { recursive: true });
+  const copyIfMissing = (src, dest) => {
+    if (!fs.existsSync(dest) && fs.existsSync(src)) {
+      fs.copyFileSync(src, dest);
+    }
+  };
+  copyIfMissing(path.join(sourceState, "identity", "device.json"), path.join(stateDir, "identity", "device.json"));
+  copyIfMissing(
+    path.join(sourceState, "identity", "device-auth.json"),
+    path.join(stateDir, "identity", "device-auth.json")
+  );
+  const targetConfig = path.join(stateDir, "openclaw.json");
+  if (!fs.existsSync(targetConfig) && fs.existsSync(path.join(sourceState, "openclaw.json"))) {
+    const cfg = JSON.parse(fs.readFileSync(path.join(sourceState, "openclaw.json"), "utf8"));
+    cfg.gateway = cfg.gateway || {};
+    cfg.gateway.mode = "local";
+    cfg.gateway.port = LOCAL_OPENCLAW_GATEWAY_PORT;
+    cfg.gateway.auth = cfg.gateway.auth || {};
+    cfg.gateway.auth.mode = "token";
+    cfg.gateway.auth.token = "chonggou-openclaw-bridge";
+    cfg.agents = cfg.agents || {};
+    cfg.agents.defaults = cfg.agents.defaults || {};
+    cfg.agents.defaults.model = cfg.agents.defaults.model || {};
+    cfg.agents.defaults.model.primary = "codex-cli/gpt-5.4";
+    fs.writeFileSync(targetConfig, JSON.stringify(cfg, null, 2), "utf8");
   }
 };
 
@@ -133,6 +170,7 @@ const startLocalBackend = () => {
         ...process.env,
         PYTHONPATH: runtimeRoot,
         OPENCLAW_WORKSPACE_DIR: resolveOpenClawWorkspace(runtimeRoot),
+        OPENCLAW_STATE_DIR: resolveOpenClawStateDir(runtimeRoot),
         OPENCLAW_GATEWAY_URL: `ws://127.0.0.1:${LOCAL_OPENCLAW_GATEWAY_PORT}`,
         OPENCLAW_GATEWAY_ORIGIN: `http://127.0.0.1:${LOCAL_OPENCLAW_GATEWAY_PORT}`,
         DEFAULT_ROBOT_DEVICE_IP: process.env.DEFAULT_ROBOT_DEVICE_IP || "192.168.137.50",
@@ -165,7 +203,9 @@ const startLocalOpenClawGateway = () => {
     return;
   }
   const workspaceDir = resolveOpenClawWorkspace(runtimeRoot);
+  const stateDir = resolveOpenClawStateDir(runtimeRoot);
   ensureOpenClawWorkspace(workspaceDir);
+  ensureOpenClawState(stateDir);
   openClawGatewayProc = spawn(
     "node",
     [
@@ -187,7 +227,7 @@ const startLocalOpenClawGateway = () => {
       cwd: workspaceDir,
       env: {
         ...process.env,
-        OPENCLAW_STATE_DIR: process.env.OPENCLAW_STATE_DIR || path.join(require("os").homedir(), ".openclaw"),
+        OPENCLAW_STATE_DIR: process.env.OPENCLAW_STATE_DIR || stateDir,
       },
       windowsHide: true,
       stdio: ["ignore", "pipe", "pipe"],
