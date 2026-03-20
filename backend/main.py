@@ -1844,7 +1844,7 @@ def _default_device_settings() -> Dict[str, object]:
         "tracking": {"pan_enabled": True, "tilt_enabled": True},
         "voice": {
             "desktop_stt_provider": "faster_whisper",
-            "desktop_stt_model": "small",
+            "desktop_stt_model": "distil-large-v3",
             "robot_tts_provider": "piper",
             "robot_voice_style": "sweet",
         },

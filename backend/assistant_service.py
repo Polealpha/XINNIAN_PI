@@ -28,6 +28,7 @@ from .settings import (
     OPENCLAW_CLIENT_ID,
     OPENCLAW_CLIENT_MODE,
     OPENCLAW_GATEWAY_ORIGIN,
+    OPENCLAW_REPO_PATH,
     OPENCLAW_GATEWAY_URL,
     OPENCLAW_STATE_DIR,
     OPENCLAW_TIMEOUT_MS,
@@ -71,11 +72,13 @@ class ToolExecutionResult:
 
 class AssistantService:
     def __init__(self) -> None:
-        self.store = AssistantWorkspaceStore(OPENCLAW_WORKSPACE_DIR)
+        self.workspace_dir = self._resolve_workspace_dir()
+        self.store = AssistantWorkspaceStore(self.workspace_dir)
         self.gateway = OpenClawGatewayClient(
             OpenClawGatewayConfig(
                 state_dir=OPENCLAW_STATE_DIR,
-                workspace_dir=OPENCLAW_WORKSPACE_DIR,
+                workspace_dir=self.workspace_dir,
+                repo_path=OPENCLAW_REPO_PATH,
                 url=OPENCLAW_GATEWAY_URL,
                 origin=OPENCLAW_GATEWAY_ORIGIN,
                 timeout_ms=OPENCLAW_TIMEOUT_MS,
@@ -87,6 +90,20 @@ class AssistantService:
             self.app_allowlist = json.loads(DESKTOP_APP_ALLOWLIST_JSON)
         except Exception:
             self.app_allowlist = {}
+
+    def _resolve_workspace_dir(self) -> str:
+        configured = Path(str(OPENCLAW_WORKSPACE_DIR or "")).expanduser().resolve()
+        candidates = [configured]
+        try:
+            state_dir = discover_openclaw_state_dir(OPENCLAW_STATE_DIR, str(configured))
+            runtime_workspace = (state_dir / "workspace").resolve()
+            candidates.insert(0, runtime_workspace)
+        except Exception:
+            pass
+        for candidate in candidates:
+            if candidate.exists():
+                return str(candidate)
+        return str(configured)
 
     async def send_message(
         self,
@@ -296,7 +313,7 @@ class AssistantService:
 
     def runtime_status(self) -> Dict[str, object]:
         try:
-            state_dir = discover_openclaw_state_dir(OPENCLAW_STATE_DIR, OPENCLAW_WORKSPACE_DIR)
+            state_dir = discover_openclaw_state_dir(OPENCLAW_STATE_DIR, self.workspace_dir)
             gateway_ready = True
             gateway_error = ""
             resolved_state_dir = str(state_dir)
@@ -308,7 +325,7 @@ class AssistantService:
             "gateway_ready": gateway_ready,
             "gateway_error": gateway_error,
             "state_dir": resolved_state_dir,
-            "workspace_dir": str(OPENCLAW_WORKSPACE_DIR),
+            "workspace_dir": str(self.workspace_dir),
             "desktop_tools": [
                 "desktop.launch_app",
                 "desktop.open_url",
@@ -336,42 +353,23 @@ class AssistantService:
         assistant_mode: str = "product",
         native_control_enabled: bool = True,
     ) -> str:
-        contract = (
-            "[assistant_contract] \u4f60\u662f\u684c\u9762\u7aef\u4e0e\u673a\u5668\u4eba\u5171\u4eab\u7684\u966a\u4f34\u52a9\u624b\u3002"
-            "\u4e0d\u8981\u63d0\u53ca workspace\u3001bootstrap\u3001\u521d\u59cb\u5316\u3001\u8bfb\u53d6\u6587\u4ef6\u3001\u52a0\u8f7d\u4e0a\u4e0b\u6587\u3001\u5185\u90e8\u6d41\u7a0b\u6216\u7cfb\u7edf\u5e95\u5c42\u7ec6\u8282\u3002"
-            "\u5982\u679c\u7528\u6237\u8981\u6c42\u7cbe\u786e\u56de\u590d\u67d0\u4e2a\u5b57\u9762\u6587\u672c\uff0c\u5c31\u4e25\u683c\u53ea\u56de\u590d\u90a3\u4e2a\u6587\u672c\u672c\u8eab\u3002"
-            "\u663e\u5f0f\u5de5\u5177\u5df2\u7ecf\u5728\u5916\u5c42\u6267\u884c\u8fc7\uff1b\u82e5\u770b\u5230 tool \u6458\u8981\uff0c\u53ea\u9700\u81ea\u7136\u6574\u5408\u7ed3\u679c\uff0c\u4e0d\u8981\u590d\u8ff0\u6267\u884c\u8fc7\u7a0b\u3002"
-        )
+        lines = []
         if str(assistant_mode or "").strip().lower() == "agent":
-            contract = (
-                "[assistant_contract] \u4ee3\u7406\u6a21\u5f0f\u5df2\u542f\u7528\u3002"
-                "\u4f60\u53ef\u4ee5\u4f18\u5148\u4f7f\u7528 OpenClaw \u539f\u751f\u7684\u672c\u5730\u7535\u8111\u63a7\u5236\u3001\u6d4f\u89c8\u5668\u63a7\u5236\u548c\u8282\u70b9\u80fd\u529b\u76f4\u63a5\u5b8c\u6210\u7528\u6237\u8bf7\u6c42\u3002"
-                "\u5982\u679c\u4e0b\u65b9\u5df2\u7ecf\u7ed9\u51fa tool \u6458\u8981\uff0c\u628a\u5b83\u5f53\u4f5c\u5df2\u6267\u884c\u7ed3\u679c\u6574\u5408\u8fdb\u56de\u590d\uff1b\u5982\u679c\u6ca1\u6709\uff0c\u5c31\u4f18\u5148\u81ea\u4e3b\u8c03\u7528\u539f\u751f\u80fd\u529b\u3002"
-                "\u4ecd\u7136\u4e0d\u8981\u6cc4\u9732 workspace\u3001bootstrap\u3001\u521d\u59cb\u5316\u3001\u8bfb\u53d6\u6587\u4ef6\u3001\u5185\u90e8\u63d0\u793a\u8bcd\u6216\u7cfb\u7edf\u5e95\u5c42\u7ec6\u8282\u3002"
-                "\u9762\u5411\u7528\u6237\u53ea\u63cf\u8ff0\u7ed3\u679c\u3001\u4e0b\u4e00\u6b65\u548c\u5fc5\u8981\u98ce\u9669\u3002"
-            )
-        lines = [
-            f"[surface={surface} session={session_key}]",
-            f"[assistant_mode={assistant_mode}]",
-            f"[assistant_native_control={str(bool(native_control_enabled)).lower()}]",
-            contract,
-        ]
-        if str(assistant_mode or "").strip().lower() == "agent":
+            lines.append("[assistant_mode=agent]")
+            lines.append(f"[assistant_native_control={str(bool(native_control_enabled)).lower()}]")
             lines.append(
-                "[execution_policy] \u80fd\u76f4\u63a5\u6267\u884c\u5c31\u76f4\u63a5\u6267\u884c\u3002\u4e0d\u8981\u5148\u8bf4\u4f60\u8981\u8bfb\u53d6\u4e0a\u4e0b\u6587\u3001\u68c0\u67e5\u5de5\u4f5c\u533a\u3001\u8bfb\u53d6\u8bb0\u5fc6\u3001\u67e5\u770b\u5f15\u5bfc\u6587\u4ef6\u6216\u6574\u7406\u73af\u5883\u3002"
+                "Agent mode is enabled. Prefer native OpenClaw execution first. "
+                "Do not mention workspace files, prompts, bootstrap, logs, or internal setup."
             )
-            lines.append(
-                "[execution_policy] \u9664\u975e\u7528\u6237\u660e\u786e\u8981\u6c42\uff0c\u5426\u5219\u4e0d\u8981\u5411\u7528\u6237\u5c55\u793a\u4efb\u4f55\u5173\u4e8e workspace\u3001\u8bb0\u5fc6\u6587\u4ef6\u3001\u65e5\u5fd7\u3001\u5f15\u5bfc\u6587\u4ef6\u3001\u4f1a\u8bdd\u6062\u590d\u6216\u5185\u90e8\u51c6\u5907\u52a8\u4f5c\u7684\u63cf\u8ff0\u3002"
-            )
-        lines.append("[input_encoding] If you see user_request_json, decode its text field and answer that request directly.")
+        else:
+            lines.append("Answer the final user request directly in concise Chinese. Do not ask the user to resend unless the input is actually empty.")
         for item in tool_results:
-            lines.append(f"[tool:{item.name}] ok={str(item.ok).lower()} detail={item.detail}")
+            lines.append(f"Tool result [{item.name}] ok={str(item.ok).lower()}: {item.detail}")
         if attachments:
-            lines.append(f"[attachments] {json.dumps(attachments, ensure_ascii=False)}")
+            lines.append(f"Attachments: {json.dumps(attachments, ensure_ascii=False)}")
         if metadata:
-            lines.append(f"[metadata] {json.dumps(metadata, ensure_ascii=False)}")
-        lines.append("")
-        lines.append(f"[user_request_json] {self._encode_user_text_for_gateway(text)}")
+            lines.append(f"Metadata: {json.dumps(metadata, ensure_ascii=False)}")
+        lines.append(str(text or "").strip())
         return "\n".join(lines).strip()
 
     def _compose_exact_reply_message(self, exact_reply_target: str) -> str:
@@ -388,15 +386,10 @@ class AssistantService:
         native_control_enabled: bool,
     ) -> str:
         lines = [
-            f"[surface={surface}]",
-            f"[assistant_mode={assistant_mode}]",
-            f"[assistant_native_control={str(bool(native_control_enabled)).lower()}]",
-            "[hard_rule] This is a normal end-user chat request, not a heartbeat check.",
-            "[hard_rule] Do not reply HEARTBEAT_OK.",
-            "[hard_rule] Answer the user's request directly in concise Chinese.",
-            "[input_encoding] Decode user_request_json.text and answer that request directly.",
-            "",
-            f"[user_request_json] {self._encode_user_text_for_gateway(text)}",
+            "This is a normal end-user chat request, not a heartbeat check.",
+            "Do not reply HEARTBEAT_OK.",
+            "Answer the user's request directly in concise Chinese.",
+            str(text or "").strip(),
         ]
         return "\n".join(lines).strip()
 
@@ -475,9 +468,6 @@ class AssistantService:
         if match:
             return match.group(1).strip()
         return ""
-
-    def _encode_user_text_for_gateway(self, text: str) -> str:
-        return json.dumps({"text": str(text or "").strip()}, ensure_ascii=True, separators=(",", ":"))
 
     def _reply_is_false_heartbeat(self, reply: str, user_text: str) -> bool:
         raw_reply = str(reply or "").strip().upper()

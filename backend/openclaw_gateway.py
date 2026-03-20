@@ -2,8 +2,11 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import hashlib
 import json
 import os
+import re
+import subprocess
 import time
 import uuid
 from dataclasses import dataclass
@@ -26,6 +29,7 @@ class OpenClawGatewayError(RuntimeError):
 class OpenClawGatewayConfig:
     state_dir: str
     workspace_dir: str
+    repo_path: str
     url: str
     origin: str
     timeout_ms: int
@@ -59,18 +63,23 @@ class OpenClawGatewayClient:
         self.config = config
 
     async def send_message(self, session_key: str, text: str) -> str:
+        normalized_session_key = self._normalize_agent_session_key(str(session_key))
         runtime = self._load_runtime()
         timeout_ms = max(5000, int(self.config.timeout_ms))
+        try:
+            return await self._send_message_via_agent(runtime, normalized_session_key, str(text), timeout_ms)
+        except Exception:
+            pass
         async with self._connect(runtime) as ws:
             inbox: List[Dict[str, object]] = []
             await self._connect_session(ws, runtime, inbox)
-            baseline = await self._latest_assistant_message(ws, str(session_key), inbox)
+            baseline = await self._latest_assistant_message(ws, normalized_session_key, inbox)
             run_id = f"assistant-{int(time.time() * 1000)}-{uuid.uuid4().hex[:8]}"
             response = await self._rpc_request(
                 ws,
                 "chat.send",
                 {
-                    "sessionKey": str(session_key),
+                    "sessionKey": normalized_session_key,
                     "message": str(text),
                     "deliver": False,
                     "timeoutMs": timeout_ms,
@@ -81,9 +90,10 @@ class OpenClawGatewayClient:
             )
             if not response.get("ok"):
                 raise OpenClawGatewayError(f"OpenClaw chat.send failed: {response.get('error')}")
-            return await self._wait_for_reply(ws, str(session_key), run_id, baseline, inbox, timeout_ms)
+            return await self._wait_for_reply(ws, normalized_session_key, run_id, baseline, inbox, timeout_ms)
 
     async def reset_session(self, session_key: str) -> None:
+        normalized_session_key = self._normalize_agent_session_key(str(session_key))
         runtime = self._load_runtime()
         async with self._connect(runtime) as ws:
             inbox: List[Dict[str, object]] = []
@@ -91,7 +101,7 @@ class OpenClawGatewayClient:
             response = await self._rpc_request(
                 ws,
                 "sessions.reset",
-                {"key": str(session_key)},
+                {"key": normalized_session_key},
                 inbox,
                 timeout_ms=10000,
             )
@@ -113,6 +123,7 @@ class OpenClawGatewayClient:
         if not token:
             raise OpenClawGatewayError("OpenClaw token missing")
         return {
+            "state_dir": str(state_dir),
             "url": url,
             "origin": origin,
             "token": token,
@@ -120,6 +131,98 @@ class OpenClawGatewayClient:
             "private_key_pem": str(device_json.get("privateKeyPem", "") or ""),
             "public_key_pem": str(device_json.get("publicKeyPem", "") or ""),
         }
+
+    @staticmethod
+    def _normalize_agent_session_key(session_key: str) -> str:
+        raw = str(session_key or "").strip() or "session"
+        cleaned = re.sub(r"[^A-Za-z0-9._-]+", "-", raw).strip("-") or "session"
+        digest = hashlib.sha1(raw.encode("utf-8")).hexdigest()[:10]
+        return f"{cleaned[:48]}-{digest}"
+
+    async def _send_message_via_agent(
+        self,
+        runtime: Dict[str, str],
+        session_key: str,
+        text: str,
+        timeout_ms: int,
+    ) -> str:
+        repo_root = Path(str(self.config.repo_path or "")).expanduser().resolve()
+        launcher = repo_root / "scripts" / "run-node.mjs"
+        if not launcher.exists():
+            raise OpenClawGatewayError(f"OpenClaw launcher not found: {launcher}")
+        env = {
+            **os.environ,
+            "OPENCLAW_STATE_DIR": str(runtime["state_dir"]),
+        }
+        if os.name == "nt":
+            prompt_b64 = base64.b64encode(text.encode("utf-8")).decode("ascii")
+            escaped_repo = str(repo_root).replace("'", "''")
+            escaped_session = str(session_key).replace("'", "''")
+            script = (
+                "$OutputEncoding = [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new(); "
+                "$prompt = [System.Text.Encoding]::UTF8.GetString([System.Convert]::FromBase64String"
+                f"('{prompt_b64}')); "
+                f"Set-Location '{escaped_repo}'; "
+                f"node scripts/run-node.mjs agent --session-id '{escaped_session}' --message $prompt --thinking low --json"
+            )
+            process = await asyncio.create_subprocess_exec(
+                "powershell",
+                "-NoLogo",
+                "-NoProfile",
+                "-Command",
+                script,
+                cwd=str(repo_root),
+                env=env,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+        else:
+            process = await asyncio.create_subprocess_exec(
+                "node",
+                str(launcher),
+                "agent",
+                "--session-id",
+                session_key,
+                "--message",
+                text,
+                "--thinking",
+                "low",
+                "--json",
+                cwd=str(repo_root),
+                env=env,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+        try:
+            stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=max(30.0, timeout_ms / 1000.0))
+        except asyncio.TimeoutError as exc:
+            process.kill()
+            raise OpenClawGatewayError("OpenClaw agent command timed out") from exc
+        if process.returncode != 0:
+            raise OpenClawGatewayError(
+                f"OpenClaw agent command failed: {(stderr or b'').decode('utf-8', errors='ignore').strip()}"
+            )
+        output = (stdout or b"").decode("utf-8", errors="ignore").strip()
+        parsed = self._extract_agent_json(output)
+        payloads = (((parsed.get("result") or {}).get("payloads")) if isinstance(parsed, dict) else None) or []
+        for payload in payloads:
+            if isinstance(payload, dict) and str(payload.get("text") or "").strip():
+                return str(payload.get("text") or "").strip()
+        raise OpenClawGatewayError("OpenClaw agent command returned no text payload")
+
+    @staticmethod
+    def _extract_agent_json(output: str) -> Dict[str, object]:
+        raw = str(output or "").strip()
+        if not raw:
+            raise OpenClawGatewayError("OpenClaw agent command produced no output")
+        start = raw.find("{")
+        end = raw.rfind("}")
+        if start < 0 or end < start:
+            raise OpenClawGatewayError(f"OpenClaw agent command returned non-JSON output: {raw[:200]}")
+        try:
+            return json.loads(raw[start : end + 1])
+        except Exception as exc:
+            raise OpenClawGatewayError("Failed to parse OpenClaw agent JSON output") from exc
 
     @staticmethod
     def _read_json(path: Path) -> Dict[str, object]:
