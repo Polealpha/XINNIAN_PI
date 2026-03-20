@@ -134,7 +134,7 @@ Recommended first button layout:
 
 - Power toggle button: BCM5, physical pin 29
 - Shutdown button: BCM6, physical pin 31
-- Settings button: BCM16, physical pin 36
+- Settings button: BCM23, physical pin 16
 - All three buttons share GND
 
 Recommended wiring style:
@@ -164,7 +164,7 @@ Current config block:
   "allow_system_power_commands": false,
   "power_toggle": { "enabled": true, "gpio_pin": 5, "pull_up": true },
   "shutdown": { "enabled": true, "gpio_pin": 6, "pull_up": true },
-  "settings": { "enabled": true, "gpio_pin": 16, "pull_up": true }
+  "settings": { "enabled": true, "gpio_pin": 23, "pull_up": true }
 },
 "ui": {
   "default_page": "expression",

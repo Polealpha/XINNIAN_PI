@@ -242,6 +242,8 @@ class AsrModule:
         pcm = self._trim_audio(pcm_s16le, sample_rate)
         if not pcm:
             return ""
+        if not self._is_pcm_window_usable(pcm, sample_rate, min_ms=320):
+            return ""
         if sample_rate != 16000:
             return ""
         samples = np.frombuffer(pcm, dtype=np.int16).astype("float32") / 32768.0
@@ -323,6 +325,8 @@ class AsrModule:
             return ""
 
         pcm = self._trim_audio(pcm_s16le, sample_rate)
+        if not self._is_pcm_window_usable(pcm, sample_rate, min_ms=220):
+            return ""
         recognizer = KaldiRecognizer(self._vosk_model, sample_rate)
         recognizer.SetWords(False)
         recognizer.AcceptWaveform(pcm)
@@ -350,6 +354,8 @@ class AsrModule:
 
         pcm = self._trim_audio(pcm_s16le, sample_rate)
         if not pcm:
+            return ""
+        if not self._is_pcm_window_usable(pcm, sample_rate, min_ms=260):
             return ""
         if sample_rate != 16000:
             return ""
@@ -432,6 +438,8 @@ class AsrModule:
             return ""
         pcm = self._trim_audio(pcm_s16le, sample_rate)
         if not pcm:
+            return ""
+        if not self._is_pcm_window_usable(pcm, sample_rate, min_ms=260):
             return ""
         if sample_rate != 16000:
             return ""
@@ -566,6 +574,22 @@ class AsrModule:
         if len(pcm_s16le) <= max_bytes:
             return pcm_s16le
         return pcm_s16le[-max_bytes:]
+
+    def _is_pcm_window_usable(self, pcm_s16le: bytes, sample_rate: int, *, min_ms: int = 300) -> bool:
+        if not pcm_s16le or sample_rate <= 0:
+            return False
+        min_bytes = int(sample_rate * max(1, int(min_ms)) / 1000) * 2
+        if len(pcm_s16le) < max(640, min_bytes):
+            return False
+        try:
+            import numpy as np  # type: ignore
+        except Exception:
+            return True
+        samples = np.frombuffer(pcm_s16le, dtype=np.int16)
+        if samples.size == 0:
+            return False
+        peak = int(np.max(np.abs(samples)))
+        return peak >= 32
 
     def _normalize_transcript(self, text: str) -> str:
         raw = str(text or "").strip()

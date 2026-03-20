@@ -117,7 +117,7 @@
     },
     "settings": {
       "enabled": true,
-      "gpio_pin": 16,
+      "gpio_pin": 23,
       "pull_up": true,
       "hold_sec": 0.0,
       "bounce_time": 0.08

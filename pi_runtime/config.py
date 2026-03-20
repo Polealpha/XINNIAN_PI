@@ -103,6 +103,7 @@ class PanServoConfig:
     pca9685_channel: Optional[int] = None
     pulse_min_us: int = 500
     pulse_max_us: int = 2500
+    release_after_move_sec: float = 0.35
 
 
 @dataclass
@@ -116,6 +117,7 @@ class TiltServoConfig:
     pca9685_channel: Optional[int] = None
     pulse_min_us: int = 500
     pulse_max_us: int = 2500
+    release_after_move_sec: float = 0.35
 
 
 @dataclass

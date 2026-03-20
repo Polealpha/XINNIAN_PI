@@ -74,23 +74,25 @@
       "enabled": true,
       "driver": "gpio",
       "gpio_pin": 12,
-      "min_angle": -65,
-      "max_angle": 65,
-      "center_angle": 0,
+      "min_angle": 45,
+      "max_angle": 135,
+      "center_angle": 90,
       "pca9685_channel": null,
       "pulse_min_us": 500,
-      "pulse_max_us": 2500
+      "pulse_max_us": 2500,
+      "release_after_move_sec": 0.18
     },
     "tilt_servo": {
       "enabled": true,
       "driver": "gpio",
       "gpio_pin": 13,
-      "min_angle": -35,
-      "max_angle": 35,
-      "center_angle": 0,
+      "min_angle": 65,
+      "max_angle": 165,
+      "center_angle": 90,
       "pca9685_channel": null,
       "pulse_min_us": 500,
-      "pulse_max_us": 2500
+      "pulse_max_us": 2500,
+      "release_after_move_sec": 0.18
     },
     "pca9685": {
       "enabled": false,
@@ -117,7 +119,7 @@
     },
     "settings": {
       "enabled": true,
-      "gpio_pin": 16,
+      "gpio_pin": 23,
       "pull_up": true,
       "hold_sec": 0.0,
       "bounce_time": 0.08

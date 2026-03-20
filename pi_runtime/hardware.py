@@ -6,6 +6,7 @@ import logging
 import math
 import subprocess
 import tempfile
+import threading
 import wave
 
 from engine.tts.tts_engine import TtsEngine
@@ -85,6 +86,8 @@ class GpioServoHardware(BaseHardware):
         self._pan_servo = None
         self._tilt_servo = None
         self._led = None
+        self._pan_release_timer: threading.Timer | None = None
+        self._tilt_release_timer: threading.Timer | None = None
         self._current_pan_angle = float(config.pan_servo.center_angle)
         self._current_tilt_angle = float(config.tilt_servo.center_angle)
         try:
@@ -120,31 +123,83 @@ class GpioServoHardware(BaseHardware):
             self._tilt_servo = None
             self._led = None
 
+    def _cancel_release_timer(self, axis: str) -> None:
+        timer = self._pan_release_timer if axis == "pan" else self._tilt_release_timer
+        if timer is None:
+            return
+        try:
+            timer.cancel()
+        except Exception:
+            pass
+        if axis == "pan":
+            self._pan_release_timer = None
+        else:
+            self._tilt_release_timer = None
+
+    def _schedule_release(self, axis: str, servo: object, delay_sec: float) -> None:
+        if delay_sec <= 0:
+            return
+        self._cancel_release_timer(axis)
+
+        def _release() -> None:
+            try:
+                detach = getattr(servo, "detach", None)
+                if callable(detach):
+                    detach()
+                else:
+                    setattr(servo, "angle", None)
+            except Exception as exc:
+                logger.debug("servo %s release failed: %s", axis, exc)
+
+        timer = threading.Timer(delay_sec, _release)
+        timer.daemon = True
+        timer.start()
+        if axis == "pan":
+            self._pan_release_timer = timer
+        else:
+            self._tilt_release_timer = timer
+
     def set_pan_turn(self, turn: float) -> None:
         if self._pan_servo is None:
             return
-        span = max(abs(self.config.pan_servo.min_angle), abs(self.config.pan_servo.max_angle))
-        angle = self.config.pan_servo.center_angle + (float(turn) * span)
+        turn_f = max(-1.0, min(1.0, float(turn)))
+        if turn_f >= 0:
+            angle = self.config.pan_servo.center_angle + (
+                turn_f * (self.config.pan_servo.max_angle - self.config.pan_servo.center_angle)
+            )
+        else:
+            angle = self.config.pan_servo.center_angle + (
+                turn_f * (self.config.pan_servo.center_angle - self.config.pan_servo.min_angle)
+            )
         angle = max(self.config.pan_servo.min_angle, min(self.config.pan_servo.max_angle, angle))
         if math.isclose(angle, self._current_pan_angle, abs_tol=1.0):
             return
         self._current_pan_angle = angle
         try:
             self._pan_servo.angle = angle
+            self._schedule_release("pan", self._pan_servo, float(self.config.pan_servo.release_after_move_sec))
         except Exception as exc:
             logger.warning("gpio servo move failed: %s", exc)
 
     def set_tilt_turn(self, turn: float) -> None:
         if self._tilt_servo is None:
             return
-        span = max(abs(self.config.tilt_servo.min_angle), abs(self.config.tilt_servo.max_angle))
-        angle = self.config.tilt_servo.center_angle + (float(turn) * span)
+        turn_f = max(-1.0, min(1.0, float(turn)))
+        if turn_f >= 0:
+            angle = self.config.tilt_servo.center_angle + (
+                turn_f * (self.config.tilt_servo.max_angle - self.config.tilt_servo.center_angle)
+            )
+        else:
+            angle = self.config.tilt_servo.center_angle + (
+                turn_f * (self.config.tilt_servo.center_angle - self.config.tilt_servo.min_angle)
+            )
         angle = max(self.config.tilt_servo.min_angle, min(self.config.tilt_servo.max_angle, angle))
         if math.isclose(angle, self._current_tilt_angle, abs_tol=1.0):
             return
         self._current_tilt_angle = angle
         try:
             self._tilt_servo.angle = angle
+            self._schedule_release("tilt", self._tilt_servo, float(self.config.tilt_servo.release_after_move_sec))
         except Exception as exc:
             logger.warning("gpio tilt servo move failed: %s", exc)
 
@@ -160,6 +215,8 @@ class GpioServoHardware(BaseHardware):
             pass
 
     def close(self) -> None:
+        self._cancel_release_timer("pan")
+        self._cancel_release_timer("tilt")
         try:
             if self._pan_servo is not None:
                 self._pan_servo.close()
@@ -228,8 +285,15 @@ class Pca9685Hardware(BaseHardware):
     def set_pan_turn(self, turn: float) -> None:
         if self._kit is None or self.config.pan_servo.pca9685_channel is None:
             return
-        span = max(abs(self.config.pan_servo.min_angle), abs(self.config.pan_servo.max_angle))
-        angle = self.config.pan_servo.center_angle + (float(turn) * span)
+        turn_f = max(-1.0, min(1.0, float(turn)))
+        if turn_f >= 0:
+            angle = self.config.pan_servo.center_angle + (
+                turn_f * (self.config.pan_servo.max_angle - self.config.pan_servo.center_angle)
+            )
+        else:
+            angle = self.config.pan_servo.center_angle + (
+                turn_f * (self.config.pan_servo.center_angle - self.config.pan_servo.min_angle)
+            )
         angle = max(self.config.pan_servo.min_angle, min(self.config.pan_servo.max_angle, angle))
         if math.isclose(angle, self._current_pan_angle, abs_tol=1.0):
             return
@@ -246,8 +310,15 @@ class Pca9685Hardware(BaseHardware):
     def set_tilt_turn(self, turn: float) -> None:
         if self._kit is None or self.config.tilt_servo.pca9685_channel is None:
             return
-        span = max(abs(self.config.tilt_servo.min_angle), abs(self.config.tilt_servo.max_angle))
-        angle = self.config.tilt_servo.center_angle + (float(turn) * span)
+        turn_f = max(-1.0, min(1.0, float(turn)))
+        if turn_f >= 0:
+            angle = self.config.tilt_servo.center_angle + (
+                turn_f * (self.config.tilt_servo.max_angle - self.config.tilt_servo.center_angle)
+            )
+        else:
+            angle = self.config.tilt_servo.center_angle + (
+                turn_f * (self.config.tilt_servo.center_angle - self.config.tilt_servo.min_angle)
+            )
         angle = max(self.config.tilt_servo.min_angle, min(self.config.tilt_servo.max_angle, angle))
         if math.isclose(angle, self._current_tilt_angle, abs_tol=1.0):
             return
