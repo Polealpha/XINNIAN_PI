@@ -64,16 +64,16 @@
     "fps": 2
   },
   "hardware": {
-    "driver": "mock",
+    "driver": "gpio",
     "speaker_command": [
       "aplay",
       "-q"
     ],
-    "status_led_gpio": null,
+    "status_led_gpio": 17,
     "pan_servo": {
-      "enabled": false,
-      "driver": "mock",
-      "gpio_pin": null,
+      "enabled": true,
+      "driver": "gpio",
+      "gpio_pin": 12,
       "min_angle": -65,
       "max_angle": 65,
       "center_angle": 0,
@@ -82,9 +82,9 @@
       "pulse_max_us": 2500
     },
     "tilt_servo": {
-      "enabled": false,
-      "driver": "mock",
-      "gpio_pin": null,
+      "enabled": true,
+      "driver": "gpio",
+      "gpio_pin": 13,
       "min_angle": -35,
       "max_angle": 35,
       "center_angle": 0,
@@ -97,5 +97,34 @@
       "address": 64,
       "frequency": 50
     }
+  },
+  "buttons": {
+    "enabled": true,
+    "allow_system_power_commands": false,
+    "power_toggle": {
+      "enabled": true,
+      "gpio_pin": 5,
+      "pull_up": true,
+      "hold_sec": 0.0,
+      "bounce_time": 0.08
+    },
+    "shutdown": {
+      "enabled": true,
+      "gpio_pin": 6,
+      "pull_up": true,
+      "hold_sec": 0.0,
+      "bounce_time": 0.08
+    },
+    "settings": {
+      "enabled": true,
+      "gpio_pin": 16,
+      "pull_up": true,
+      "hold_sec": 0.0,
+      "bounce_time": 0.08
+    }
+  },
+  "ui": {
+    "default_page": "expression",
+    "settings_auto_return_sec": 0
   }
 }
