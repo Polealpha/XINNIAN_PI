@@ -8,6 +8,7 @@ import {
   SystemEvent,
   WakeEngineState,
 } from "../types";
+import { sendDevicePanTiltLocal } from "../services/deviceService";
 import {
   Camera,
   Wifi,
@@ -19,6 +20,8 @@ import {
   RotateCw,
   Database,
   Circle,
+  Laptop,
+  Crosshair,
 } from "lucide-react";
 
 interface DeviceMonitorProps {
@@ -43,6 +46,7 @@ interface DeviceMonitorProps {
 }
 
 type OverlayBBox = { left: number; top: number; width: number; height: number } | null;
+type DesktopTrackingBBox = { x: number; y: number; width: number; height: number } | null;
 
 export const computeOverlayBBoxPercent = (
   faceTrack: FaceTrackState | null,
@@ -101,10 +105,21 @@ export const DeviceMonitor: React.FC<DeviceMonitorProps> = ({
   const [streamRenderToken, setStreamRenderToken] = useState(0);
   const [snapshotMode] = useState(true);
   const [overlayNowMs, setOverlayNowMs] = useState(() => Date.now());
+  const [desktopCamEnabled, setDesktopCamEnabled] = useState(false);
+  const [desktopCamError, setDesktopCamError] = useState("");
+  const [desktopTrackStatus, setDesktopTrackStatus] = useState("idle");
+  const [desktopTrackBox, setDesktopTrackBox] = useState<DesktopTrackingBBox>(null);
+  const [desktopTrackTurns, setDesktopTrackTurns] = useState({ pan: 0, tilt: 0 });
   const streamSource: "proxy" = "proxy";
   const reconnectTimer = useRef<number | null>(null);
   const metaStaleCountRef = useRef(0);
   const lastMetaUpdatedRef = useRef(0);
+  const desktopVideoRef = useRef<HTMLVideoElement | null>(null);
+  const desktopTrackTimerRef = useRef<number | null>(null);
+  const desktopStreamRef = useRef<MediaStream | null>(null);
+  const desktopLastSendRef = useRef(0);
+  const desktopLastPanTiltRef = useRef({ pan: 0, tilt: 0 });
+  const desktopLostCountRef = useRef(0);
   const proxyBase = "http://127.0.0.1:18080";
   const baseStreamUrl = snapshotMode ? `${proxyBase}/snapshot` : `${proxyBase}/stream`;
   const streamUrl =
@@ -168,6 +183,12 @@ export const DeviceMonitor: React.FC<DeviceMonitorProps> = ({
       if (reconnectTimer.current !== null) {
         window.clearTimeout(reconnectTimer.current);
       }
+      if (desktopTrackTimerRef.current !== null) {
+        window.clearInterval(desktopTrackTimerRef.current);
+      }
+      if (desktopStreamRef.current) {
+        desktopStreamRef.current.getTracks().forEach((track) => track.stop());
+      }
     };
   }, []);
 
@@ -224,6 +245,111 @@ export const DeviceMonitor: React.FC<DeviceMonitorProps> = ({
       setStreamRenderToken((v) => v + 1);
     }, 80);
   }, []);
+
+  const stopDesktopTracking = useCallback(() => {
+    if (desktopTrackTimerRef.current !== null) {
+      window.clearInterval(desktopTrackTimerRef.current);
+      desktopTrackTimerRef.current = null;
+    }
+    if (desktopStreamRef.current) {
+      desktopStreamRef.current.getTracks().forEach((track) => track.stop());
+      desktopStreamRef.current = null;
+    }
+    if (desktopVideoRef.current) {
+      desktopVideoRef.current.srcObject = null;
+    }
+    setDesktopCamEnabled(false);
+    setDesktopTrackStatus("idle");
+    setDesktopTrackBox(null);
+    setDesktopCamError("");
+    desktopLostCountRef.current = 0;
+  }, []);
+
+  const startDesktopTracking = useCallback(async () => {
+    if (!deviceIp) {
+      setDesktopCamError("设备 IP 不可用，无法把笔记本摄像头测试结果发送到机器人。");
+      return;
+    }
+    const DetectorCtor = (window as any).FaceDetector;
+    if (typeof DetectorCtor !== "function") {
+      setDesktopCamError("当前 Electron 运行时不支持 FaceDetector。");
+      return;
+    }
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: { width: { ideal: 640 }, height: { ideal: 480 }, facingMode: "user" },
+        audio: false,
+      });
+      desktopStreamRef.current = stream;
+      setDesktopCamEnabled(true);
+      setDesktopCamError("");
+      setDesktopTrackStatus("camera_ready");
+      const video = desktopVideoRef.current;
+      if (video) {
+        video.srcObject = stream;
+        await video.play();
+      }
+      const detector = new DetectorCtor({
+        fastMode: true,
+        maxDetectedFaces: 1,
+      });
+      if (desktopTrackTimerRef.current !== null) {
+        window.clearInterval(desktopTrackTimerRef.current);
+      }
+      desktopTrackTimerRef.current = window.setInterval(async () => {
+        const currentVideo = desktopVideoRef.current;
+        if (!currentVideo || currentVideo.readyState < 2) return;
+        try {
+          const faces = await detector.detect(currentVideo);
+          const face = faces?.[0];
+          if (!face?.boundingBox) {
+            desktopLostCountRef.current += 1;
+            setDesktopTrackStatus("no_face");
+            setDesktopTrackBox(null);
+            if (desktopLostCountRef.current >= 6 && Date.now() - desktopLastSendRef.current > 400) {
+              desktopLastSendRef.current = Date.now();
+              desktopLastPanTiltRef.current = { pan: 0, tilt: 0 };
+              setDesktopTrackTurns({ pan: 0, tilt: 0 });
+              await sendDevicePanTiltLocal(`${deviceIp}:8090`, { pan: 0, tilt: 0 });
+            }
+            return;
+          }
+
+          desktopLostCountRef.current = 0;
+          const box = face.boundingBox;
+          const frameW = currentVideo.videoWidth || 1;
+          const frameH = currentVideo.videoHeight || 1;
+          const centerX = box.x + box.width / 2;
+          const centerY = box.y + box.height / 2;
+          const ex = (centerX - frameW / 2) / (frameW / 2);
+          const ey = (frameH / 2 - centerY) / (frameH / 2);
+          const deadZone = 0.11;
+          const pan = Math.abs(ex) < deadZone ? 0 : Math.max(-1, Math.min(1, ex * 0.55));
+          const tilt = Math.abs(ey) < deadZone ? 0 : Math.max(-1, Math.min(1, ey * 0.48));
+
+          setDesktopTrackStatus("tracking");
+          setDesktopTrackBox({ x: box.x, y: box.y, width: box.width, height: box.height });
+
+          if (
+            Date.now() - desktopLastSendRef.current > 280 &&
+            (Math.abs(pan - desktopLastPanTiltRef.current.pan) > 0.035 ||
+              Math.abs(tilt - desktopLastPanTiltRef.current.tilt) > 0.035)
+          ) {
+            desktopLastSendRef.current = Date.now();
+            desktopLastPanTiltRef.current = { pan, tilt };
+            setDesktopTrackTurns({ pan, tilt });
+            await sendDevicePanTiltLocal(`${deviceIp}:8090`, { pan, tilt });
+          }
+        } catch (error) {
+          setDesktopTrackStatus("error");
+          setDesktopCamError(error instanceof Error ? error.message : "desktop_face_track_failed");
+        }
+      }, 260);
+    } catch (error) {
+      setDesktopCamError(error instanceof Error ? error.message : "desktop_camera_start_failed");
+      stopDesktopTracking();
+    }
+  }, [deviceIp, stopDesktopTracking]);
 
   useEffect(() => {
     if (!active || !streamEnabled || !videoEnabled) return;
@@ -497,6 +623,76 @@ export const DeviceMonitor: React.FC<DeviceMonitorProps> = ({
               刷新
             </button>
             {statusError && <p className="text-[9px] text-rose-400">{statusError}</p>}
+          </div>
+        </div>
+
+        <div className="bg-[#0c1222]/50 backdrop-blur-3xl rounded-[2rem] border border-white/[0.05] p-6 shadow-xl">
+          <h3 className="text-[9px] font-black text-slate-500 uppercase tracking-widest mb-4 flex items-center gap-2">
+            <Laptop size={12} className="text-cyan-400" /> 笔记本摄像头云台测试
+          </h3>
+          <div className="space-y-3">
+            <div className="relative rounded-2xl overflow-hidden border border-white/10 bg-black aspect-video">
+              {desktopCamEnabled ? (
+                <>
+                  <video ref={desktopVideoRef} className="w-full h-full object-cover" muted playsInline />
+                  {desktopTrackBox && desktopVideoRef.current?.videoWidth ? (
+                    <div
+                      className="absolute border-2 border-cyan-300"
+                      style={{
+                        left: `${(desktopTrackBox.x / (desktopVideoRef.current?.videoWidth || 1)) * 100}%`,
+                        top: `${(desktopTrackBox.y / (desktopVideoRef.current?.videoHeight || 1)) * 100}%`,
+                        width: `${(desktopTrackBox.width / (desktopVideoRef.current?.videoWidth || 1)) * 100}%`,
+                        height: `${(desktopTrackBox.height / (desktopVideoRef.current?.videoHeight || 1)) * 100}%`,
+                      }}
+                    />
+                  ) : null}
+                </>
+              ) : (
+                <div className="w-full h-full flex items-center justify-center text-xs text-slate-500">
+                  未启动桌面摄像头测试
+                </div>
+              )}
+            </div>
+            <div className="grid grid-cols-2 gap-2 text-[10px]">
+              <div className="rounded-xl bg-white/[0.03] border border-white/[0.05] px-3 py-2 text-slate-300">
+                状态: <span className="font-mono text-cyan-300">{desktopTrackStatus}</span>
+              </div>
+              <div className="rounded-xl bg-white/[0.03] border border-white/[0.05] px-3 py-2 text-slate-300">
+                命令: <span className="font-mono text-cyan-300">{desktopTrackTurns.pan.toFixed(2)} / {desktopTrackTurns.tilt.toFixed(2)}</span>
+              </div>
+            </div>
+            {desktopCamError ? <p className="text-[10px] text-rose-400">{desktopCamError}</p> : null}
+            <div className="flex gap-2">
+              <button
+                onClick={desktopCamEnabled ? stopDesktopTracking : startDesktopTracking}
+                className={`flex-1 px-3 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest border transition-all ${
+                  desktopCamEnabled
+                    ? "bg-rose-500/10 border-rose-400/30 text-rose-300 hover:bg-rose-500/20"
+                    : "bg-cyan-500/10 border-cyan-400/30 text-cyan-300 hover:bg-cyan-500/20"
+                }`}
+              >
+                {desktopCamEnabled ? "停止跟踪" : "启动桌面摄像头跟踪"}
+              </button>
+              <button
+                onClick={async () => {
+                  if (!deviceIp) return;
+                  try {
+                    await sendDevicePanTiltLocal(`${deviceIp}:8090`, { pan: 0, tilt: 0 });
+                    setDesktopTrackTurns({ pan: 0, tilt: 0 });
+                    desktopLastPanTiltRef.current = { pan: 0, tilt: 0 };
+                  } catch (error) {
+                    setDesktopCamError(error instanceof Error ? error.message : "recenter_failed");
+                  }
+                }}
+                className="px-3 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest border bg-white/[0.04] border-white/10 text-slate-300 hover:bg-white/[0.08]"
+              >
+                <Crosshair size={12} className="inline mr-1" />
+                回中
+              </button>
+            </div>
+            <p className="text-[10px] text-slate-500 leading-5">
+              没接树莓派摄像头时，可以先用笔记本摄像头做人脸跟踪测试。它只在你手动打开后才会向机器人发送云台指令。
+            </p>
           </div>
         </div>
 

@@ -78,6 +78,16 @@ export const closeDeviceSettingsPage = async (payload: { device_id?: string; sou
   return apiPost("/api/device/settings/close", payload, true);
 };
 
+export const sendDevicePanTiltLocal = async (
+  deviceHost: string,
+  payload: { pan: number; tilt: number }
+) => {
+  return fetchDeviceRuntime(deviceHost, "/pan_tilt", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+};
+
 export const heartbeatClientSession = async (payload: {
   client_type: "mobile" | "desktop";
   client_id: string;
