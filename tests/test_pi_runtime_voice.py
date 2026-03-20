@@ -69,3 +69,21 @@ def test_asr_normalizes_filler_and_chinese_spacing():
     assert module._normalize_transcript("  嗯嗯  ") == ""
     assert module._normalize_transcript("我 想 去 公园 。 ") == "我想去公园。"
     assert module._normalize_transcript("  hello   world  ") == "hello world"
+
+
+def test_export_recent_audio_wav_produces_audio_container():
+    runtime = PiEmotionRuntime("config/pi_zero2w.headless.json", "config/engine_config.json")
+    frame = AudioFrame(
+        pcm_s16le=b"\x00\x01" * 1600,
+        sample_rate=16000,
+        channels=1,
+        timestamp_ms=runtime._now_ms(),
+        seq=1,
+        device_id="polealpha-zero2w",
+    )
+    runtime._ring_buffer.add_frame(frame)
+
+    wav_bytes = runtime.export_recent_audio_wav(1500)
+
+    assert wav_bytes[:4] == b"RIFF"
+    assert b"WAVE" in wav_bytes[:16]

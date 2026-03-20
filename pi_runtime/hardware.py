@@ -106,6 +106,14 @@ class GpioServoHardware(BaseHardware):
                     min_pulse_width=config.pan_servo.pulse_min_us / 1_000_000.0,
                     max_pulse_width=config.pan_servo.pulse_max_us / 1_000_000.0,
                 )
+                try:
+                    detach = getattr(self._pan_servo, "detach", None)
+                    if callable(detach):
+                        detach()
+                    else:
+                        self._pan_servo.angle = None
+                except Exception:
+                    pass
             if config.tilt_servo.enabled and config.tilt_servo.gpio_pin is not None:
                 self._tilt_servo = AngularServo(
                     config.tilt_servo.gpio_pin,
@@ -115,6 +123,14 @@ class GpioServoHardware(BaseHardware):
                     min_pulse_width=config.tilt_servo.pulse_min_us / 1_000_000.0,
                     max_pulse_width=config.tilt_servo.pulse_max_us / 1_000_000.0,
                 )
+                try:
+                    detach = getattr(self._tilt_servo, "detach", None)
+                    if callable(detach):
+                        detach()
+                    else:
+                        self._tilt_servo.angle = None
+                except Exception:
+                    pass
             if config.status_led_gpio is not None:
                 self._led = LED(config.status_led_gpio)
         except Exception as exc:

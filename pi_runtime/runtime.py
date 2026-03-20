@@ -3,11 +3,13 @@ from __future__ import annotations
 from collections import deque
 from dataclasses import asdict
 from datetime import datetime, time as dt_time, timedelta
+import io
 from pathlib import Path
 import logging
 import subprocess
 import threading
 import time
+import wave
 from typing import Deque, Dict, List, Optional
 
 from engine.audio.acoustic_features import extract_features
@@ -434,6 +436,18 @@ class PiEmotionRuntime:
             "window_ms": max(1000, int(window_ms)),
             **self.get_voice_status(),
         }
+
+    def export_recent_audio_wav(self, window_ms: int = 6000) -> bytes:
+        pcm, _start, _end = self._ring_buffer.get_last_ms(max(1000, int(window_ms)))
+        if not pcm:
+            return b""
+        buffer = io.BytesIO()
+        with wave.open(buffer, "wb") as wf:
+            wf.setnchannels(1)
+            wf.setsampwidth(2)
+            wf.setframerate(int(self.engine_config.audio.sample_rate))
+            wf.writeframes(pcm)
+        return buffer.getvalue()
 
     def scan_networks(self) -> List[Dict[str, object]]:
         return self._onboarding.scan_networks()
@@ -1135,8 +1149,11 @@ class PiEmotionRuntime:
         )
 
     def _servo_angle_from_turn(self, turn: float, center: float, min_angle: float, max_angle: float) -> float:
-        span = max(abs(float(min_angle)), abs(float(max_angle)))
-        angle = float(center) + (float(turn) * span)
+        turn_f = max(-1.0, min(1.0, float(turn)))
+        if turn_f >= 0:
+            angle = float(center) + (turn_f * (float(max_angle) - float(center)))
+        else:
+            angle = float(center) + (turn_f * (float(center) - float(min_angle)))
         return max(float(min_angle), min(float(max_angle), angle))
 
     def _get_pending_owner_sync(self) -> Optional[Dict[str, object]]:

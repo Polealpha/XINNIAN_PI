@@ -434,6 +434,15 @@ def build_app(pi_config_path: str, engine_config_path: str) -> FastAPI:
         assert runtime is not None
         return runtime.transcribe_recent_audio(payload.window_ms)
 
+    @app.get("/voice/recent.wav")
+    def voice_recent_wav(window_ms: int = 6000) -> Response:
+        assert runtime is not None
+        content = runtime.export_recent_audio_wav(window_ms)
+        if not content:
+            raise HTTPException(status_code=404, detail="no_audio")
+        headers = {"Content-Disposition": f'inline; filename="recent-{max(1000, int(window_ms))}ms.wav"'}
+        return Response(content=content, media_type="audio/wav", headers=headers)
+
     @app.get("/settings/live")
     def settings_live() -> dict:
         assert runtime is not None
