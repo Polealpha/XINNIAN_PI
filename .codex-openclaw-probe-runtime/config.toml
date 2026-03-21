@@ -1,0 +1,12 @@
+model = "gpt-5.4"
+model_reasoning_effort = "high"
+personality = "pragmatic"
+
+[projects.'E:\\Desktop\\chonggou\\assistant_data\\openclaw_workspace']
+trust_level = "trusted"
+
+[projects.'E:\\Desktop\\openclaw']
+trust_level = "trusted"
+
+[windows]
+sandbox = "unelevated"
