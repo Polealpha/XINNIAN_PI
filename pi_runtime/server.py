@@ -272,6 +272,7 @@ def _ui_shell_html() -> str:
       const cfg = state.settings || {};
       const voice = state.voice_state || {};
       const expr = state.expression_state || {};
+      const display = state.display_state || {};
       const page = ui.page || "expression";
       const source = ui.source || "runtime";
 
@@ -290,6 +291,7 @@ def _ui_shell_html() -> str:
         card("主人识别", onOff(state.owner_recognized)) +
         card("眨眼", onOff(expr.blinking)) +
         card("过渡中", onOff(expr.transitioning)) +
+        card("显示驱动", `${display.driver || "web"} / ${display.ready ? "ready" : "idle"}`) +
         card("风险值", typeof state.S === "number" ? state.S.toFixed(2) : "0.00");
       if (page !== "settings") {
         expressionFace.src = `/expression/frame.svg?t=${Date.now()}`;
