@@ -159,6 +159,9 @@ class ButtonsConfig:
 class UiConfig:
     default_page: str = "expression"
     settings_auto_return_sec: int = 0
+    expression_width: int = 320
+    expression_height: int = 240
+    display_driver: str = "web"
 
 
 @dataclass

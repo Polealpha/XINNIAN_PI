@@ -127,6 +127,9 @@
   },
   "ui": {
     "default_page": "expression",
-    "settings_auto_return_sec": 0
+    "settings_auto_return_sec": 0,
+    "expression_width": 320,
+    "expression_height": 240,
+    "display_driver": "web"
   }
 }

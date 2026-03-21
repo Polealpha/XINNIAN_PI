@@ -221,6 +221,16 @@ The current end-to-end settings loop is:
 - Camera + microphone + PCA9685 pan/tilt:
   `PI_RUNTIME_CONFIG=config/pi_zero2w.pca9685.example.json`
 
+## Expression display path
+
+- The original ESP expression catalog has been migrated to the Pi runtime as a parametric eye-expression surface.
+- Current default display backend:
+  - `ui.display_driver = "web"`
+  - local rendered face page: `GET /ui`
+  - raw expression frame: `GET /expression/frame.svg`
+- This keeps the original expression logic and animation model while avoiding hard-coding a specific Pi display controller before the exact panel model is finalized.
+- When you later settle on the physical panel, the next step is only to map this already-migrated surface onto that panel's final display backend.
+
 ## First-time owner enrollment
 
 1. Boot the Pi with no saved Wi-Fi and connect to the onboarding hotspot.

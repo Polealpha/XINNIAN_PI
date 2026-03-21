@@ -36,6 +36,7 @@ from engine.vision.vision_types import FaceDet
 
 from .backend_sync import BackendSyncClient
 from .config import PiRuntimeConfig, load_pi_config
+from .expression_surface import ExpressionSurface
 from .hardware import BaseHardware, build_hardware
 from .identity import OwnerIdentityManager
 from .onboarding import OnboardingManager
@@ -74,6 +75,7 @@ class PiEmotionRuntime:
         self._hardware: BaseHardware = build_hardware(self.pi_config.hardware)
         self._onboarding = OnboardingManager(self.pi_config.onboarding)
         self._wake_detector = self._build_wake_detector() if self.pi_config.audio.enabled else None
+        self._expression_surface = ExpressionSurface(Path(__file__).with_name("expression_catalog.json"))
 
         self._face_detector = FaceDetector(asdict(self.engine_config.face_tracking)) if self.pi_config.camera.enabled else None
         self._face_tracker = FaceTracker(asdict(self.engine_config.face_tracking)) if self.pi_config.camera.enabled else None
@@ -241,6 +243,7 @@ class PiEmotionRuntime:
             "wake_state": self.get_wake_status(),
             "settings": self.get_settings_state(),
             "ui_state": self.get_ui_state(),
+            "expression_state": self.get_expression_state(),
         }
         self._last_status_ts_ms = int(payload["timestamp_ms"])
         return payload
@@ -259,6 +262,44 @@ class PiEmotionRuntime:
 
     def get_ui_state(self) -> Dict[str, object]:
         return self._merge_dicts(self._build_default_ui_state(), dict(self._ui_state))
+
+    def get_expression_state(self) -> Dict[str, object]:
+        state = {
+            "ui_page": str(self._ui_state.get("page") or "expression"),
+            "voice_mode": str(self._voice_state.get("mode") or "idle"),
+            "owner_recognized": bool(self._identity_state.get("owner_recognized")),
+            "onboarding_state": str(self._onboarding.get_state().get("mode") or ""),
+            "risk_score": float(self._S),
+            "gaze_x": round(float(self._last_pan_turn) * 10.0, 2),
+            "gaze_y": round(float(self._last_tilt_turn) * 8.0, 2),
+        }
+        return self._expression_surface.snapshot(self._now_ms(), state)
+
+    def get_expression_svg(self) -> str:
+        state = {
+            "ui_page": str(self._ui_state.get("page") or "expression"),
+            "voice_mode": str(self._voice_state.get("mode") or "idle"),
+            "owner_recognized": bool(self._identity_state.get("owner_recognized")),
+            "onboarding_state": str(self._onboarding.get_state().get("mode") or ""),
+            "risk_score": float(self._S),
+            "gaze_x": round(float(self._last_pan_turn) * 10.0, 2),
+            "gaze_y": round(float(self._last_tilt_turn) * 8.0, 2),
+        }
+        return self._expression_surface.render_svg(
+            self._now_ms(),
+            state,
+            width=int(self.pi_config.ui.expression_width),
+            height=int(self.pi_config.ui.expression_height),
+        )
+
+    def select_expression(self, expression_index: Optional[int] = None, expression_id: str = "") -> Dict[str, object]:
+        if expression_id:
+            ok = self._expression_surface.set_expression_id(expression_id)
+            if not ok:
+                raise ValueError(f"unknown expression_id: {expression_id}")
+        else:
+            self._expression_surface.set_expression_index(expression_index)
+        return self.get_expression_state()
 
     def get_voice_status(self) -> Dict[str, object]:
         state = dict(self._voice_state)

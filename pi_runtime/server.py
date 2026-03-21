@@ -65,6 +65,11 @@ class SettingsPageRequest(BaseModel):
     source: str = "desktop"
 
 
+class ExpressionSelectRequest(BaseModel):
+    expression_index: Optional[int] = None
+    expression_id: str = ""
+
+
 def _ui_shell_html() -> str:
     return """<!doctype html>
 <html lang="zh-CN">
@@ -98,7 +103,7 @@ def _ui_shell_html() -> str:
     .screen { min-height: 100vh; display: none; align-items: center; justify-content: center; padding: 28px; }
     .screen.active { display: flex; }
     .card {
-      width: min(1024px, 100%);
+      width: min(1080px, 100%);
       border-radius: 32px;
       background: var(--panel);
       border: 1px solid var(--line);
@@ -111,6 +116,10 @@ def _ui_shell_html() -> str:
       align-items: center;
       justify-content: space-between;
       gap: 28px;
+    }
+    .hero-copy {
+      flex: 1;
+      min-width: 0;
     }
     .badge {
       display: inline-flex;
@@ -125,26 +134,34 @@ def _ui_shell_html() -> str:
       letter-spacing: 0.18em;
       text-transform: uppercase;
     }
-    .face {
-      width: 240px;
-      height: 240px;
+    .face-wrap {
+      width: 280px;
+      height: 280px;
       border-radius: 36px;
       border: 1px solid var(--line);
       background: linear-gradient(180deg, rgba(103, 232, 249, 0.12), rgba(255, 255, 255, 0.03));
       display: flex;
       align-items: center;
       justify-content: center;
-      font-size: 108px;
-      line-height: 1;
+      overflow: hidden;
+      flex-shrink: 0;
+    }
+    .face {
+      width: 100%;
+      height: 100%;
+      border: 0;
+      display: block;
     }
     .title { margin-top: 20px; font-size: 40px; font-weight: 900; letter-spacing: 0.04em; }
     .muted { color: var(--muted); font-size: 15px; line-height: 1.8; }
     .grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; margin-top: 24px; }
+    .subgrid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; margin-top: 14px; }
     .item {
       background: rgba(255, 255, 255, 0.035);
       border-radius: 22px;
       padding: 16px 18px;
       border: 1px solid rgba(255, 255, 255, 0.05);
+      min-height: 94px;
     }
     .label { color: var(--muted); font-size: 11px; font-weight: 800; letter-spacing: 0.22em; text-transform: uppercase; }
     .value { margin-top: 10px; font-size: 21px; font-weight: 800; }
@@ -176,11 +193,11 @@ def _ui_shell_html() -> str:
       color: #d8e7ff;
       line-height: 1.7;
     }
-    @media (max-width: 760px) {
+    @media (max-width: 860px) {
       .hero { flex-direction: column; align-items: flex-start; }
-      .face { width: 180px; height: 180px; font-size: 80px; }
+      .face-wrap { width: 220px; height: 220px; }
       .title { font-size: 30px; }
-      .grid { grid-template-columns: 1fr; }
+      .grid, .subgrid { grid-template-columns: 1fr; }
     }
   </style>
 </head>
@@ -188,16 +205,20 @@ def _ui_shell_html() -> str:
   <div id="expression" class="screen active">
     <div class="card">
       <div class="hero">
-        <div>
+        <div class="hero-copy">
           <div class="badge">Emotion Pi</div>
           <div class="title">小念正在陪伴</div>
-          <div id="expression-sub" class="muted" style="margin-top:14px;">等待设置指令、语音唤醒或桌面端联动。</div>
+          <div id="expression-sub" class="muted" style="margin-top:14px;">等待设置、语音唤醒或桌面端联动。</div>
         </div>
-        <div class="face">◕‿◕</div>
+        <div class="face-wrap">
+          <img id="expression-face" class="face" src="/expression/frame.svg" alt="expression" />
+        </div>
       </div>
       <div class="grid" id="expression-grid"></div>
+      <div class="subgrid" id="expression-subgrid"></div>
     </div>
   </div>
+
   <div id="settings" class="screen">
     <div class="card">
       <div class="settings-header">
@@ -218,11 +239,14 @@ def _ui_shell_html() -> str:
       </div>
     </div>
   </div>
+
   <script>
     const expression = document.getElementById("expression");
     const settings = document.getElementById("settings");
     const exprSub = document.getElementById("expression-sub");
     const expressionGrid = document.getElementById("expression-grid");
+    const expressionSubgrid = document.getElementById("expression-subgrid");
+    const expressionFace = document.getElementById("expression-face");
     const settingsSub = document.getElementById("settings-sub");
     const settingsGrid = document.getElementById("settings-grid");
     const settingsJson = document.getElementById("settings-json");
@@ -236,25 +260,43 @@ def _ui_shell_html() -> str:
       return value ? "开启" : "关闭";
     }
 
+    function fmt(value, fallback = "-") {
+      if (value === undefined || value === null || value === "") {
+        return fallback;
+      }
+      return String(value);
+    }
+
     function render(state) {
       const ui = state.ui_state || {};
       const cfg = state.settings || {};
       const voice = state.voice_state || {};
+      const expr = state.expression_state || {};
       const page = ui.page || "expression";
       const source = ui.source || "runtime";
 
       expression.classList.toggle("active", page !== "settings");
       settings.classList.toggle("active", page === "settings");
 
-      exprSub.textContent = `当前页面：${page} ｜ 来源：${source} ｜ 最后更新：${new Date().toLocaleTimeString()}`;
+      exprSub.textContent = `当前页面：${page} | 来源：${source} | 最近刷新：${new Date().toLocaleTimeString()}`;
       expressionGrid.innerHTML =
+        card("表情 ID", fmt(expr.expression_id)) +
+        card("触发原因", fmt(expr.reason)) +
         card("唤醒词", cfg.wake?.wake_phrase || "小念") +
-        card("语音链", `${cfg.voice?.robot_tts_provider || "tts"} + ${cfg.voice?.desktop_stt_provider || "stt"}`) +
+        card("语音链", `${cfg.voice?.robot_tts_provider || "tts"} + ${voice.asr_engine || "stt"}`);
+      expressionSubgrid.innerHTML =
         card("音频采集", onOff(cfg.media?.audio_enabled)) +
-        card("摄像头", onOff(cfg.media?.camera_enabled));
+        card("摄像头", onOff(cfg.media?.camera_enabled)) +
+        card("主人识别", onOff(state.owner_recognized)) +
+        card("眨眼", onOff(expr.blinking)) +
+        card("过渡中", onOff(expr.transitioning)) +
+        card("风险值", typeof state.S === "number" ? state.S.toFixed(2) : "0.00");
+      if (page !== "settings") {
+        expressionFace.src = `/expression/frame.svg?t=${Date.now()}`;
+      }
 
       settingsSub.textContent =
-        `唤醒：${onOff(cfg.wake?.enabled)} ｜ 音频：${onOff(cfg.media?.audio_enabled)} ｜ 摄像头：${onOff(cfg.media?.camera_enabled)} ｜ 自动返回：${cfg.behavior?.settings_auto_return_sec || 0} 秒`;
+        `唤醒：${onOff(cfg.wake?.enabled)} | 音频：${onOff(cfg.media?.audio_enabled)} | 摄像头：${onOff(cfg.media?.camera_enabled)} | 自动返回：${cfg.behavior?.settings_auto_return_sec || 0} 秒`;
       settingsSource.textContent = `source: ${source}`;
       settingsGrid.innerHTML =
         card("模式", cfg.mode || "normal") +
@@ -443,6 +485,24 @@ def build_app(pi_config_path: str, engine_config_path: str) -> FastAPI:
         headers = {"Content-Disposition": f'inline; filename="recent-{max(1000, int(window_ms))}ms.wav"'}
         return Response(content=content, media_type="audio/wav", headers=headers)
 
+    @app.get("/expression/state")
+    def expression_state() -> dict:
+        assert runtime is not None
+        return {"ok": True, "expression": runtime.get_expression_state()}
+
+    @app.get("/expression/frame.svg")
+    def expression_frame_svg() -> Response:
+        assert runtime is not None
+        return Response(content=runtime.get_expression_svg(), media_type="image/svg+xml")
+
+    @app.post("/expression/select")
+    def expression_select(payload: ExpressionSelectRequest) -> dict:
+        assert runtime is not None
+        try:
+            return {"ok": True, "expression": runtime.select_expression(payload.expression_index, payload.expression_id)}
+        except ValueError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+
     @app.get("/settings/live")
     def settings_live() -> dict:
         assert runtime is not None
@@ -472,12 +532,16 @@ def build_app(pi_config_path: str, engine_config_path: str) -> FastAPI:
     @app.get("/ui/state")
     def ui_state() -> dict:
         assert runtime is not None
+        status_payload = runtime.get_status_payload()
         return {
             "ok": True,
             "device_id": runtime.pi_config.device.device_id,
             "ui_state": runtime.get_ui_state(),
             "settings": runtime.get_settings_state(),
             "voice_state": runtime.get_voice_status(),
+            "expression_state": status_payload.get("expression_state"),
+            "owner_recognized": bool(status_payload.get("owner_recognized")),
+            "S": float(status_payload.get("S", 0.0) or 0.0),
         }
 
     @app.get("/ui", response_class=HTMLResponse)

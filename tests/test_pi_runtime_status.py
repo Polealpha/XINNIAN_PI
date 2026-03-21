@@ -13,3 +13,5 @@ def test_status_reports_pi_local_health():
     assert payload["tilt_angle"] == 0.0
     assert "identity_state" in payload
     assert "onboarding_state" in payload
+    assert "expression_state" in payload
+    assert payload["expression_state"]["expression_id"]

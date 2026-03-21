@@ -58,6 +58,10 @@ python server_backend/run_server.py
 - `POST /voice/session/stop`
 - `POST /voice/tts/warmup`
 - `POST /voice/transcribe_recent`
+- `GET /voice/recent.wav`
+- `GET /expression/state`
+- `GET /expression/frame.svg`
+- `POST /expression/select`
 - `POST /signal`
 - `POST /care/manual`
 - `POST /speak`
@@ -117,6 +121,17 @@ The desktop app now uses the backend assessment APIs directly. It no longer fall
   - preferred: `sherpa-onnx`
   - fallback: bundled `vosk` small Chinese model
 - The previous cloud TTS / realtime ASR path is no longer the default runtime contract for Pi deployment.
+
+## Pi local expression surface
+
+- The original ESP parametric eye-expression catalog has now been migrated into `pi_runtime/expression_catalog.json`.
+- The Pi runtime renders those expressions locally through `pi_runtime/expression_surface.py`.
+- Local surface endpoints:
+  - `GET /expression/state`
+  - `GET /expression/frame.svg`
+  - `POST /expression/select`
+- The default Pi display driver is currently `web`, which means the migrated expression system renders through the Pi-local UI surface at `/ui`.
+- If you later connect a physical SPI/DSI/HDMI screen, keep the same expression engine and only swap the final display backend.
 
 ## Hardware bring-up
 
