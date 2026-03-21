@@ -506,11 +506,13 @@ def build_app(pi_config_path: str, engine_config_path: str) -> FastAPI:
     @app.get("/settings/live")
     def settings_live() -> dict:
         assert runtime is not None
+        status_payload = runtime.get_status_payload()
         return {
             "ok": True,
             "device_id": runtime.pi_config.device.device_id,
             "settings": runtime.get_settings_state(),
             "ui_state": runtime.get_ui_state(),
+            "display_state": status_payload.get("display_state"),
         }
 
     @app.post("/settings/apply")
@@ -540,6 +542,7 @@ def build_app(pi_config_path: str, engine_config_path: str) -> FastAPI:
             "settings": runtime.get_settings_state(),
             "voice_state": runtime.get_voice_status(),
             "expression_state": status_payload.get("expression_state"),
+            "display_state": status_payload.get("display_state"),
             "owner_recognized": bool(status_payload.get("owner_recognized")),
             "S": float(status_payload.get("S", 0.0) or 0.0),
         }

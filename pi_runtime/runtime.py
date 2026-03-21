@@ -36,6 +36,7 @@ from engine.vision.vision_types import FaceDet
 
 from .backend_sync import BackendSyncClient
 from .config import PiRuntimeConfig, load_pi_config
+from .display_surface import build_display_surface
 from .expression_surface import ExpressionSurface
 from .hardware import BaseHardware, build_hardware
 from .identity import OwnerIdentityManager
@@ -76,6 +77,7 @@ class PiEmotionRuntime:
         self._onboarding = OnboardingManager(self.pi_config.onboarding)
         self._wake_detector = self._build_wake_detector() if self.pi_config.audio.enabled else None
         self._expression_surface = ExpressionSurface(Path(__file__).with_name("expression_catalog.json"))
+        self._display_surface = build_display_surface(self.pi_config.ui)
 
         self._face_detector = FaceDetector(asdict(self.engine_config.face_tracking)) if self.pi_config.camera.enabled else None
         self._face_tracker = FaceTracker(asdict(self.engine_config.face_tracking)) if self.pi_config.camera.enabled else None
@@ -175,6 +177,8 @@ class PiEmotionRuntime:
         if self.pi_config.camera.enabled:
             self._threads.append(threading.Thread(target=self._camera_loop, name="pi-camera", daemon=True))
         self._threads.append(threading.Thread(target=self._summary_loop, name="pi-summary", daemon=True))
+        if str(self.pi_config.ui.display_driver or "web").strip().lower() == "st7789":
+            self._threads.append(threading.Thread(target=self._display_loop, name="pi-display", daemon=True))
         self._init_buttons()
         for thread in self._threads:
             thread.start()
@@ -188,6 +192,7 @@ class PiEmotionRuntime:
         self._cancel_settings_auto_return()
         self._backend_sync.stop()
         self._close_buttons()
+        self._display_surface.close()
         self._hardware.close()
 
     def _ensure_llm(self) -> Optional[LLMResponder]:
@@ -244,6 +249,11 @@ class PiEmotionRuntime:
             "settings": self.get_settings_state(),
             "ui_state": self.get_ui_state(),
             "expression_state": self.get_expression_state(),
+            "display_state": {
+                "driver": self._display_surface.get_status().driver,
+                "ready": self._display_surface.get_status().ready,
+                "detail": self._display_surface.get_status().detail,
+            },
         }
         self._last_status_ts_ms = int(payload["timestamp_ms"])
         return payload
@@ -1086,6 +1096,16 @@ class PiEmotionRuntime:
                 next_run = target
             wait_sec = max(5.0, (next_run - now).total_seconds())
             self._stop.wait(timeout=min(wait_sec, 60.0))
+
+    def _display_loop(self) -> None:
+        fps = max(1, int(self.pi_config.ui.display_fps or 12))
+        delay = 1.0 / float(fps)
+        while not self._stop.is_set():
+            try:
+                self._display_surface.render(self.get_status_payload())
+            except Exception as exc:
+                logger.warning("display loop failed: %s", exc)
+            self._stop.wait(delay)
 
     def _generate_daily_summary(self) -> None:
         payload = DailySummarizer(self._ensure_llm()).summarize(list(self._summary_events))

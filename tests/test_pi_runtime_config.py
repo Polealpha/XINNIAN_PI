@@ -11,6 +11,8 @@ def test_load_pi_config_defaults():
     assert cfg.audio.frame_bytes == 640
     assert cfg.camera.backend == "picamera2"
     assert cfg.hardware.tilt_servo.max_angle == 35
+    assert cfg.ui.display_driver == "web"
+    assert cfg.ui.expression_width == 320
 
 
 def test_load_pi_config_headless_defaults():
@@ -20,3 +22,12 @@ def test_load_pi_config_headless_defaults():
     assert cfg.camera.enabled is False
     assert cfg.identity.enabled is False
     assert cfg.hardware.driver == "mock"
+
+
+def test_load_pi_config_st7789_example():
+    cfg = load_pi_config("config/pi_zero2w.st7789.example.json")
+
+    assert cfg.ui.display_driver == "st7789"
+    assert cfg.ui.spi_dc_gpio == 25
+    assert cfg.ui.spi_reset_gpio == 27
+    assert cfg.ui.spi_backlight_gpio == 24

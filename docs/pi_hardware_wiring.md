@@ -187,6 +187,40 @@ The current end-to-end settings loop is:
 9. Pi pulls `settings_apply`, applies the new settings live, and updates local UI/status.
 10. When the desktop user clicks close, backend queues `settings_page_close`, and the Pi UI returns to `expression`.
 
+### 11. ST7789 320x240 SPI display
+
+Current Pi display backend supports an ST7789 320x240 SPI panel through `luma.lcd + Pillow`.
+
+Recommended default wiring assumption for the current example config:
+
+- `VCC` -> `3V3` or panel-rated input voltage
+- `GND` -> `GND`
+- `SCL / CLK` -> `GPIO11 / Pin 23`
+- `SDA / MOSI / DIN` -> `GPIO10 / Pin 19`
+- `CS` -> `GPIO8 / Pin 24`
+- `DC` -> `GPIO25 / Pin 22`
+- `RST / RES` -> `GPIO27 / Pin 13`
+- `BL / LED` -> `GPIO24 / Pin 18`
+
+Notes:
+
+- MISO is not needed for a write-only panel.
+- The current example assumes `SPI0 CE0`.
+- If your panel's breakout uses different `DC/RST/BL`, adjust only the `ui` block in the config.
+- Reference config: `config/pi_zero2w.st7789.example.json`
+
+What the screen now shows:
+
+- `expression` page:
+  - migrated ESP eye-expression animation surface
+  - blinking / breathing / contextual switching
+- `settings` page:
+  - current mode
+  - wake state
+  - media state
+  - care/voice basics
+  - closes back to expression page when settings closes
+
 ## Raspberry Pi software setup before connecting motion hardware
 
 - Enable I2C in `raspi-config`.

@@ -24,6 +24,7 @@ This repository is the Raspberry Pi Zero 2 W adaptation of the original "共感�
    - no external hardware yet: `config/pi_zero2w.headless.json`
    - camera + microphone: `config/pi_zero2w.json`
    - camera + microphone + PCA9685 servo: `config/pi_zero2w.pca9685.example.json`
+   - camera + microphone + ST7789 320x240 SPI screen: `config/pi_zero2w.st7789.example.json`
 2. Run `scripts/install_pi.sh`
 3. Start the runtime:
 

@@ -53,11 +53,13 @@ packages=(
   i2c-tools
   python3-gpiozero
   python3-smbus2
+  python3-spidev
   libopenblas-dev
   libjpeg-dev
   libtiff6
   libopenjp2-7
   libgl1
+  fonts-noto-cjk
 )
 
 optional_packages=(
