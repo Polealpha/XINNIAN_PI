@@ -36,6 +36,7 @@ python -m pi_runtime.server --config config/pi_zero2w.headless.json --engine-con
 
 ```bash
 source .venv/bin/activate
+python scripts/bootstrap_server_backend.py
 python server_backend/run_server.py
 ```
 
@@ -146,4 +147,6 @@ The desktop app now uses the backend assessment APIs directly. It no longer fall
 - The default install now prefers a headless config so the service can boot cleanly before hardware is attached.
 - `pi_runtime` degrades cleanly when camera, servo or TTS dependencies are partially unavailable.
 - API keys are no longer stored in tracked config files. Provide them through `/etc/default/emotion-pi`.
+- Remote backend users can bootstrap a fresh login database with `python scripts/bootstrap_server_backend.py`.
+- If you want to ship a ready-to-demo repo, use `DEMO_USER_EMAIL` and `DEMO_USER_PASSWORD` in `server_backend/.env`, then run `python scripts/bootstrap_server_backend.py --create-demo-user`.
 - This adaptation is a userland migration. It does not require reflashing or reinstalling Raspberry Pi OS.

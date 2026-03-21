@@ -162,6 +162,16 @@ class UiConfig:
     expression_width: int = 320
     expression_height: int = 240
     display_driver: str = "web"
+    spi_port: int = 0
+    spi_device: int = 0
+    spi_dc_gpio: int = 25
+    spi_reset_gpio: Optional[int] = 27
+    spi_backlight_gpio: Optional[int] = 24
+    spi_rotation: int = 0
+    spi_bus_speed_hz: int = 40_000_000
+    spi_offset_x: int = 0
+    spi_offset_y: int = 0
+    display_fps: int = 12
 
 
 @dataclass

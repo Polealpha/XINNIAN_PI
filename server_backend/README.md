@@ -19,7 +19,12 @@ This folder provides a deployment-oriented launcher for the existing backend so 
 3. Edit `server_backend/.env`:
    - set `AUTH_SECRET_KEY`
    - set `AUTH_CORS_ORIGINS` to your real client origins
-4. Start server:
+4. Initialize database:
+   - `python scripts/bootstrap_server_backend.py`
+   - Optional demo account:
+     - set `DEMO_USER_EMAIL` and `DEMO_USER_PASSWORD` in `server_backend/.env`
+     - then run `python scripts/bootstrap_server_backend.py --create-demo-user`
+5. Start server:
    - `python server_backend/run_server.py`
    - or `.\server_backend\start_server.ps1`
 
@@ -35,6 +40,7 @@ If backend server public IP/domain is `https://api.example.com`:
 
 ## Notes
 - Default DB path is `server_backend/data/auth.db` (created automatically).
+- Do not commit real API keys, real JWT secrets, or your personal auth database to GitHub.
+- If you want a fresh repo that others can use immediately, commit the bootstrap script and env template, not your personal `auth.db`.
 - For HTTPS + domain deployment, place this app behind Nginx/Caddy and keep websocket upgrade enabled.
 - Ensure firewall/security-group allows your server port (default `8000`) or proxy port (`443`).
-
