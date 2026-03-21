@@ -32,4 +32,6 @@ third_party/
 assistant_data/openclaw_state/
 assistant_data/openclaw_state_runtime/
 .codex-openclaw-probe/
+.codex-openclaw-e2e/
+.codex-openclaw-probe-runtime/
 tmp/

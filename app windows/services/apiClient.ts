@@ -2,6 +2,9 @@ const LOCAL_API_BASE = import.meta.env.VITE_LOCAL_API_BASE || "http://127.0.0.1:
 const API_BASE = import.meta.env.VITE_SERVER_API_BASE || import.meta.env.VITE_API_BASE || LOCAL_API_BASE;
 const DEVICE_SYNC_API_BASE = import.meta.env.VITE_DEVICE_SYNC_API_BASE || API_BASE;
 const REQUEST_TIMEOUT_MS = 8000;
+const ASSISTANT_SEND_TIMEOUT_MS = 4 * 60 * 1000;
+const DESKTOP_AUDIO_TIMEOUT_MS = 2 * 60 * 1000;
+const LOCAL_LLM_TIMEOUT_MS = 90 * 1000;
 
 export const getApiBase = () => API_BASE;
 export const getDeviceSyncApiBase = () => DEVICE_SYNC_API_BASE;
@@ -37,6 +40,22 @@ const resolveBaseForPath = (path: string) => {
     return DEVICE_SYNC_API_BASE;
   }
   return API_BASE;
+};
+
+const resolveTimeoutForPath = (path: string, overrideTimeoutMs?: number) => {
+  if (typeof overrideTimeoutMs === "number" && Number.isFinite(overrideTimeoutMs) && overrideTimeoutMs > 0) {
+    return overrideTimeoutMs;
+  }
+  if (path === "/api/assistant/send") {
+    return ASSISTANT_SEND_TIMEOUT_MS;
+  }
+  if (path === "/api/desktop/voice/transcribe") {
+    return DESKTOP_AUDIO_TIMEOUT_MS;
+  }
+  if (path.startsWith("/api/llm/")) {
+    return LOCAL_LLM_TIMEOUT_MS;
+  }
+  return REQUEST_TIMEOUT_MS;
 };
 
 export const getAccessToken = (): string | null => {
@@ -108,15 +127,15 @@ const fetchWithTimeout = async (url: string, init: RequestInit, timeoutMs = REQU
   }
 };
 
-export const apiGet = async (path: string, withAuth = true, retried = false) => {
+export const apiGet = async (path: string, withAuth = true, retried = false, timeoutMs?: number) => {
   const base = resolveBaseForPath(path);
   const response = await fetchWithTimeout(`${base}${path}`, {
     method: "GET",
     headers: buildHeaders(withAuth),
-  });
+  }, resolveTimeoutForPath(path, timeoutMs));
   if (response.status === 401 && withAuth && !retried) {
     await refreshAccessToken();
-    return apiGet(path, withAuth, true);
+    return apiGet(path, withAuth, true, timeoutMs);
   }
   if (!response.ok) {
     throw new Error(`GET ${path} failed: ${response.status}`);
@@ -124,16 +143,16 @@ export const apiGet = async (path: string, withAuth = true, retried = false) => 
   return response.json();
 };
 
-export const apiPost = async (path: string, body: unknown, withAuth = true, retried = false) => {
+export const apiPost = async (path: string, body: unknown, withAuth = true, retried = false, timeoutMs?: number) => {
   const base = resolveBaseForPath(path);
   const response = await fetchWithTimeout(`${base}${path}`, {
     method: "POST",
     headers: buildHeaders(withAuth),
     body: body === undefined ? undefined : JSON.stringify(body),
-  });
+  }, resolveTimeoutForPath(path, timeoutMs));
   if (response.status === 401 && withAuth && !retried) {
     await refreshAccessToken();
-    return apiPost(path, body, withAuth, true);
+    return apiPost(path, body, withAuth, true, timeoutMs);
   }
   if (!response.ok) {
     throw new Error(`POST ${path} failed: ${response.status}`);
@@ -141,16 +160,16 @@ export const apiPost = async (path: string, body: unknown, withAuth = true, retr
   return response.json();
 };
 
-export const apiPostForm = async (path: string, body: FormData, withAuth = true, retried = false) => {
+export const apiPostForm = async (path: string, body: FormData, withAuth = true, retried = false, timeoutMs?: number) => {
   const base = resolveBaseForPath(path);
   const response = await fetchWithTimeout(`${base}${path}`, {
     method: "POST",
     headers: buildAuthHeadersOnly(withAuth),
     body,
-  });
+  }, resolveTimeoutForPath(path, timeoutMs));
   if (response.status === 401 && withAuth && !retried) {
     await refreshAccessToken();
-    return apiPostForm(path, body, withAuth, true);
+    return apiPostForm(path, body, withAuth, true, timeoutMs);
   }
   if (!response.ok) {
     throw new Error(`POST ${path} failed: ${response.status}`);
