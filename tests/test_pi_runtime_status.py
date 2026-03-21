@@ -14,4 +14,8 @@ def test_status_reports_pi_local_health():
     assert "identity_state" in payload
     assert "onboarding_state" in payload
     assert "expression_state" in payload
+    assert "camera_state" in payload
+    assert "display_state" in payload
     assert payload["expression_state"]["expression_id"]
+    assert payload["camera_state"]["configured_backend"] in {"picamera2", "opencv"}
+    assert "driver" in payload["display_state"]

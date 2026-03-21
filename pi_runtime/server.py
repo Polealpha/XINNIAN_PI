@@ -272,6 +272,7 @@ def _ui_shell_html() -> str:
       const cfg = state.settings || {};
       const voice = state.voice_state || {};
       const expr = state.expression_state || {};
+      const camera = state.camera_state || {};
       const display = state.display_state || {};
       const page = ui.page || "expression";
       const source = ui.source || "runtime";
@@ -432,6 +433,24 @@ def build_app(pi_config_path: str, engine_config_path: str) -> FastAPI:
             raise HTTPException(status_code=503, detail="preview unavailable")
         return Response(content=content, media_type="image/jpeg")
 
+    @app.get("/camera/state")
+    def camera_state() -> dict:
+        assert runtime is not None
+        return {"ok": True, "camera_state": runtime.get_camera_state()}
+
+    @app.get("/display/state")
+    def display_state() -> dict:
+        assert runtime is not None
+        return {"ok": True, "display_state": runtime.get_display_state()}
+
+    @app.get("/display/frame.png")
+    def display_frame_png() -> Response:
+        assert runtime is not None
+        content = runtime.get_display_preview_png()
+        if not content:
+            raise HTTPException(status_code=503, detail="display preview unavailable")
+        return Response(content=content, media_type="image/png")
+
     @app.get("/owner/status")
     def owner_status() -> dict:
         assert runtime is not None
@@ -514,6 +533,7 @@ def build_app(pi_config_path: str, engine_config_path: str) -> FastAPI:
             "device_id": runtime.pi_config.device.device_id,
             "settings": runtime.get_settings_state(),
             "ui_state": runtime.get_ui_state(),
+            "camera_state": status_payload.get("camera_state"),
             "display_state": status_payload.get("display_state"),
         }
 
@@ -544,6 +564,7 @@ def build_app(pi_config_path: str, engine_config_path: str) -> FastAPI:
             "settings": runtime.get_settings_state(),
             "voice_state": runtime.get_voice_status(),
             "expression_state": status_payload.get("expression_state"),
+            "camera_state": status_payload.get("camera_state"),
             "display_state": status_payload.get("display_state"),
             "owner_recognized": bool(status_payload.get("owner_recognized")),
             "S": float(status_payload.get("S", 0.0) or 0.0),

@@ -46,6 +46,20 @@ python scripts/bootstrap_server_backend.py
 python server_backend/run_server.py
 ```
 
+## Pi hardware diagnostics
+
+For overnight bring-up or wiring checks, run:
+
+```bash
+python scripts/pi_runtime_diagnostics.py --disable-audio --disable-backend
+```
+
+It writes:
+
+- `outputs/pi_runtime_diagnostics/status.json`
+- `outputs/pi_runtime_diagnostics/camera_preview.jpg` when a video frame is captured
+- `outputs/pi_runtime_diagnostics/display_preview.png` when the Pi display renderer is active
+
 ## Runtime API
 
 - `GET /healthz`

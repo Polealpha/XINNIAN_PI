@@ -130,6 +130,7 @@ class PiEmotionRuntime:
         self._preview_lock = threading.Lock()
         self._latest_preview_jpeg: bytes = b""
         self._latest_preview_ts_ms = 0
+        self._camera_state: Dict[str, object] = self._build_initial_camera_state()
         self._identity_state: Dict[str, object] = self._identity.get_status() if self._identity else {
             "identity_state": "disabled",
             "owner_recognized": False,
@@ -249,11 +250,8 @@ class PiEmotionRuntime:
             "settings": self.get_settings_state(),
             "ui_state": self.get_ui_state(),
             "expression_state": self.get_expression_state(),
-            "display_state": {
-                "driver": self._display_surface.get_status().driver,
-                "ready": self._display_surface.get_status().ready,
-                "detail": self._display_surface.get_status().detail,
-            },
+            "display_state": self.get_display_state(),
+            "camera_state": self.get_camera_state(),
         }
         self._last_status_ts_ms = int(payload["timestamp_ms"])
         return payload
@@ -261,6 +259,29 @@ class PiEmotionRuntime:
     def get_preview_jpeg(self) -> bytes:
         with self._preview_lock:
             return bytes(self._latest_preview_jpeg)
+
+    def get_display_preview_png(self) -> bytes:
+        return self._display_surface.render_preview_png(self.get_status_payload())
+
+    def get_display_state(self) -> Dict[str, object]:
+        status = self._display_surface.get_status()
+        return {
+            "driver": str(status.driver or self.pi_config.ui.display_driver),
+            "ready": bool(status.ready),
+            "detail": str(status.detail or ""),
+        }
+
+    def get_camera_state(self) -> Dict[str, object]:
+        state = dict(self._camera_state)
+        preview = self.get_preview_jpeg()
+        last_frame_ts_ms = int(state.get("last_frame_ts_ms") or 0)
+        state["preview_available"] = bool(preview)
+        state["preview_bytes"] = len(preview)
+        state["preview_age_ms"] = (
+            None if last_frame_ts_ms <= 0 else max(0, self._now_ms() - last_frame_ts_ms)
+        )
+        state["video_ok"] = bool(self._now_ms() - self._last_video_ts < 5000) if self.pi_config.camera.enabled else False
+        return state
 
     def get_onboarding_state(self) -> Dict[str, object]:
         state = self._onboarding.get_state()
@@ -283,7 +304,10 @@ class PiEmotionRuntime:
             "gaze_x": round(float(self._last_pan_turn) * 10.0, 2),
             "gaze_y": round(float(self._last_tilt_turn) * 8.0, 2),
         }
-        return self._expression_surface.snapshot(self._now_ms(), state)
+        snapshot = self._expression_surface.snapshot(self._now_ms(), state)
+        snapshot["gaze_x"] = float(state["gaze_x"])
+        snapshot["gaze_y"] = float(state["gaze_y"])
+        return snapshot
 
     def get_expression_svg(self) -> str:
         state = {
@@ -732,6 +756,16 @@ class PiEmotionRuntime:
 
     def _camera_loop(self) -> None:
         backend = str(self.pi_config.camera.backend or "picamera2").strip().lower()
+        self._camera_state.update(
+            {
+                "enabled": bool(self.pi_config.camera.enabled),
+                "configured_backend": backend,
+                "device_index": int(self.pi_config.camera.device_index),
+                "frame_width": int(self.pi_config.camera.width),
+                "frame_height": int(self.pi_config.camera.height),
+                "target_fps": int(self.pi_config.camera.fps),
+            }
+        )
         if backend == "picamera2" and self._camera_loop_picamera2():
             return
         self._camera_loop_opencv()
@@ -742,6 +776,14 @@ class PiEmotionRuntime:
             import cv2  # type: ignore
         except Exception as exc:
             logger.info("picamera2 unavailable, falling back to opencv: %s", exc)
+            self._camera_state.update(
+                {
+                    "active_backend": "",
+                    "fallback_backend": "opencv",
+                    "ready": False,
+                    "last_error": f"picamera2 unavailable: {exc}",
+                }
+            )
             return False
 
         picam = None
@@ -753,19 +795,28 @@ class PiEmotionRuntime:
             picam.configure(video_config)
             picam.start()
             frame_interval = 1.0 / max(1, int(self.pi_config.camera.fps))
+            self._camera_state.update(
+                {
+                    "active_backend": "picamera2",
+                    "fallback_backend": "",
+                    "ready": True,
+                    "last_error": "",
+                }
+            )
             while not self._stop.is_set():
                 rgb = picam.capture_array()
                 if rgb is None:
                     time.sleep(frame_interval)
                     continue
                 bgr = cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR)
+                timestamp_ms = self._now_ms()
                 self._push_video(
                     VideoFrame(
                         format="bgr",
                         data=bgr.tobytes(),
                         width=bgr.shape[1],
                         height=bgr.shape[0],
-                        timestamp_ms=self._now_ms(),
+                        timestamp_ms=timestamp_ms,
                         seq=self._video_seq,
                         device_id=self.pi_config.device.device_id,
                     )
@@ -775,6 +826,14 @@ class PiEmotionRuntime:
             return True
         except Exception as exc:
             logger.warning("picamera2 loop failed: %s", exc)
+            self._camera_state.update(
+                {
+                    "active_backend": "picamera2",
+                    "fallback_backend": "opencv",
+                    "ready": False,
+                    "last_error": f"picamera2 loop failed: {exc}",
+                }
+            )
             return False
         finally:
             try:
@@ -788,33 +847,64 @@ class PiEmotionRuntime:
             import cv2  # type: ignore
         except Exception as exc:
             logger.warning("opencv camera capture unavailable: %s", exc)
+            self._camera_state.update(
+                {
+                    "active_backend": "opencv",
+                    "ready": False,
+                    "last_error": f"opencv unavailable: {exc}",
+                }
+            )
             return
         cap = cv2.VideoCapture(int(self.pi_config.camera.device_index))
         if not cap.isOpened():
             logger.warning("opencv camera device %s not available", self.pi_config.camera.device_index)
+            self._camera_state.update(
+                {
+                    "active_backend": "opencv",
+                    "ready": False,
+                    "last_error": f"opencv camera device {self.pi_config.camera.device_index} not available",
+                }
+            )
             return
         cap.set(cv2.CAP_PROP_FRAME_WIDTH, self.pi_config.camera.width)
         cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self.pi_config.camera.height)
         frame_interval = 1.0 / max(1, int(self.pi_config.camera.fps))
+        self._camera_state.update(
+            {
+                "active_backend": "opencv",
+                "ready": True,
+                "last_error": "",
+            }
+        )
         try:
             while not self._stop.is_set():
                 ok, frame = cap.read()
                 if not ok or frame is None:
                     time.sleep(frame_interval)
                     continue
+                timestamp_ms = self._now_ms()
                 self._push_video(
                     VideoFrame(
                         format="bgr",
                         data=frame.tobytes(),
                         width=frame.shape[1],
                         height=frame.shape[0],
-                        timestamp_ms=self._now_ms(),
+                        timestamp_ms=timestamp_ms,
                         seq=self._video_seq,
                         device_id=self.pi_config.device.device_id,
                     )
                 )
                 self._video_seq += 1
                 time.sleep(frame_interval)
+        except Exception as exc:
+            self._camera_state.update(
+                {
+                    "active_backend": "opencv",
+                    "ready": False,
+                    "last_error": f"opencv loop failed: {exc}",
+                }
+            )
+            raise
         finally:
             cap.release()
 
@@ -852,6 +942,13 @@ class PiEmotionRuntime:
         if self._mode == "privacy":
             return
         self._last_video_ts = frame.timestamp_ms
+        self._camera_state.update(
+            {
+                "ready": True,
+                "last_frame_ts_ms": int(frame.timestamp_ms),
+                "frames_captured": int(self._camera_state.get("frames_captured") or 0) + 1,
+            }
+        )
         frame_bgr = self._frame_to_bgr(frame)
         self._update_preview(frame_bgr, frame.timestamp_ms)
         det = self._face_detector.detect(frame) if self._face_detector and self._face_detector.ready else None
@@ -1247,6 +1344,23 @@ class PiEmotionRuntime:
         else:
             angle = float(center) + (turn_f * (float(center) - float(min_angle)))
         return max(float(min_angle), min(float(max_angle), angle))
+
+    def _build_initial_camera_state(self) -> Dict[str, object]:
+        backend = str(self.pi_config.camera.backend or "picamera2").strip().lower()
+        return {
+            "enabled": bool(self.pi_config.camera.enabled),
+            "configured_backend": backend,
+            "active_backend": "",
+            "fallback_backend": "",
+            "device_index": int(self.pi_config.camera.device_index),
+            "frame_width": int(self.pi_config.camera.width),
+            "frame_height": int(self.pi_config.camera.height),
+            "target_fps": int(self.pi_config.camera.fps),
+            "ready": False,
+            "frames_captured": 0,
+            "last_frame_ts_ms": 0,
+            "last_error": "",
+        }
 
     def _get_pending_owner_sync(self) -> Optional[Dict[str, object]]:
         if self._identity is None:
