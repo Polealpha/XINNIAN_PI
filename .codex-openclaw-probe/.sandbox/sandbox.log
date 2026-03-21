@@ -1,0 +1,32 @@
+[2026-03-21 15:35:18.597 codex.exe] START: C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe -Command [Console]::OutputEncoding=[System.Text.Encoding]::UTF8;
+Get-ChildItem memory -Name
+[2026-03-21 15:35:19.259 codex.exe] FAILURE: C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe -Command [Console]::OutputEncoding=[System.Text.Encoding]::UTF8;
+Get-ChildItem memory -Name (exit code 1)
+[2026-03-21 15:35:32.515 codex.exe] START: C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe -NoProfile -Command [Console]::OutputEncoding=[System.Text.Encoding]::UTF8;
+Get-Content -Raw SOUL.md
+[2026-03-21 15:35:32.634 codex.exe] START: C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe -NoProfile -Command [Console]::OutputEncoding=[System.Text.Encoding]::UTF8;
+Get-Content -Raw USER.md
+[2026-03-21 15:35:32.685 codex.exe] START: C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe -NoProfile -Command [Console]::OutputEncoding=[System.Text.Encoding]::UTF8;
+Get-ChildItem -Recurse -Filter 2026-03-21.md | Select-Object -Expa
+[2026-03-21 15:35:32.694 codex.exe] START: C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe -NoProfile -Command [Console]::OutputEncoding=[System.Text.Encoding]::UTF8;
+Get-Content -Raw IDENTITY.md
+[2026-03-21 15:35:32.725 codex.exe] START: C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe -NoProfile -Command [Console]::OutputEncoding=[System.Text.Encoding]::UTF8;
+Get-Content -Raw MEMORY.md
+[2026-03-21 15:35:32.725 codex.exe] START: C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe -NoProfile -Command [Console]::OutputEncoding=[System.Text.Encoding]::UTF8;
+Get-Content -Raw TOOLS.md
+[2026-03-21 15:35:32.790 codex.exe] START: C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe -NoProfile -Command [Console]::OutputEncoding=[System.Text.Encoding]::UTF8;
+Get-Content -Raw HEARTBEAT.md
+[2026-03-21 15:35:33.478 codex.exe] SUCCESS: C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe -NoProfile -Command [Console]::OutputEncoding=[System.Text.Encoding]::UTF8;
+Get-Content -Raw SOUL.md
+[2026-03-21 15:35:33.606 codex.exe] SUCCESS: C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe -NoProfile -Command [Console]::OutputEncoding=[System.Text.Encoding]::UTF8;
+Get-Content -Raw USER.md
+[2026-03-21 15:35:33.760 codex.exe] SUCCESS: C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe -NoProfile -Command [Console]::OutputEncoding=[System.Text.Encoding]::UTF8;
+Get-Content -Raw MEMORY.md
+[2026-03-21 15:35:33.768 codex.exe] SUCCESS: C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe -NoProfile -Command [Console]::OutputEncoding=[System.Text.Encoding]::UTF8;
+Get-Content -Raw TOOLS.md
+[2026-03-21 15:35:33.797 codex.exe] SUCCESS: C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe -NoProfile -Command [Console]::OutputEncoding=[System.Text.Encoding]::UTF8;
+Get-Content -Raw HEARTBEAT.md
+[2026-03-21 15:35:33.860 codex.exe] SUCCESS: C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe -NoProfile -Command [Console]::OutputEncoding=[System.Text.Encoding]::UTF8;
+Get-Content -Raw IDENTITY.md
+[2026-03-21 15:35:34.006 codex.exe] SUCCESS: C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe -NoProfile -Command [Console]::OutputEncoding=[System.Text.Encoding]::UTF8;
+Get-ChildItem -Recurse -Filter 2026-03-21.md | Select-Object -Expa

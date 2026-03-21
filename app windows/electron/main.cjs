@@ -52,6 +52,10 @@ const resolveOpenClawStateDir = (runtimeRoot) => {
   return path.join(runtimeRoot, "assistant_data", "openclaw_state");
 };
 
+const resolveOpenClawCodexHome = (runtimeRoot) => {
+  return path.join(runtimeRoot, "assistant_data", "codex_home");
+};
+
 const ensureOpenClawWorkspace = (workspaceDir) => {
   fs.mkdirSync(workspaceDir, { recursive: true });
   fs.mkdirSync(path.join(workspaceDir, "memory"), { recursive: true });
@@ -67,6 +71,37 @@ const ensureOpenClawWorkspace = (workspaceDir) => {
       fs.writeFileSync(target, content, "utf8");
     }
   }
+};
+
+const ensureOpenClawCodexHome = (runtimeRoot, workspaceDir, openClawRepo) => {
+  const codexHome = resolveOpenClawCodexHome(runtimeRoot);
+  const sourceCodexHome = path.join(os.homedir(), ".codex");
+  fs.mkdirSync(codexHome, { recursive: true });
+  for (const name of ["auth.json", "cap_sid"]) {
+    const src = path.join(sourceCodexHome, name);
+    const dest = path.join(codexHome, name);
+    if (fs.existsSync(src)) {
+      fs.copyFileSync(src, dest);
+    }
+  }
+  const escapeTomlPath = (value) => String(value || "").replace(/\\/g, "\\\\");
+  const config = [
+    'model = "gpt-5.4"',
+    'model_reasoning_effort = "high"',
+    'personality = "pragmatic"',
+    "",
+    `[projects.'${escapeTomlPath(workspaceDir)}']`,
+    'trust_level = "trusted"',
+    "",
+    `[projects.'${escapeTomlPath(openClawRepo)}']`,
+    'trust_level = "trusted"',
+    "",
+    "[windows]",
+    'sandbox = "unelevated"',
+    "",
+  ].join("\n");
+  fs.writeFileSync(path.join(codexHome, "config.toml"), config, "utf8");
+  return codexHome;
 };
 
 const ensureOpenClawState = (stateDir) => {
@@ -151,6 +186,12 @@ const isLocalBackendHealthy = async () => {
 const startLocalBackend = () => {
   if (backendProc) return;
   const runtimeRoot = resolveRuntimeRoot();
+  const openClawRepo = resolveOpenClawRepo(runtimeRoot);
+  const codexHome = ensureOpenClawCodexHome(
+    runtimeRoot,
+    resolveOpenClawWorkspace(runtimeRoot),
+    openClawRepo
+  );
   const backendEntry = path.join(runtimeRoot, "backend", "main.py");
   if (!fs.existsSync(backendEntry)) {
     console.error(`[main] backend bundle missing: ${backendEntry}`);
@@ -173,6 +214,8 @@ const startLocalBackend = () => {
         OPENCLAW_STATE_DIR: resolveOpenClawStateDir(runtimeRoot),
         OPENCLAW_GATEWAY_URL: `ws://127.0.0.1:${LOCAL_OPENCLAW_GATEWAY_PORT}`,
         OPENCLAW_GATEWAY_ORIGIN: `http://127.0.0.1:${LOCAL_OPENCLAW_GATEWAY_PORT}`,
+        CODEX_HOME: process.env.CODEX_HOME || codexHome,
+        ALLOW_UNVERIFIED_LOCAL_DESKTOP_TOKENS: "1",
         DEFAULT_ROBOT_DEVICE_IP: process.env.DEFAULT_ROBOT_DEVICE_IP || "192.168.137.50",
       },
       windowsHide: true,
@@ -204,6 +247,7 @@ const startLocalOpenClawGateway = () => {
   }
   const workspaceDir = resolveOpenClawWorkspace(runtimeRoot);
   const stateDir = resolveOpenClawStateDir(runtimeRoot);
+  const codexHome = ensureOpenClawCodexHome(runtimeRoot, workspaceDir, openClawRepo);
   ensureOpenClawWorkspace(workspaceDir);
   ensureOpenClawState(stateDir);
   openClawGatewayProc = spawn(
@@ -228,6 +272,7 @@ const startLocalOpenClawGateway = () => {
       env: {
         ...process.env,
         OPENCLAW_STATE_DIR: process.env.OPENCLAW_STATE_DIR || stateDir,
+        CODEX_HOME: process.env.CODEX_HOME || codexHome,
       },
       windowsHide: true,
       stdio: ["ignore", "pipe", "pipe"],

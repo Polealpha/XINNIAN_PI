@@ -6,6 +6,7 @@ import time
 import wave
 
 from fastapi.testclient import TestClient
+from jose import jwt
 
 import backend.auth as auth
 import backend.db as db
@@ -23,6 +24,31 @@ def _silent_wav_bytes(duration_ms: int = 300) -> bytes:
     return buffer.getvalue()
 
 
+def _mock_voice_status() -> dict:
+    return {
+        "ok": True,
+        "ready": True,
+        "provider_preference": "faster_whisper",
+        "fallback_provider": "sherpa_onnx",
+        "active_provider": "sherpa_onnx",
+        "primary_ready": False,
+        "primary_engine": "faster_whisper_unavailable",
+        "primary_error": "missing_model",
+        "fallback_ready": True,
+        "fallback_engine": "sherpa_onnx",
+        "fallback_error": None,
+        "language": "zh",
+        "max_sec": 45,
+        "model_name": "distil-large-v3",
+        "beam_size": 8,
+        "best_of": 5,
+        "preprocess_enabled": True,
+        "trim_silence_enabled": True,
+        "initial_prompt_enabled": True,
+        "hotwords_enabled": True,
+    }
+
+
 def test_desktop_voice_status_and_transcribe_route(tmp_path, monkeypatch):
     db_path = tmp_path / "auth.db"
     monkeypatch.setattr(db, "DB_PATH", str(db_path))
@@ -38,32 +64,7 @@ def test_desktop_voice_status_and_transcribe_route(tmp_path, monkeypatch):
     finally:
         conn.close()
 
-    monkeypatch.setattr(
-        main.desktop_speech_service,
-        "status",
-        lambda: {
-            "ok": True,
-            "ready": True,
-            "provider_preference": "faster_whisper",
-            "fallback_provider": "sherpa_onnx",
-            "active_provider": "sherpa_onnx",
-            "primary_ready": False,
-            "primary_engine": "faster_whisper_unavailable",
-            "primary_error": "missing_model",
-            "fallback_ready": True,
-            "fallback_engine": "sherpa_onnx",
-            "fallback_error": None,
-            "language": "zh",
-            "max_sec": 45,
-            "model_name": "distil-large-v3",
-            "beam_size": 8,
-            "best_of": 5,
-            "preprocess_enabled": True,
-            "trim_silence_enabled": True,
-            "initial_prompt_enabled": True,
-            "hotwords_enabled": True,
-        },
-    )
+    monkeypatch.setattr(main.desktop_speech_service, "status", _mock_voice_status)
     monkeypatch.setattr(
         main.desktop_speech_service,
         "transcribe_upload",
@@ -120,3 +121,54 @@ def test_desktop_voice_status_and_transcribe_route(tmp_path, monkeypatch):
         assert payload["ok"] is True
         assert payload["transcript"] == "测试语音输入"
         assert payload["context"] == "activation_assessment"
+
+
+def test_local_desktop_routes_accept_remote_style_token_on_loopback(tmp_path, monkeypatch):
+    db_path = tmp_path / "auth.db"
+    monkeypatch.setattr(db, "DB_PATH", str(db_path))
+    db.init_db()
+    monkeypatch.setattr(main, "ALLOW_UNVERIFIED_LOCAL_DESKTOP_TOKENS", True)
+    monkeypatch.setattr(main.desktop_speech_service, "status", _mock_voice_status)
+    monkeypatch.setattr(
+        main.assistant_service,
+        "runtime_status",
+        lambda: {
+            "gateway_ready": False,
+            "gateway_error": "probe timeout",
+            "state_dir": "",
+            "workspace_dir": "",
+            "robot_bridge_ready": False,
+            "desktop_tools": [],
+        },
+    )
+
+    now = int(time.time())
+    remote_style_token = jwt.encode(
+        {
+            "sub": "42",
+            "username": "remote-owner@example.com",
+            "type": "access",
+            "iat": now,
+            "exp": now + 900,
+            "jti": "remote-jti-1",
+        },
+        "remote-server-secret",
+        algorithm="HS256",
+    )
+    headers = {"Authorization": f"Bearer {remote_style_token}"}
+
+    with TestClient(main.app) as client:
+        voice_response = client.get("/api/desktop/voice/status", headers=headers)
+        assert voice_response.status_code == 200
+
+        assistant_response = client.get("/api/assistant/runtime/status", headers=headers)
+        assert assistant_response.status_code == 200
+        assert assistant_response.json()["gateway_ready"] is False
+
+    conn = sqlite3.connect(str(db_path))
+    try:
+        row = conn.execute("SELECT id, username FROM users WHERE id = 42").fetchone()
+        assert row is not None
+        assert row[1] == "remote-owner@example.com"
+    finally:
+        conn.close()

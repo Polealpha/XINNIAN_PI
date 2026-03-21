@@ -1,30 +1,42 @@
-const API_BASE = import.meta.env.VITE_API_BASE || "http://127.0.0.1:8000";
+const LOCAL_API_BASE = import.meta.env.VITE_LOCAL_API_BASE || "http://127.0.0.1:8000";
+const API_BASE = import.meta.env.VITE_SERVER_API_BASE || import.meta.env.VITE_API_BASE || LOCAL_API_BASE;
 const DEVICE_SYNC_API_BASE = import.meta.env.VITE_DEVICE_SYNC_API_BASE || API_BASE;
 const REQUEST_TIMEOUT_MS = 8000;
 
 export const getApiBase = () => API_BASE;
 export const getDeviceSyncApiBase = () => DEVICE_SYNC_API_BASE;
+export const getLocalApiBase = () => LOCAL_API_BASE;
 
 export const getWsBase = () => {
-  if (API_BASE.startsWith("https://")) return API_BASE.replace("https://", "wss://");
-  if (API_BASE.startsWith("http://")) return API_BASE.replace("http://", "ws://");
-  return `ws://${API_BASE}`;
+  if (LOCAL_API_BASE.startsWith("https://")) return LOCAL_API_BASE.replace("https://", "wss://");
+  if (LOCAL_API_BASE.startsWith("http://")) return LOCAL_API_BASE.replace("http://", "ws://");
+  return `ws://${LOCAL_API_BASE}`;
 };
 
-const SERVER_PATH_PREFIXES = [
+const LOCAL_PATH_PREFIXES = [
+  "/api/assistant/",
+  "/api/desktop/",
+  "/api/llm/",
+];
+
+const REMOTE_PATH_PREFIXES = [
   "/api/auth/",
   "/api/user/",
   "/api/chat/",
   "/api/activation/",
-  "/api/assistant/",
-  "/api/desktop/",
   "/api/device/",
   "/api/client/",
-  "/api/llm/",
+  "/api/emotion/",
 ];
 
 const resolveBaseForPath = (path: string) => {
-  return SERVER_PATH_PREFIXES.some((prefix) => path.startsWith(prefix)) ? DEVICE_SYNC_API_BASE : API_BASE;
+  if (LOCAL_PATH_PREFIXES.some((prefix) => path.startsWith(prefix))) {
+    return LOCAL_API_BASE;
+  }
+  if (REMOTE_PATH_PREFIXES.some((prefix) => path.startsWith(prefix))) {
+    return DEVICE_SYNC_API_BASE;
+  }
+  return API_BASE;
 };
 
 export const getAccessToken = (): string | null => {

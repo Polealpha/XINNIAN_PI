@@ -135,6 +135,7 @@ from .schemas import (
 from .settings import (
     ACCESS_TOKEN_EXPIRE_SEC,
     ALLOWED_ORIGINS,
+    ALLOW_UNVERIFIED_LOCAL_DESKTOP_TOKENS,
     ASSISTANT_BRIDGE_TOKEN,
     ASSISTANT_BRIDGE_USER_ID,
     AUTH_SECRET_KEY,
@@ -297,19 +298,21 @@ def _desktop_runtime_status_payload() -> Dict[str, object]:
 
 @app.get("/api/desktop/runtime/status", response_model=DesktopRuntimeStatusResponse)
 def desktop_runtime_status(
+    request: Request,
     credentials: HTTPAuthorizationCredentials = Depends(bearer_scheme),
     conn: Connection = Depends(get_db),
 ) -> DesktopRuntimeStatusResponse:
-    _parse_access_token(credentials, conn)
+    _parse_access_token_for_local_desktop(credentials, conn, request)
     return DesktopRuntimeStatusResponse(**_desktop_runtime_status_payload())
 
 
 @app.get("/api/desktop/voice/status", response_model=DesktopVoiceStatusResponse)
 def desktop_voice_status(
+    request: Request,
     credentials: HTTPAuthorizationCredentials = Depends(bearer_scheme),
     conn: Connection = Depends(get_db),
 ) -> DesktopVoiceStatusResponse:
-    _parse_access_token(credentials, conn)
+    _parse_access_token_for_local_desktop(credentials, conn, request)
     return DesktopVoiceStatusResponse(**desktop_speech_service.status())
 
 
@@ -2594,6 +2597,64 @@ def _parse_access_token(
     return user
 
 
+def _is_loopback_request(request: Optional[Request]) -> bool:
+    if request is None or request.client is None:
+        return False
+    host = str(request.client.host or "").strip().lower()
+    return host in {"127.0.0.1", "::1", "localhost", "testclient"}
+
+
+def _ensure_shadow_user(conn: Connection, user_id: int, username: str) -> Dict[str, Any]:
+    now = int(time.time())
+    existing = _get_user_by_id(conn, user_id)
+    if existing:
+        if username and str(existing["username"]) != username:
+            conn.execute("UPDATE users SET username = ?, updated_at = ? WHERE id = ?", (username, now, user_id))
+            conn.commit()
+            refreshed = _get_user_by_id(conn, user_id)
+            if refreshed:
+                return refreshed
+        return existing
+    shadow_username = username or f"desktop-shadow-{user_id}"
+    conn.execute(
+        """
+        INSERT INTO users (id, username, password_hash, created_at, updated_at, is_configured)
+        VALUES (?, ?, ?, ?, ?, 1)
+        """,
+        (int(user_id), shadow_username, auth.hash_password(f"shadow-user-{user_id}"), now, now),
+    )
+    conn.commit()
+    created = _get_user_by_id(conn, user_id)
+    if not created:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Shadow user bootstrap failed")
+    return created
+
+
+def _parse_access_token_for_local_desktop(
+    credentials: HTTPAuthorizationCredentials,
+    conn: Connection,
+    request: Optional[Request] = None,
+) -> Dict:
+    try:
+        return _parse_access_token(credentials, conn)
+    except HTTPException:
+        if not ALLOW_UNVERIFIED_LOCAL_DESKTOP_TOKENS or not _is_loopback_request(request):
+            raise
+        if credentials is None or credentials.scheme.lower() != "bearer":
+            raise
+        payload = auth.decode_token_unverified(credentials.credentials)
+        if not payload or payload.get("type") != "access":
+            raise
+        try:
+            user_id = int(payload.get("sub", 0))
+        except Exception as exc:
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token subject") from exc
+        if user_id <= 0:
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token subject")
+        username = str(payload.get("username") or f"desktop-shadow-{user_id}").strip()
+        return _ensure_shadow_user(conn, user_id, username)
+
+
 def _bridge_user_from_request(request: Request, conn: Connection) -> Dict:
     token = str(request.headers.get("x-assistant-bridge-token") or "").strip()
     if not token or token != ASSISTANT_BRIDGE_TOKEN:
@@ -4210,10 +4271,11 @@ async def chat_upload(
 async def desktop_voice_transcribe(
     file: UploadFile = File(...),
     context: str = Form("chat"),
+    request: Request = None,
     credentials: HTTPAuthorizationCredentials = Depends(bearer_scheme),
     conn: Connection = Depends(get_db),
 ) -> DesktopVoiceTranscribeResponse:
-    _parse_access_token(credentials, conn)
+    _parse_access_token_for_local_desktop(credentials, conn, request)
     content_type = str(file.content_type or "").lower()
     if not (content_type.startswith("audio/") or str(file.filename or "").lower().endswith(".wav")):
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Only audio uploads are supported")
@@ -4325,10 +4387,11 @@ async def _assistant_send_impl(
 @app.post("/api/assistant/send", response_model=AssistantSendResponse)
 async def assistant_send(
     payload: AssistantSendRequest,
+    request: Request,
     credentials: HTTPAuthorizationCredentials = Depends(bearer_scheme),
     conn: Connection = Depends(get_db),
 ) -> AssistantSendResponse:
-    user = _parse_access_token(credentials, conn)
+    user = _parse_access_token_for_local_desktop(credentials, conn, request)
     try:
         return await _assistant_send_impl(conn, int(user["id"]), payload)
     except OpenClawGatewayError as exc:
@@ -4366,10 +4429,11 @@ def assistant_session_status(
     device_id: Optional[str] = None,
     sender_id: Optional[str] = None,
     limit: int = 30,
+    request: Request = None,
     credentials: HTTPAuthorizationCredentials = Depends(bearer_scheme),
     conn: Connection = Depends(get_db),
 ) -> AssistantSessionStatusResponse:
-    user = _parse_access_token(credentials, conn)
+    user = _parse_access_token_for_local_desktop(credentials, conn, request)
     status_payload = assistant_service.get_session_status(
         conn,
         user_id=int(user["id"]),
@@ -4393,10 +4457,11 @@ def assistant_session_status(
 @app.post("/api/assistant/session/reset")
 async def assistant_session_reset(
     payload: AssistantSessionResetRequest,
+    request: Request,
     credentials: HTTPAuthorizationCredentials = Depends(bearer_scheme),
     conn: Connection = Depends(get_db),
 ) -> Dict[str, object]:
-    user = _parse_access_token(credentials, conn)
+    user = _parse_access_token_for_local_desktop(credentials, conn, request)
     try:
         data = await assistant_service.reset_session(
             int(user["id"]),
@@ -4413,10 +4478,11 @@ async def assistant_session_reset(
 @app.get("/api/assistant/todos", response_model=AssistantTodoListResponse)
 def assistant_todos(
     state: Optional[str] = None,
+    request: Request = None,
     credentials: HTTPAuthorizationCredentials = Depends(bearer_scheme),
     conn: Connection = Depends(get_db),
 ) -> AssistantTodoListResponse:
-    user = _parse_access_token(credentials, conn)
+    user = _parse_access_token_for_local_desktop(credentials, conn, request)
     items = [AssistantTodoItem(**item) for item in assistant_service.list_todos(int(user["id"]), state=state)]
     return AssistantTodoListResponse(ok=True, items=items)
 
@@ -4424,10 +4490,11 @@ def assistant_todos(
 @app.get("/api/assistant/todos/due", response_model=AssistantTodoListResponse)
 def assistant_todos_due(
     limit: int = 10,
+    request: Request = None,
     credentials: HTTPAuthorizationCredentials = Depends(bearer_scheme),
     conn: Connection = Depends(get_db),
 ) -> AssistantTodoListResponse:
-    user = _parse_access_token(credentials, conn)
+    user = _parse_access_token_for_local_desktop(credentials, conn, request)
     items = [
         AssistantTodoItem(**item)
         for item in assistant_service.claim_due_todos(int(user["id"]), limit=max(1, min(int(limit), 20)))
@@ -4438,10 +4505,11 @@ def assistant_todos_due(
 @app.post("/api/assistant/todos", response_model=AssistantTodoItem)
 def assistant_todos_create(
     payload: AssistantTodoCreateRequest,
+    request: Request,
     credentials: HTTPAuthorizationCredentials = Depends(bearer_scheme),
     conn: Connection = Depends(get_db),
 ) -> AssistantTodoItem:
-    user = _parse_access_token(credentials, conn)
+    user = _parse_access_token_for_local_desktop(credentials, conn, request)
     item = assistant_service.create_todo(
         int(user["id"]),
         title=payload.title,
@@ -4456,10 +4524,11 @@ def assistant_todos_create(
 def assistant_todos_patch(
     todo_id: str,
     payload: AssistantTodoUpdateRequest,
+    request: Request,
     credentials: HTTPAuthorizationCredentials = Depends(bearer_scheme),
     conn: Connection = Depends(get_db),
 ) -> AssistantTodoItem:
-    user = _parse_access_token(credentials, conn)
+    user = _parse_access_token_for_local_desktop(credentials, conn, request)
     try:
         item = assistant_service.update_todo(int(user["id"]), todo_id, payload.model_dump())
     except KeyError as exc:
@@ -4471,10 +4540,11 @@ def assistant_todos_patch(
 def assistant_memory_search(
     q: str,
     limit: int = 10,
+    request: Request = None,
     credentials: HTTPAuthorizationCredentials = Depends(bearer_scheme),
     conn: Connection = Depends(get_db),
 ) -> AssistantMemorySearchResponse:
-    user = _parse_access_token(credentials, conn)
+    user = _parse_access_token_for_local_desktop(credentials, conn, request)
     return AssistantMemorySearchResponse(
         ok=True,
         query=q,
@@ -4484,10 +4554,11 @@ def assistant_memory_search(
 
 @app.get("/api/assistant/runtime/status", response_model=AssistantRuntimeStatusResponse)
 def assistant_runtime_status(
+    request: Request,
     credentials: HTTPAuthorizationCredentials = Depends(bearer_scheme),
     conn: Connection = Depends(get_db),
 ) -> AssistantRuntimeStatusResponse:
-    _ = _parse_access_token(credentials, conn)
+    _ = _parse_access_token_for_local_desktop(credentials, conn, request)
     return AssistantRuntimeStatusResponse(ok=True, **assistant_service.runtime_status())
 
 
@@ -4661,10 +4732,11 @@ def _sse(event: str, payload: Dict[str, object]) -> str:
 @app.post("/api/llm/care", response_model=CareResponse)
 async def llm_care(
     payload: CareRequest,
+    request: Request,
     credentials: HTTPAuthorizationCredentials = Depends(bearer_scheme),
     conn: Connection = Depends(get_db),
 ) -> CareResponse:
-    user = _parse_access_token(credentials, conn)
+    user = _parse_access_token_for_local_desktop(credentials, conn, request)
     context = _build_care_context(payload)
     assistant_prompt = (
         "请基于以下情绪上下文，用中文给出一句温和、简洁、可执行的回应，"
@@ -4697,10 +4769,11 @@ async def llm_care(
 @app.post("/api/llm/care/stream")
 async def llm_care_stream(
     payload: CareRequest,
+    request: Request,
     credentials: HTTPAuthorizationCredentials = Depends(bearer_scheme),
     conn: Connection = Depends(get_db),
 ):
-    user = _parse_access_token(credentials, conn)
+    user = _parse_access_token_for_local_desktop(credentials, conn, request)
     context = _build_care_context(payload)
     assistant_prompt = (
         "请基于以下情绪上下文，用中文给出一句温和、简洁、可执行的回应，"
@@ -4759,10 +4832,11 @@ async def llm_care_stream(
 @app.post("/api/llm/daily_summary", response_model=DailySummaryResponse)
 async def llm_daily_summary(
     payload: DailySummaryRequest,
+    request: Request,
     credentials: HTTPAuthorizationCredentials = Depends(bearer_scheme),
     conn: Connection = Depends(get_db),
 ) -> DailySummaryResponse:
-    user = _parse_access_token(credentials, conn)
+    user = _parse_access_token_for_local_desktop(credentials, conn, request)
     fallback_summary = "今天没有记录到明显情绪事件。需要的话，随时可以和我聊聊。"
     fallback_highlights = [
         "暂无明显触发事件",

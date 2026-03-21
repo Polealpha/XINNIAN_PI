@@ -8,9 +8,10 @@
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
+    "prepare:python-runtime": "python ../scripts/prepare_desktop_python_runtime.py --target \"vendor/python-site-packages\" --requirements ../backend/requirements.txt",
     "electron:dev": "concurrently -k \"vite\" \"wait-on http://localhost:3001 && cross-env ELECTRON_DEV_URL=http://localhost:3001 electron electron/main.cjs\"",
-    "electron:pack": "vite build && electron-builder --dir",
-    "electron:dist": "vite build && electron-builder && rmdir /s /q \"release\\win-unpacked\""
+    "electron:pack": "npm run prepare:python-runtime && vite build && electron-builder --dir",
+    "electron:dist": "npm run prepare:python-runtime && vite build && electron-builder && rmdir /s /q \"release\\win-unpacked\""
   },
   "dependencies": {
     "lucide-react": "^0.555.0",
@@ -46,6 +47,10 @@
       {
         "from": "C:/Python314",
         "to": "bridge-runtime/python"
+      },
+      {
+        "from": "vendor/python-site-packages",
+        "to": "bridge-runtime/python/Lib/site-packages"
       },
       {
         "from": "../scripts",

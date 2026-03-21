@@ -64,3 +64,10 @@ def decode_token(token: str) -> Optional[Dict[str, Any]]:
         return jwt.decode(token, AUTH_SECRET_KEY, algorithms=[AUTH_ALGORITHM])
     except JWTError:
         return None
+
+
+def decode_token_unverified(token: str) -> Optional[Dict[str, Any]]:
+    try:
+        return jwt.get_unverified_claims(token)
+    except Exception:
+        return None

@@ -4,6 +4,7 @@ from collections import deque
 from dataclasses import asdict
 from datetime import datetime, time as dt_time, timedelta
 import io
+import math
 from pathlib import Path
 import logging
 import subprocess
@@ -153,6 +154,10 @@ class PiEmotionRuntime:
         self._rms_mean = 0.0
         self._rms_m2 = 0.0
         self._rms_count = 0
+        tracking_min_delta = float(getattr(self.engine_config.face_tracking, "min_turn_delta", 0.02) or 0.02)
+        tracking_ema = float(getattr(self.engine_config.face_tracking, "ema_alpha", 0.30) or 0.30)
+        self._tracking_target_deadband = max(0.01, tracking_min_delta * 0.5)
+        self._tracking_follow_alpha = max(0.35, min(0.75, tracking_ema + 0.15))
 
     def start(self) -> None:
         if self._running:
@@ -822,10 +827,7 @@ class PiEmotionRuntime:
                 else (None, None, {})
             )
             if pan_turn is not None or tilt_turn is not None:
-                self._apply_pan_tilt(
-                    self._last_pan_turn if pan_turn is None else pan_turn,
-                    self._last_tilt_turn if tilt_turn is None else tilt_turn,
-                )
+                self._apply_tracking_target(pan_turn, tilt_turn)
             ex_smooth = abs(float(dbg.get("ex_smooth", 0.0)))
             dead_zone = float(dbg.get("dead_zone", 0.08))
             attention_drop = max(0.0, min(1.0, (ex_smooth - dead_zone) / max(0.01, 1.0 - dead_zone)))
@@ -1130,8 +1132,14 @@ class PiEmotionRuntime:
 
     def _apply_pan_tilt(self, pan_turn: float, tilt_turn: float) -> None:
         tracking = dict(self.get_settings_state().get("tracking") or {})
-        pan_turn = 0.0 if not bool(tracking.get("pan_enabled", True)) else float(pan_turn)
-        tilt_turn = 0.0 if not bool(tracking.get("tilt_enabled", True)) else float(tilt_turn)
+        pan_turn = 0.0 if not bool(tracking.get("pan_enabled", True)) else max(-1.0, min(1.0, float(pan_turn)))
+        tilt_turn = 0.0 if not bool(tracking.get("tilt_enabled", True)) else max(-1.0, min(1.0, float(tilt_turn)))
+        if math.isclose(pan_turn, self._last_pan_turn, abs_tol=1e-6) and math.isclose(
+            tilt_turn,
+            self._last_tilt_turn,
+            abs_tol=1e-6,
+        ):
+            return
         self._hardware.set_pan_tilt(float(pan_turn), float(tilt_turn))
         self._last_pan_turn = float(pan_turn)
         self._last_tilt_turn = float(tilt_turn)
@@ -1147,6 +1155,29 @@ class PiEmotionRuntime:
             self.pi_config.hardware.tilt_servo.min_angle,
             self.pi_config.hardware.tilt_servo.max_angle,
         )
+
+    def _apply_tracking_target(self, pan_turn: Optional[float], tilt_turn: Optional[float]) -> bool:
+        current_pan = float(self._last_pan_turn)
+        current_tilt = float(self._last_tilt_turn)
+        next_pan = self._blend_tracking_axis(current_pan, pan_turn)
+        next_tilt = self._blend_tracking_axis(current_tilt, tilt_turn)
+        if math.isclose(next_pan, current_pan, abs_tol=self._tracking_target_deadband) and math.isclose(
+            next_tilt,
+            current_tilt,
+            abs_tol=self._tracking_target_deadband,
+        ):
+            return False
+        self._apply_pan_tilt(next_pan, next_tilt)
+        return True
+
+    def _blend_tracking_axis(self, current: float, desired: Optional[float]) -> float:
+        current_f = max(-1.0, min(1.0, float(current)))
+        if desired is None:
+            return current_f
+        desired_f = max(-1.0, min(1.0, float(desired)))
+        if math.isclose(desired_f, current_f, abs_tol=self._tracking_target_deadband):
+            return current_f
+        return current_f + ((desired_f - current_f) * self._tracking_follow_alpha)
 
     def _servo_angle_from_turn(self, turn: float, center: float, min_angle: float, max_angle: float) -> float:
         turn_f = max(-1.0, min(1.0, float(turn)))

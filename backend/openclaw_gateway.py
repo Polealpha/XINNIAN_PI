@@ -2,10 +2,12 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import contextlib
 import hashlib
 import json
 import os
 import re
+import shutil
 import subprocess
 import time
 import uuid
@@ -154,6 +156,7 @@ class OpenClawGatewayClient:
             **os.environ,
             "OPENCLAW_STATE_DIR": str(runtime["state_dir"]),
         }
+        env["CODEX_HOME"] = str(self._prepare_codex_home(runtime))
         if os.name == "nt":
             prompt_b64 = base64.b64encode(text.encode("utf-8")).decode("ascii")
             escaped_repo = str(repo_root).replace("'", "''")
@@ -193,36 +196,173 @@ class OpenClawGatewayClient:
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
             )
-        try:
-            stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=max(30.0, timeout_ms / 1000.0))
-        except asyncio.TimeoutError as exc:
-            process.kill()
-            raise OpenClawGatewayError("OpenClaw agent command timed out") from exc
+        stdout, stderr, payload_text = await self._collect_agent_output(process, timeout_s=max(30.0, timeout_ms / 1000.0))
+        if payload_text:
+            return payload_text
         if process.returncode != 0:
             raise OpenClawGatewayError(
-                f"OpenClaw agent command failed: {(stderr or b'').decode('utf-8', errors='ignore').strip()}"
+                f"OpenClaw agent command failed: {stderr.strip()}"
             )
-        output = (stdout or b"").decode("utf-8", errors="ignore").strip()
-        parsed = self._extract_agent_json(output)
-        payloads = (((parsed.get("result") or {}).get("payloads")) if isinstance(parsed, dict) else None) or []
-        for payload in payloads:
-            if isinstance(payload, dict) and str(payload.get("text") or "").strip():
-                return str(payload.get("text") or "").strip()
+        output = stdout.strip()
+        payload_text = self._extract_agent_payload_text(output)
+        if payload_text:
+            return payload_text
+        if not output:
+            raise OpenClawGatewayError("OpenClaw agent command produced no output")
         raise OpenClawGatewayError("OpenClaw agent command returned no text payload")
+
+    def _prepare_codex_home(self, runtime: Dict[str, str]) -> Path:
+        configured = str(os.environ.get("CODEX_HOME", "") or "").strip()
+        codex_home = Path(configured).expanduser() if configured else Path(str(runtime["state_dir"])) / "codex-home"
+        codex_home.mkdir(parents=True, exist_ok=True)
+        source_home = Path.home() / ".codex"
+        for name in ("auth.json", "cap_sid"):
+            src = source_home / name
+            dest = codex_home / name
+            if src.exists():
+                try:
+                    if not dest.exists() or src.stat().st_mtime > dest.stat().st_mtime:
+                        shutil.copy2(src, dest)
+                except Exception:
+                    pass
+        (codex_home / "config.toml").write_text(self._build_codex_home_config(), encoding="utf-8")
+        return codex_home
+
+    def _build_codex_home_config(self) -> str:
+        workspace_dir = str(Path(self.config.workspace_dir).expanduser().resolve()).replace("\\", "\\\\")
+        repo_path = str(Path(self.config.repo_path).expanduser().resolve()).replace("\\", "\\\\")
+        return (
+            'model = "gpt-5.4"\n'
+            'model_reasoning_effort = "high"\n'
+            'personality = "pragmatic"\n\n'
+            f"[projects.'{workspace_dir}']\n"
+            'trust_level = "trusted"\n\n'
+            f"[projects.'{repo_path}']\n"
+            'trust_level = "trusted"\n\n'
+            "[windows]\n"
+            'sandbox = "unelevated"\n'
+        )
+
+    async def _collect_agent_output(
+        self,
+        process: asyncio.subprocess.Process,
+        timeout_s: float,
+    ) -> tuple[str, str, Optional[str]]:
+        stdout_parts: List[str] = []
+        stderr_parts: List[str] = []
+        pending: Dict[asyncio.Task[bytes], str] = {}
+        if process.stdout is not None:
+            pending[asyncio.create_task(process.stdout.read(4096))] = "stdout"
+        if process.stderr is not None:
+            pending[asyncio.create_task(process.stderr.read(4096))] = "stderr"
+        deadline = time.monotonic() + max(1.0, float(timeout_s))
+        try:
+            while pending:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    await self._stop_agent_process(process)
+                    raise OpenClawGatewayError("OpenClaw agent command timed out")
+                done, _ = await asyncio.wait(
+                    pending.keys(),
+                    timeout=remaining,
+                    return_when=asyncio.FIRST_COMPLETED,
+                )
+                if not done:
+                    await self._stop_agent_process(process)
+                    raise OpenClawGatewayError("OpenClaw agent command timed out")
+                for task in done:
+                    stream_name = pending.pop(task)
+                    chunk = task.result()
+                    if not chunk:
+                        continue
+                    text = chunk.decode("utf-8", errors="ignore")
+                    if stream_name == "stdout":
+                        stdout_parts.append(text)
+                        payload_text = self._extract_agent_payload_text("".join(stdout_parts))
+                        if payload_text:
+                            await self._stop_agent_process(process)
+                            return "".join(stdout_parts), "".join(stderr_parts), payload_text
+                        if process.stdout is not None:
+                            pending[asyncio.create_task(process.stdout.read(4096))] = "stdout"
+                    else:
+                        stderr_parts.append(text)
+                        if process.stderr is not None:
+                            pending[asyncio.create_task(process.stderr.read(4096))] = "stderr"
+            await asyncio.wait_for(process.wait(), timeout=1.0)
+            return "".join(stdout_parts), "".join(stderr_parts), None
+        finally:
+            for task in pending:
+                task.cancel()
+            if pending:
+                await asyncio.gather(*pending.keys(), return_exceptions=True)
+
+    async def _stop_agent_process(self, process: asyncio.subprocess.Process) -> None:
+        if process.returncode is not None:
+            return
+        with contextlib.suppress(ProcessLookupError):
+            process.terminate()
+        try:
+            await asyncio.wait_for(process.wait(), timeout=1.0)
+        except asyncio.TimeoutError:
+            with contextlib.suppress(ProcessLookupError):
+                process.kill()
+            with contextlib.suppress(Exception):
+                await asyncio.wait_for(process.wait(), timeout=1.0)
+
+    @classmethod
+    def _extract_agent_payload_text(cls, output: str) -> Optional[str]:
+        for parsed in reversed(cls._extract_agent_json_candidates(output)):
+            payloads = (((parsed.get("result") or {}).get("payloads")) if isinstance(parsed, dict) else None) or []
+            for payload in payloads:
+                text = str(payload.get("text") or "").strip() if isinstance(payload, dict) else ""
+                if text:
+                    return text
+        return None
+
+    @classmethod
+    def _extract_agent_json_candidates(cls, output: str) -> List[Dict[str, object]]:
+        raw = str(output or "").strip()
+        if not raw:
+            return []
+        parsed_objects: List[Dict[str, object]] = []
+        for line in raw.splitlines():
+            parsed = cls._try_extract_agent_json(line)
+            if parsed is not None:
+                parsed_objects.append(parsed)
+        parsed_whole = cls._try_extract_agent_json(raw)
+        if parsed_whole is not None and (not parsed_objects or parsed_objects[-1] != parsed_whole):
+            parsed_objects.append(parsed_whole)
+        return parsed_objects
+
+    @staticmethod
+    def _try_extract_agent_json(raw: str) -> Optional[Dict[str, object]]:
+        text = str(raw or "").strip()
+        if not text:
+            return None
+        try:
+            parsed = json.loads(text)
+            return parsed if isinstance(parsed, dict) else None
+        except Exception:
+            pass
+        start = text.find("{")
+        end = text.rfind("}")
+        if start < 0 or end < start:
+            return None
+        try:
+            parsed = json.loads(text[start : end + 1])
+            return parsed if isinstance(parsed, dict) else None
+        except Exception:
+            return None
 
     @staticmethod
     def _extract_agent_json(output: str) -> Dict[str, object]:
         raw = str(output or "").strip()
         if not raw:
             raise OpenClawGatewayError("OpenClaw agent command produced no output")
-        start = raw.find("{")
-        end = raw.rfind("}")
-        if start < 0 or end < start:
+        parsed = OpenClawGatewayClient._try_extract_agent_json(raw)
+        if parsed is None:
             raise OpenClawGatewayError(f"OpenClaw agent command returned non-JSON output: {raw[:200]}")
-        try:
-            return json.loads(raw[start : end + 1])
-        except Exception as exc:
-            raise OpenClawGatewayError("Failed to parse OpenClaw agent JSON output") from exc
+        return parsed
 
     @staticmethod
     def _read_json(path: Path) -> Dict[str, object]:

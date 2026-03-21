@@ -23,10 +23,13 @@ app windows/node_modules/
 app windows/dist/
 app windows/release/
 app windows/.vite/
+app windows/vendor/
+app windows/share/
 apps/**/__pycache__/
 models/
 downloads/
 third_party/
 assistant_data/openclaw_state/
 assistant_data/openclaw_state_runtime/
+.codex-openclaw-probe/
 tmp/

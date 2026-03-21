@@ -9,8 +9,31 @@ def test_manual_pan_tilt_updates_runtime_status():
     payload = runtime.get_status_payload()
 
     assert result["ok"] is True
+    assert result["pan"] == 0.25
+    assert result["tilt"] == -0.4
     assert payload["pan_angle"] != 0.0
     assert payload["tilt_angle"] != 0.0
+
+
+def test_tracking_target_is_smoothed_instead_of_jumping_each_frame():
+    runtime = PiEmotionRuntime("config/pi_zero2w.json", "config/engine_config.json")
+
+    changed = runtime._apply_tracking_target(0.6, -0.42)
+
+    assert changed is True
+    assert 0.0 < runtime._last_pan_turn < 0.6
+    assert -0.42 < runtime._last_tilt_turn < 0.0
+
+
+def test_tracking_target_deadband_suppresses_small_servo_rewrites():
+    runtime = PiEmotionRuntime("config/pi_zero2w.json", "config/engine_config.json")
+    runtime.set_manual_pan_tilt(0.2, -0.1)
+
+    changed = runtime._apply_tracking_target(0.205, -0.095)
+
+    assert changed is False
+    assert runtime._last_pan_turn == 0.2
+    assert runtime._last_tilt_turn == -0.1
 
 
 def test_face_tracker_damps_large_face_and_returns_to_center():

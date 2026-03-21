@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import ctypes
+import socket
 import json
 import re
 import sqlite3
@@ -12,6 +13,7 @@ from datetime import datetime, timedelta
 from sqlite3 import Connection
 from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import quote_plus
+from urllib.parse import urlparse
 
 import httpx
 
@@ -314,12 +316,16 @@ class AssistantService:
     def runtime_status(self) -> Dict[str, object]:
         try:
             state_dir = discover_openclaw_state_dir(OPENCLAW_STATE_DIR, self.workspace_dir)
-            gateway_ready = True
-            gateway_error = ""
+            gateway_runtime = self.gateway._load_runtime()
+            gateway_ready, gateway_error = self._probe_gateway_socket(str(gateway_runtime.get("url") or ""))
             resolved_state_dir = str(state_dir)
         except OpenClawGatewayError as exc:
             gateway_ready = False
             gateway_error = str(exc)
+            resolved_state_dir = str(OPENCLAW_STATE_DIR or "")
+        except Exception as exc:
+            gateway_ready = False
+            gateway_error = f"OpenClaw runtime probe failed: {exc}"
             resolved_state_dir = str(OPENCLAW_STATE_DIR or "")
         return {
             "gateway_ready": gateway_ready,
@@ -341,6 +347,18 @@ class AssistantService:
             ],
             "robot_bridge_ready": True,
         }
+
+    def _probe_gateway_socket(self, url: str) -> Tuple[bool, str]:
+        parsed = urlparse(str(url or "").strip())
+        host = parsed.hostname
+        port = parsed.port
+        if not host or port is None:
+            return False, f"Invalid OpenClaw gateway url: {url}"
+        try:
+            with socket.create_connection((host, int(port)), timeout=1.5):
+                return True, ""
+        except OSError as exc:
+            return False, f"OpenClaw gateway unreachable at {host}:{port} ({exc})"
 
     def _compose_openclaw_message(
         self,
