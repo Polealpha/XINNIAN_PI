@@ -61,36 +61,38 @@
     "device_index": 0,
     "width": 320,
     "height": 240,
-    "fps": 2
+    "fps": 4
   },
   "hardware": {
-    "driver": "mock",
+    "driver": "gpio",
     "speaker_command": [
       "aplay",
       "-q"
     ],
     "status_led_gpio": null,
     "pan_servo": {
-      "enabled": false,
-      "driver": "mock",
-      "gpio_pin": null,
-      "min_angle": -65,
-      "max_angle": 65,
-      "center_angle": 0,
+      "enabled": true,
+      "driver": "gpio",
+      "gpio_pin": 12,
+      "min_angle": 45,
+      "max_angle": 135,
+      "center_angle": 90,
       "pca9685_channel": null,
       "pulse_min_us": 500,
-      "pulse_max_us": 2500
+      "pulse_max_us": 2500,
+      "release_after_move_sec": 0.18
     },
     "tilt_servo": {
-      "enabled": false,
-      "driver": "mock",
-      "gpio_pin": null,
-      "min_angle": -35,
-      "max_angle": 35,
-      "center_angle": 0,
+      "enabled": true,
+      "driver": "gpio",
+      "gpio_pin": 13,
+      "min_angle": 65,
+      "max_angle": 165,
+      "center_angle": 90,
       "pca9685_channel": null,
       "pulse_min_us": 500,
-      "pulse_max_us": 2500
+      "pulse_max_us": 2500,
+      "release_after_move_sec": 0.18
     },
     "pca9685": {
       "enabled": false,
@@ -99,24 +101,24 @@
     }
   },
   "buttons": {
-    "enabled": true,
+    "enabled": false,
     "allow_system_power_commands": false,
     "power_toggle": {
-      "enabled": true,
+      "enabled": false,
       "gpio_pin": 5,
       "pull_up": true,
       "hold_sec": 0.0,
       "bounce_time": 0.08
     },
     "shutdown": {
-      "enabled": true,
+      "enabled": false,
       "gpio_pin": 6,
       "pull_up": true,
       "hold_sec": 0.0,
       "bounce_time": 0.08
     },
     "settings": {
-      "enabled": true,
+      "enabled": false,
       "gpio_pin": 23,
       "pull_up": true,
       "hold_sec": 0.0,
@@ -128,6 +130,16 @@
     "settings_auto_return_sec": 0,
     "expression_width": 320,
     "expression_height": 240,
-    "display_driver": "web"
+    "display_driver": "st7789",
+    "spi_port": 0,
+    "spi_device": 0,
+    "spi_dc_gpio": 24,
+    "spi_reset_gpio": 25,
+    "spi_backlight_gpio": null,
+    "spi_rotation": 0,
+    "spi_bus_speed_hz": 40000000,
+    "spi_offset_x": 0,
+    "spi_offset_y": 0,
+    "display_fps": 12
   }
 }

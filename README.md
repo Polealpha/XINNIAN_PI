@@ -22,15 +22,20 @@ This repository is the Raspberry Pi Zero 2 W adaptation of the original "共感�
 
 1. Review the config files:
    - no external hardware yet: `config/pi_zero2w.headless.json`
-   - camera + microphone: `config/pi_zero2w.json`
+   - default real-hardware bring-up on Haicoin's Pi rig: `config/pi_zero2w.json`
    - camera + microphone + PCA9685 servo: `config/pi_zero2w.pca9685.example.json`
-   - camera + microphone + ST7789 320x240 SPI screen: `config/pi_zero2w.st7789.example.json`
+   - ST7789 + GPIO servo reference: `config/pi_zero2w.st7789.example.json`
+
+   Current defaults assume:
+   - servo physical pin 32 → BCM 12 (pan)
+   - servo physical pin 33 → BCM 13 (tilt)
+   - ST7789 follows `st7789_test_luma.txt`: SPI0.0, DC=24, RST=25, 320x240, rotate=0
 2. Run `scripts/install_pi.sh`
 3. Start the runtime:
 
 ```bash
 source .venv/bin/activate
-python -m pi_runtime.server --config config/pi_zero2w.headless.json --engine-config config/engine_config.json
+python -m pi_runtime.server --config config/pi_zero2w.json --engine-config config/engine_config.json
 ```
 
 4. Optional remote API:
