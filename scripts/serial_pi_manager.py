@@ -181,6 +181,7 @@ def shell_quote(text: str) -> str:
 
 def build_archive(paths: Iterable[Path], root: Path) -> bytes:
     buffer = io.BytesIO()
+    skip_parts = {"__pycache__", ".pytest_cache", ".mypy_cache", "node_modules", ".git"}
     with tarfile.open(fileobj=buffer, mode="w:gz") as tar:
         for path in paths:
             full = root / path
@@ -188,8 +189,12 @@ def build_archive(paths: Iterable[Path], root: Path) -> bytes:
                 for child in sorted(full.rglob("*")):
                     if child.is_dir():
                         continue
+                    if any(part in skip_parts for part in child.parts):
+                        continue
                     tar.add(child, arcname=str(child.relative_to(root)).replace("\\", "/"))
             elif full.exists():
+                if any(part in skip_parts for part in full.parts):
+                    continue
                 tar.add(full, arcname=str(path).replace("\\", "/"))
     return buffer.getvalue()
 
@@ -272,7 +277,7 @@ def cmd_deploy(args: argparse.Namespace) -> int:
     ]
     archive = build_archive(include, root)
     console = SerialLinuxConsole(args.port, int(args.baud))
-    remote_root = args.remote_root.rstrip("/")
+    remote_root = str(Path(args.remote_root.replace("~", f"/home/{args.username or 'pi'}"))).rstrip("/")
     remote_archive = f"{remote_root}/emotion-pi.tar.gz"
     try:
         banner = console.probe()
