@@ -36,6 +36,29 @@ def test_tracking_target_deadband_suppresses_small_servo_rewrites():
     assert runtime._last_tilt_turn == -0.1
 
 
+def test_runtime_tracking_return_to_center_is_delayed_and_gradual():
+    runtime = PiEmotionRuntime("config/pi_zero2w.json", "config/engine_config.json")
+    tracker = runtime._face_tracker
+
+    assert tracker is not None
+
+    det = FaceDet(found=True, bbox=(210, 60, 90, 90), cx=280, cy=110, area_ratio=0.05)
+    pan_turn, tilt_turn, _ = tracker.update(det, 320, 240, 400)
+    runtime._apply_tracking_target(pan_turn, tilt_turn)
+    initial_pan = runtime._last_pan_turn
+
+    first_return, first_tilt, _ = tracker.update(FaceDet(found=False), 320, 240, 400)
+    if first_return is not None or first_tilt is not None:
+        runtime._apply_tracking_target(first_return, first_tilt)
+    second_return, second_tilt, _ = tracker.update(FaceDet(found=False), 320, 240, 700)
+    if second_return is not None or second_tilt is not None:
+        runtime._apply_tracking_target(second_return, second_tilt)
+
+    assert initial_pan != 0.0
+    assert runtime._last_pan_turn != 0.0
+    assert abs(runtime._last_pan_turn) <= abs(initial_pan)
+
+
 def test_face_tracker_damps_large_face_and_returns_to_center():
     tracker = FaceTracker(
         {

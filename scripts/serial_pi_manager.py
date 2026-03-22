@@ -156,6 +156,24 @@ class SerialLinuxConsole:
             timeout=timeout,
         )
 
+    def download_bytes(self, remote_path: str, timeout: float = 120.0) -> tuple[int, bytes]:
+        rc, out = self.run(
+            "python3 -c "
+            + shell_quote(
+                "import base64, pathlib, sys; "
+                f"p = pathlib.Path({remote_path!r}); "
+                "sys.stdout.write(base64.b64encode(p.read_bytes()).decode()) if p.exists() else sys.exit(3)"
+            ),
+            timeout=timeout,
+        )
+        if rc != 0:
+            return rc, b""
+        payload = "".join(line.strip() for line in out.splitlines())
+        try:
+            return 0, base64.b64decode(payload.encode("ascii"))
+        except Exception:
+            return 4, b""
+
 
 def shell_quote(text: str) -> str:
     return "'" + str(text).replace("'", "'\"'\"'") + "'"
@@ -290,6 +308,89 @@ def cmd_deploy(args: argparse.Namespace) -> int:
         console.close()
 
 
+def _login_console(console: SerialLinuxConsole, args: argparse.Namespace) -> tuple[int, str]:
+    banner = console.probe()
+    if not console.is_shell_ready(banner) and args.username and args.password:
+        ok, login_out = console.login(
+            args.username,
+            args.password,
+            timeout=float(args.login_timeout),
+            initial_text=banner,
+        )
+        safe_print(login_out)
+        if not ok:
+            return 5, login_out
+        return 0, login_out
+    if not console.is_shell_ready(banner):
+        safe_print(banner)
+        return 6, banner
+    return 0, banner
+
+
+def cmd_doctor(args: argparse.Namespace) -> int:
+    console = SerialLinuxConsole(args.port, int(args.baud))
+    remote_root = args.remote_root.rstrip("/")
+    output_dir = Path(args.output_dir).resolve()
+    output_dir.mkdir(parents=True, exist_ok=True)
+    report_lines: list[str] = []
+    try:
+        rc, banner = _login_console(console, args)
+        report_lines.append("=== login ===")
+        report_lines.append(banner)
+        if rc != 0:
+            (output_dir / "doctor_report.txt").write_text("\n".join(report_lines), encoding="utf-8")
+            return rc
+
+        checks = [
+            ("service", "systemctl status emotion-pi.service --no-pager -l || true"),
+            ("camera", "libcamera-hello --list-cameras || true"),
+            (
+                "picamera2",
+                "python3 -c \"import picamera2; print('picamera2:ok')\" 2>&1 || true",
+            ),
+            ("spi", "ls -l /dev/spidev* 2>/dev/null || echo 'no /dev/spidev devices'"),
+            ("gpio_groups", "id && groups"),
+            (
+                "runtime_env",
+                "grep -E '^(PI_RUNTIME_CONFIG|ENGINE_CONFIG_PATH)=' /etc/default/emotion-pi 2>/dev/null || true",
+            ),
+        ]
+        for label, command in checks:
+            rc, out = console.run(command, timeout=float(args.timeout))
+            report_lines.append(f"=== {label} (rc={rc}) ===")
+            report_lines.append(out.strip())
+
+        diag_command = (
+            f"cd {shell_quote(remote_root)} && "
+            "export PI_RUNTIME_CONFIG=config/pi_zero2w.st7789.example.json && "
+            ".venv/bin/python scripts/pi_runtime_diagnostics.py "
+            "--config config/pi_zero2w.st7789.example.json "
+            "--disable-audio --disable-backend"
+        )
+        rc, out = console.run(diag_command, timeout=float(args.timeout))
+        report_lines.append(f"=== diagnostics (rc={rc}) ===")
+        report_lines.append(out.strip())
+
+        artifacts = {
+            "status.json": f"{remote_root}/outputs/pi_runtime_diagnostics/status.json",
+            "camera_preview.jpg": f"{remote_root}/outputs/pi_runtime_diagnostics/camera_preview.jpg",
+            "display_preview.png": f"{remote_root}/outputs/pi_runtime_diagnostics/display_preview.png",
+        }
+        for local_name, remote_path in artifacts.items():
+            file_rc, content = console.download_bytes(remote_path, timeout=float(args.timeout))
+            report_lines.append(f"=== fetch {local_name} (rc={file_rc}) ===")
+            if file_rc == 0 and content:
+                (output_dir / local_name).write_bytes(content)
+                report_lines.append(f"saved {output_dir / local_name}")
+            else:
+                report_lines.append(f"missing or unreadable: {remote_path}")
+
+        (output_dir / "doctor_report.txt").write_text("\n".join(report_lines), encoding="utf-8")
+        return rc
+    finally:
+        console.close()
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Serial manager for Raspberry Pi over COM port.")
     sub = parser.add_subparsers(dest="cmd", required=True)
@@ -320,6 +421,17 @@ def build_parser() -> argparse.ArgumentParser:
     deploy.add_argument("--username")
     deploy.add_argument("--password")
     deploy.set_defaults(func=cmd_deploy)
+
+    doctor = sub.add_parser("doctor")
+    doctor.add_argument("--port", default="COM8")
+    doctor.add_argument("--baud", required=True, type=int)
+    doctor.add_argument("--timeout", default="180")
+    doctor.add_argument("--login-timeout", default="20")
+    doctor.add_argument("--remote-root", default="~/emotion-pi")
+    doctor.add_argument("--output-dir", default="outputs/pi_runtime_diagnostics/serial_pi")
+    doctor.add_argument("--username")
+    doctor.add_argument("--password")
+    doctor.set_defaults(func=cmd_doctor)
     return parser
 
 

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 import tempfile
 import time
@@ -46,6 +47,7 @@ def main() -> None:
     output_dir.mkdir(parents=True, exist_ok=True)
 
     effective_config_path = _write_runtime_config(config_path, args.disable_audio, args.disable_backend)
+    os.environ["PI_RUNTIME_CONFIG"] = str(effective_config_path)
 
     runtime = PiEmotionRuntime(str(effective_config_path), str(engine_config_path))
     deadline = time.time() + max(1.0, float(args.wait_sec))

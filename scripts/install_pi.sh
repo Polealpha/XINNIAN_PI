@@ -102,7 +102,7 @@ fi
 
 if [[ ! -f "${ENV_FILE}" ]]; then
   sudo tee "${ENV_FILE}" >/dev/null <<'EOF'
-PI_RUNTIME_CONFIG=config/pi_zero2w.headless.json
+PI_RUNTIME_CONFIG=config/pi_zero2w.st7789.example.json
 ENGINE_CONFIG_PATH=config/engine_config.json
 OMP_NUM_THREADS=1
 OPENBLAS_NUM_THREADS=1
@@ -114,7 +114,7 @@ AUTH_CORS_ORIGINS=*
 AUTH_DB_PATH=/var/lib/emotion-pi/auth.db
 EOF
 fi
-ensure_env_key "PI_RUNTIME_CONFIG" "config/pi_zero2w.headless.json"
+ensure_env_key "PI_RUNTIME_CONFIG" "config/pi_zero2w.st7789.example.json"
 ensure_env_key "ENGINE_CONFIG_PATH" "config/engine_config.json"
 ensure_env_key "OMP_NUM_THREADS" "1"
 ensure_env_key "OPENBLAS_NUM_THREADS" "1"

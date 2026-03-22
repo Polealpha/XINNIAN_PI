@@ -295,7 +295,7 @@ class PiEmotionRuntime:
         return self._merge_dicts(self._build_default_ui_state(), dict(self._ui_state))
 
     def get_expression_state(self) -> Dict[str, object]:
-        state = {
+        runtime_state = {
             "ui_page": str(self._ui_state.get("page") or "expression"),
             "voice_mode": str(self._voice_state.get("mode") or "idle"),
             "owner_recognized": bool(self._identity_state.get("owner_recognized")),
@@ -304,9 +304,7 @@ class PiEmotionRuntime:
             "gaze_x": round(float(self._last_pan_turn) * 10.0, 2),
             "gaze_y": round(float(self._last_tilt_turn) * 8.0, 2),
         }
-        snapshot = self._expression_surface.snapshot(self._now_ms(), state)
-        snapshot["gaze_x"] = float(state["gaze_x"])
-        snapshot["gaze_y"] = float(state["gaze_y"])
+        snapshot = self._expression_surface.snapshot(self._now_ms(), runtime_state)
         return snapshot
 
     def get_expression_svg(self) -> str:
@@ -993,13 +991,29 @@ class PiEmotionRuntime:
         else:
             self._face_missing_ms += int(1000 / max(1, self.pi_config.camera.fps))
             self._last_face_present = False
-            self._tracking_target = "none"
+            tracker_dbg: Dict[str, object] = {}
+            if self._face_tracker is not None:
+                return_pan, return_tilt, tracker_dbg = self._face_tracker.update(
+                    FaceDet(found=False),
+                    frame.width,
+                    frame.height,
+                    frame.timestamp_ms,
+                )
+                if return_pan is not None or return_tilt is not None:
+                    self._tracking_target = "returning"
+                    self._apply_tracking_target(return_pan, return_tilt)
+                else:
+                    self._tracking_target = "none"
+            else:
+                self._tracking_target = "none"
             grace_ms = int(self.engine_config.video.face_missing_grace_sec * 1000)
             self._last_v_raw = max(0.0, min(1.0, self._face_missing_ms / max(grace_ms * 2, 1)))
             self._last_v_sub = {
                 "face_ok": 0.0,
                 "attention_drop": round(self._last_v_raw, 3),
                 "face_area_ratio": 0.0,
+                "tracking_target": self._tracking_target,
+                "tracker_returning": bool(tracker_dbg.get("returning", False)),
                 "expression_class_id": -1,
                 "expression_confidence": 0.0,
             }

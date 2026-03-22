@@ -65,11 +65,13 @@ class St7789DisplaySurface(BaseDisplaySurface):
         self._backlight = None
         self._font_regular = None
         self._font_bold = None
-        self._error = ""
+        self._driver_error = ""
+        self._device_error = ""
+        self._backlight_error = ""
         self._width = int(config.expression_width or 320)
         self._height = int(config.expression_height or 240)
         if Image is None or ImageDraw is None or ImageFont is None:
-            self._error = "pillow unavailable"
+            self._driver_error = "pillow unavailable"
             return
 
         self._load_fonts()
@@ -78,7 +80,7 @@ class St7789DisplaySurface(BaseDisplaySurface):
             from luma.core.interface.serial import spi  # type: ignore
             from luma.lcd.device import st7789  # type: ignore
         except Exception as exc:  # pragma: no cover
-            self._error = f"luma unavailable: {exc}"
+            self._driver_error = f"luma unavailable: {exc}"
             return
 
         try:
@@ -99,7 +101,7 @@ class St7789DisplaySurface(BaseDisplaySurface):
             )
             self._init_backlight()
         except Exception as exc:  # pragma: no cover
-            self._error = str(exc)
+            self._device_error = str(exc)
             self._device = None
 
     def _init_backlight(self) -> None:
@@ -112,6 +114,7 @@ class St7789DisplaySurface(BaseDisplaySurface):
             self._backlight.on()
         except Exception as exc:  # pragma: no cover
             logger.warning("st7789 backlight init failed: %s", exc)
+            self._backlight_error = str(exc)
             self._backlight = None
 
     def _load_fonts(self) -> None:
@@ -133,10 +136,18 @@ class St7789DisplaySurface(BaseDisplaySurface):
         self._font_bold = ImageFont.load_default()
 
     def get_status(self) -> DisplayStatus:
+        if self._driver_error:
+            return DisplayStatus(ready=False, driver="st7789", detail=f"driver_missing: {self._driver_error}")
+        if self._device is None:
+            detail = self._device_error or "st7789 device init failed"
+            return DisplayStatus(ready=False, driver="st7789", detail=f"spi_init_failed: {detail}")
+        if self.config.spi_backlight_gpio is not None and self._backlight is None:
+            detail = self._backlight_error or f"gpio {self.config.spi_backlight_gpio} unavailable"
+            return DisplayStatus(ready=False, driver="st7789", detail=f"backlight_failed: {detail}")
         return DisplayStatus(
-            ready=self._device is not None,
+            ready=True,
             driver="st7789",
-            detail=self._error or "ok",
+            detail="ok",
         )
 
     def render(self, payload: Dict[str, object]) -> None:
@@ -167,9 +178,10 @@ class St7789DisplaySurface(BaseDisplaySurface):
     def _render_expression(self, payload: Dict[str, object]):
         expr = dict(payload.get("expression_state") or {})
         timestamp_ms = int(payload.get("timestamp_ms") or 0)
-        breath_t = timestamp_ms / self.BREATH_SPEED
-        breath_y = math.sin(breath_t) * self.BREATH_AMP_Y
-        breath_h = math.sin(breath_t + 1.5) * self.BREATH_AMP_H
+        breath_speed = float(expr.get("breath_speed_ms") or self.BREATH_SPEED)
+        breath_t = timestamp_ms / max(1.0, breath_speed)
+        breath_y = math.sin(breath_t) * float(expr.get("breath_amp_y") or self.BREATH_AMP_Y)
+        breath_h = math.sin(breath_t + 1.5) * float(expr.get("breath_amp_h") or self.BREATH_AMP_H)
         blink = bool(expr.get("blinking"))
         gaze_x = float(expr.get("gaze_x", 0.0) or 0.0)
         gaze_y = float(expr.get("gaze_y", 0.0) or 0.0)
@@ -182,7 +194,8 @@ class St7789DisplaySurface(BaseDisplaySurface):
         self._draw_chip(draw, (16, 16, 142, 42), "Emotion Pi", fill="#0b2434", text_fill="#67e8f9")
         self._draw_text(draw, (18, 176), "Pi expression surface", self._font_bold, "#e6eefb")
         self._draw_text(draw, (18, 206), str(expr.get("expression_id") or "expression"), self._font_regular, "#9fb5d9")
-        self._draw_text(draw, (184, 206), str(expr.get("reason") or "ambient"), self._font_regular, "#8fd6e2")
+        mood_label = str(expr.get("mood_prefix") or expr.get("reason") or "ambient")
+        self._draw_text(draw, (184, 206), mood_label, self._font_regular, "#8fd6e2")
         return image.convert("RGB")
 
     def _render_settings(self, payload: Dict[str, object]):

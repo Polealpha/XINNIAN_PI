@@ -221,6 +221,11 @@ What the screen now shows:
   - care/voice basics
   - closes back to expression page when settings closes
 
+Current service default for a physical Pi bring-up is now:
+
+- `PI_RUNTIME_CONFIG=config/pi_zero2w.st7789.example.json`
+- This keeps camera, direct GPIO pan/tilt and the ST7789 face surface on by default.
+
 ## Raspberry Pi software setup before connecting motion hardware
 
 - Enable I2C in `raspi-config`.
@@ -254,6 +259,27 @@ What the screen now shows:
   duplicate `config/pi_zero2w.json`, switch `"hardware.driver"` to `"gpio"`, then fill pan/tilt GPIO pins
 - Camera + microphone + PCA9685 pan/tilt:
   `PI_RUNTIME_CONFIG=config/pi_zero2w.pca9685.example.json`
+
+## Serial doctor workflow
+
+For a serial-attached Pi, the current one-shot doctor flow is:
+
+1. `python scripts/serial_pi_manager.py probe --port COM8`
+2. `python scripts/serial_pi_manager.py doctor --port COM8 --baud 115200 --username polealpha --password 152123`
+
+The doctor command checks:
+
+- `emotion-pi.service`
+- `libcamera` / `picamera2`
+- `/dev/spidev*`
+- user groups / GPIO access
+- remote `pi_runtime_diagnostics.py`
+
+Artifacts are copied back to:
+
+- `outputs/pi_runtime_diagnostics/serial_pi/status.json`
+- `outputs/pi_runtime_diagnostics/serial_pi/camera_preview.jpg`
+- `outputs/pi_runtime_diagnostics/serial_pi/display_preview.png`
 
 ## Expression display path
 
