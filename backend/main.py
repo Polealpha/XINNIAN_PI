@@ -76,6 +76,7 @@ from .schemas import (
     ActivationPersonalityInferResponse,
     ActivationPersonalityStateResponse,
     ActivationProfileResponse,
+    ActivationRuntimeStatusResponse,
     ActivationPromptPackResponse,
     AssistantMemorySearchResponse,
     AssistantRuntimeStatusResponse,
@@ -1244,7 +1245,7 @@ async def _assessment_pick_model_question(
     session_key = f"activation:{int(user_id)}:assessment:conductor:{int(time.time() * 1000)}"
     try:
         raw = await assistant_service.gateway.send_message(session_key, prompt)
-    except OpenClawGatewayError:
+    except Exception:
         return {}
     return extract_next_question_from_model(raw)
 
@@ -1262,7 +1263,7 @@ async def _assessment_score_model(
     session_key = f"activation:{int(user_id)}:assessment:scorer:{int(time.time() * 1000)}"
     try:
         raw = await assistant_service.gateway.send_message(session_key, prompt)
-    except OpenClawGatewayError:
+    except Exception:
         return {}
     return extract_scoring_from_model(raw)
 
@@ -1275,7 +1276,7 @@ async def _assessment_terminate_model(user_id: int, session_payload: Dict[str, o
     session_key = f"activation:{int(user_id)}:assessment:terminator:{int(time.time() * 1000)}"
     try:
         raw = await assistant_service.gateway.send_message(session_key, prompt)
-    except OpenClawGatewayError:
+    except Exception:
         return {}
     return extract_termination_from_model(raw)
 
@@ -2791,6 +2792,28 @@ def activation_state(
     return _activation_response(conn, user, profile)
 
 
+@app.get("/api/activation/runtime/status", response_model=ActivationRuntimeStatusResponse)
+def activation_runtime_status(
+    credentials: HTTPAuthorizationCredentials = Depends(bearer_scheme),
+    conn: Connection = Depends(get_db),
+) -> ActivationRuntimeStatusResponse:
+    user = _parse_access_token(credentials, conn)
+    runtime = assistant_service.runtime_status()
+    device_online, selected = _assessment_device_online(conn, int(user["id"]))
+    preferred_device_id = str((selected or {}).get("device_id") or "").strip()
+    return ActivationRuntimeStatusResponse(
+        ok=True,
+        ai_ready=bool(runtime.get("gateway_ready")),
+        ai_detail=str(runtime.get("gateway_error") or "").strip(),
+        text_assessment_ready=True,
+        desktop_voice_ready=False,
+        desktop_voice_detail="桌面麦克风转写由本地桌面后端提供，需本机运行时可用。",
+        device_online=device_online,
+        robot_voice_ready=bool(device_online and preferred_device_id),
+        preferred_device_id=preferred_device_id,
+    )
+
+
 @app.post("/api/activation/complete", response_model=ActivationProfileResponse)
 def activation_complete(
     payload: ActivationCompleteRequest,
@@ -2860,13 +2883,13 @@ async def activation_identity_infer(
     try:
         raw = await assistant_service.gateway.send_message(session_key, prompt)
         parsed = _extract_json_block(raw)
-    except OpenClawGatewayError:
+    except Exception as exc:
         parsed = _heuristic_activation_identity(
             transcript=transcript,
             observed_name=str(inference_input["observed_name"]),
         )
         used_heuristic = True
-        inference_detail = "OpenClaw unavailable, fell back to local conservative parsing."
+        inference_detail = f"AI identity inference unavailable ({exc}), fell back to local conservative parsing."
     if not parsed or not any(
         str(parsed.get(key) or "").strip()
         for key in ("preferred_name", "role_label", "relation_to_robot", "identity_summary")
@@ -3251,7 +3274,7 @@ async def activation_personality_infer(
     try:
         raw = await assistant_service.gateway.send_message(session_key, prompt)
         parsed = _extract_json_block(raw)
-    except OpenClawGatewayError:
+    except Exception:
         raw = ""
         parsed = _heuristic_personality_profile("\n".join(merged_lines))
     summary = str(parsed.get("summary") or "").strip()

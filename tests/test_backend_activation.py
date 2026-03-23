@@ -158,6 +158,45 @@ def test_activation_identity_infer_falls_back_to_heuristics(tmp_path, monkeypatc
         assert payload["inference_source"] == "heuristic"
 
 
+def test_activation_identity_infer_falls_back_on_unexpected_runtime_error(tmp_path, monkeypatch):
+    db_path = tmp_path / "auth.db"
+    workspace_dir = tmp_path / "workspace"
+    monkeypatch.setattr(db, "DB_PATH", str(db_path))
+    monkeypatch.setattr(main.assistant_service, "store", AssistantWorkspaceStore(str(workspace_dir)))
+    db.init_db()
+
+    password = "secret123"
+    conn = sqlite3.connect(str(db_path))
+    try:
+        conn.execute(
+            "INSERT INTO users (username, password_hash, created_at, is_configured) VALUES (?, ?, ?, 0)",
+            ("fallback-runtime@example.com", auth.hash_password(password), int(time.time())),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    async def broken_send_message(session_key: str, text: str) -> str:
+        raise RuntimeError("provider timeout")
+
+    monkeypatch.setattr(main.assistant_service.gateway, "send_message", broken_send_message)
+
+    token = auth.create_access_token(1, "fallback-runtime@example.com")["token"]
+    headers = {"Authorization": f"Bearer {token}"}
+
+    with TestClient(main.app) as client:
+        inferred = client.post(
+            "/api/activation/identity/infer",
+            headers=headers,
+            json={"transcript": "你好，我叫小北，是这个机器人的主人。", "surface": "desktop"},
+        )
+        assert inferred.status_code == 200
+        payload = inferred.json()
+        assert payload["preferred_name"] == "小北"
+        assert payload["inference_source"] == "heuristic"
+        assert "provider timeout" in payload["inference_detail"]
+
+
 def test_activation_state_exposes_owner_binding_requirement(tmp_path, monkeypatch):
     db_path = tmp_path / "auth.db"
     workspace_dir = tmp_path / "workspace"
@@ -222,6 +261,56 @@ def test_activation_state_exposes_owner_binding_requirement(tmp_path, monkeypatc
         assert payload["psychometric_completed"] is True
         assert payload["owner_binding_required"] is True
         assert payload["owner_binding_completed"] is False
+        assert payload["preferred_device_id"] == "pi-zero"
+
+
+def test_activation_runtime_status_reports_ai_and_robot_availability(tmp_path, monkeypatch):
+    db_path = tmp_path / "auth.db"
+    workspace_dir = tmp_path / "workspace"
+    monkeypatch.setattr(db, "DB_PATH", str(db_path))
+    monkeypatch.setattr(main.assistant_service, "store", AssistantWorkspaceStore(str(workspace_dir)))
+    db.init_db()
+
+    password = "secret123"
+    now_s = int(time.time())
+    now_ms = int(time.time() * 1000)
+    conn = sqlite3.connect(str(db_path))
+    try:
+        conn.execute(
+            "INSERT INTO users (id, username, password_hash, created_at, is_configured) VALUES (?, ?, ?, ?, 1)",
+            (1, "runtime@example.com", auth.hash_password(password), now_s),
+        )
+        conn.execute(
+            """
+            INSERT INTO devices (
+                user_id, device_id, device_ip, updated_at, onboarding_state, identity_state
+            ) VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (1, "pi-zero", "127.0.0.1:8090", now_ms, "online", "unenrolled"),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    monkeypatch.setattr(
+        main.assistant_service,
+        "runtime_status",
+        lambda: {
+            "gateway_ready": False,
+            "gateway_error": "OpenClaw gateway unreachable",
+        },
+    )
+
+    token = auth.create_access_token(1, "runtime@example.com")["token"]
+    headers = {"Authorization": f"Bearer {token}"}
+
+    with TestClient(main.app) as client:
+        response = client.get("/api/activation/runtime/status", headers=headers)
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["ai_ready"] is False
+        assert payload["device_online"] is True
+        assert payload["robot_voice_ready"] is True
         assert payload["preferred_device_id"] == "pi-zero"
 
 

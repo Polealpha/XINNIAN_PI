@@ -15,6 +15,18 @@ export interface ActivationIdentityInference {
   raw_json: Record<string, unknown>;
 }
 
+export interface ActivationRuntimeStatus {
+  ok: boolean;
+  ai_ready: boolean;
+  ai_detail: string;
+  text_assessment_ready: boolean;
+  desktop_voice_ready: boolean;
+  desktop_voice_detail: string;
+  device_online: boolean;
+  robot_voice_ready: boolean;
+  preferred_device_id: string;
+}
+
 export interface PersonalityProfile {
   ok: boolean;
   exists?: boolean;
@@ -122,6 +134,10 @@ export const inferActivationIdentity = async (payload: {
   context?: Record<string, unknown>;
 }): Promise<ActivationIdentityInference> => {
   return apiPost("/api/activation/identity/infer", payload, true);
+};
+
+export const getActivationRuntimeStatus = async (): Promise<ActivationRuntimeStatus> => {
+  return apiGet("/api/activation/runtime/status", true);
 };
 
 export const completeActivation = async (payload: {

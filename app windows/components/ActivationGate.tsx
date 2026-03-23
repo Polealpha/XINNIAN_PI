@@ -20,6 +20,7 @@ import {
   completeActivation,
   finishAssessment,
   getAssessmentState,
+  getActivationRuntimeStatus,
   getOwnerBindingStatus,
   inferActivationIdentity,
   pollAssessmentVoice,
@@ -30,8 +31,14 @@ import {
   submitAssessmentTurn,
   type ActivationAssessmentState,
   type ActivationIdentityInference,
+  type ActivationRuntimeStatus,
 } from "../services/activationService";
-import { createDesktopVoiceRecorder, transcribeDesktopAudio } from "../services/desktopVoiceService";
+import {
+  createDesktopVoiceRecorder,
+  getDesktopVoiceStatus,
+  transcribeDesktopAudio,
+  type DesktopVoiceStatus,
+} from "../services/desktopVoiceService";
 
 interface ActivationGateProps {
   onActivated: () => Promise<void> | void;
@@ -81,6 +88,41 @@ const emptyAssessment = (): ActivationAssessmentState => ({
   question_pair: "",
   mode_hint: "text_mode_ready",
   can_submit_text: true,
+});
+
+const emptyActivationRuntime = (): ActivationRuntimeStatus => ({
+  ok: true,
+  ai_ready: false,
+  ai_detail: "",
+  text_assessment_ready: true,
+  desktop_voice_ready: false,
+  desktop_voice_detail: "",
+  device_online: false,
+  robot_voice_ready: false,
+  preferred_device_id: "",
+});
+
+const emptyDesktopVoiceStatus = (): DesktopVoiceStatus => ({
+  ok: false,
+  ready: false,
+  provider_preference: "faster_whisper",
+  fallback_provider: "sherpa_onnx",
+  active_provider: "",
+  primary_ready: false,
+  primary_engine: "",
+  primary_error: "",
+  fallback_ready: false,
+  fallback_engine: "",
+  fallback_error: "",
+  language: "zh",
+  max_sec: 45,
+  model_name: "small",
+  beam_size: 5,
+  best_of: 5,
+  preprocess_enabled: true,
+  trim_silence_enabled: true,
+  initial_prompt_enabled: false,
+  hotwords_enabled: false,
 });
 
 const scoreItems = (scores: ActivationAssessmentState["scores"]) => [
@@ -141,6 +183,8 @@ export const ActivationGate: React.FC<ActivationGateProps> = ({ onActivated }) =
   const [ownerBindingRequired, setOwnerBindingRequired] = useState(false);
   const [ownerBindingCompleted, setOwnerBindingCompleted] = useState(false);
   const [preferredDeviceId, setPreferredDeviceId] = useState("");
+  const [activationRuntime, setActivationRuntime] = useState<ActivationRuntimeStatus>(emptyActivationRuntime);
+  const [desktopVoiceStatus, setDesktopVoiceStatus] = useState<DesktopVoiceStatus>(emptyDesktopVoiceStatus);
   const [identityState, setIdentityState] = useState(emptyIdentity);
   const [assessmentState, setAssessmentState] = useState<ActivationAssessmentState>(emptyAssessment);
   const [introTranscript, setIntroTranscript] = useState("");
@@ -150,7 +194,18 @@ export const ActivationGate: React.FC<ActivationGateProps> = ({ onActivated }) =
   const desktopVoiceRecorderRef = useRef<{ stop: () => Promise<Blob> } | null>(null);
 
   const loadState = async () => {
-    const [activation, assessment] = await Promise.all([getActivationState(), getAssessmentState()]);
+    const [activation, assessment, runtimeResult, desktopVoiceResult] = await Promise.all([
+      getActivationState(),
+      getAssessmentState(),
+      getActivationRuntimeStatus().catch(() => emptyActivationRuntime()),
+      getDesktopVoiceStatus().catch(
+        () =>
+          ({
+            ...emptyDesktopVoiceStatus(),
+            primary_error: "桌面语音运行时未启动，本次先用文本作答。",
+          }) as DesktopVoiceStatus
+      ),
+    ]);
     const identityDone = !activation.activation_required;
     const assessmentDone =
       activation.psychometric_completed || assessment.status === "completed" || Boolean(assessment.completed_at_ms);
@@ -161,6 +216,8 @@ export const ActivationGate: React.FC<ActivationGateProps> = ({ onActivated }) =
     setOwnerBindingRequired(Boolean(activation.owner_binding_required));
     setOwnerBindingCompleted(Boolean(activation.owner_binding_completed));
     setPreferredDeviceId(preferredDevice);
+    setActivationRuntime(runtimeResult);
+    setDesktopVoiceStatus(desktopVoiceResult);
     setIdentityState({
       ok: true,
       preferred_name: activation.preferred_name || "",
@@ -175,7 +232,10 @@ export const ActivationGate: React.FC<ActivationGateProps> = ({ onActivated }) =
       inference_detail: identityDone ? "当前身份信息已经保存，可继续微调。" : "",
       raw_json: {},
     });
-    setAssessmentState(assessment);
+    setAssessmentState({
+      ...assessment,
+      device_online: Boolean(assessment.device_online || runtimeResult.device_online),
+    });
     if (preferredDevice && activation.owner_binding_completed) {
       setScanState(`主人面部档案已绑定到设备 ${preferredDevice}。`);
     } else if (preferredDevice && activation.owner_binding_required) {
@@ -300,7 +360,19 @@ export const ActivationGate: React.FC<ActivationGateProps> = ({ onActivated }) =
     () => confidenceItems(assessmentState.dimension_confidence),
     [assessmentState.dimension_confidence]
   );
+  const desktopVoiceReady = Boolean(desktopVoiceStatus.ready);
   const canUseRobotVoice = identityReady && assessmentState.device_online && !psychometricCompleted;
+  const canUseDesktopVoice = identityReady && desktopVoiceReady && !psychometricCompleted;
+  const robotVoiceLabel = assessmentState.voice_session_active
+    ? "停止机器人语音测评"
+    : assessmentState.device_online
+      ? "启用机器人语音测评（可选）"
+      : "机器人未在线，先用文本或电脑麦克风";
+  const aiStatusTone = activationRuntime.ai_ready
+    ? "border-emerald-400/20 bg-emerald-500/10 text-emerald-200"
+    : "border-amber-400/20 bg-amber-500/10 text-amber-200";
+  const aiStatusLabel = activationRuntime.ai_ready ? "AI 推理在线" : "AI 推理未就绪";
+  const desktopVoiceLabel = desktopVoiceReady ? "电脑麦克风可用" : "电脑麦克风未就绪";
   const identitySourceLabel =
     identityState.inference_source === "ai"
       ? "AI 草稿"
@@ -325,8 +397,8 @@ export const ActivationGate: React.FC<ActivationGateProps> = ({ onActivated }) =
     assessmentState.mode_hint === "robot_voice_active"
       ? "设备在线，当前由机器人本地播报、录音与转写。"
       : assessmentState.mode_hint === "robot_voice_ready"
-        ? "设备在线，但你现在仍可直接用文本或电脑麦克风完成测评。"
-        : "设备离线只会影响机器人语音链路，不影响文本测评继续完成。";
+        ? "设备在线，但首次激活仍建议优先用文本或电脑麦克风完成测评。"
+        : "设备离线只会影响机器人语音链路，不影响文本测评继续完成；电脑麦克风可在本机语音运行时就绪后直接使用。";
 
   const handleInferIdentity = async () => {
     if (!introTranscript.trim()) {
@@ -347,7 +419,11 @@ export const ActivationGate: React.FC<ActivationGateProps> = ({ onActivated }) =
       if (!observedName.trim() && inferred.preferred_name) {
         setObservedName(inferred.preferred_name);
       }
-      setSuccess("身份草稿已经生成，确认后会进入详细人格测评。");
+      setSuccess(
+        inferred.inference_source === "ai"
+          ? "AI 身份草稿已生成，确认后会进入详细人格测评。"
+          : "AI 当前未完成推理，已自动回退到本地保守草稿，请人工确认后继续。"
+      );
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -442,6 +518,10 @@ export const ActivationGate: React.FC<ActivationGateProps> = ({ onActivated }) =
 
   const handleDesktopVoiceAnswer = async () => {
     if (!identityReady || psychometricCompleted) {
+      return;
+    }
+    if (!desktopVoiceReady) {
+      setError(desktopVoiceStatus.primary_error || "桌面语音运行时未启动，当前请先使用文本回答。");
       return;
     }
     setError("");
@@ -619,6 +699,67 @@ export const ActivationGate: React.FC<ActivationGateProps> = ({ onActivated }) =
           </div>
         )}
 
+        <div className="rounded-[2rem] border border-cyan-400/15 bg-cyan-500/8 p-5">
+          <div className="flex flex-wrap items-center gap-3 text-sm font-black">
+            <span className="text-cyan-100">首次激活默认路径：</span>
+            <span className="rounded-full border border-white/10 bg-white/5 px-3 py-1.5 text-slate-100">1. 输入文字或自我介绍</span>
+            <span className="rounded-full border border-white/10 bg-white/5 px-3 py-1.5 text-slate-100">2. 电脑麦克风或文本继续测评</span>
+            <span className="rounded-full border border-white/10 bg-white/5 px-3 py-1.5 text-slate-100">3. 如设备在线，再补机器人语音与扫脸</span>
+          </div>
+          <p className="mt-3 text-xs leading-6 font-semibold text-cyan-100/90">
+            机器人语音和扫脸不是首次进入电脑端的前置条件。真正必须先完成的是身份确认和文本测评；机器人在线后，只是把语音播报、录音和主人绑定补齐。
+          </p>
+        </div>
+
+        <div className="grid grid-cols-4 gap-4">
+          <div className={`rounded-3xl border p-4 ${aiStatusTone}`}>
+            <div className="text-[11px] font-black uppercase tracking-[0.2em]">AI 身份草稿</div>
+            <div className="mt-2 text-base font-black">{aiStatusLabel}</div>
+            <p className="mt-2 text-xs leading-6 font-semibold opacity-90">
+              {activationRuntime.ai_ready
+                ? "现在会优先尝试 OpenClaw/AI 生成身份草稿和测评编排。"
+                : activationRuntime.ai_detail || "当前 AI 推理未连上，身份草稿会自动回退到本地保守结果。"}
+            </p>
+          </div>
+          <div className="rounded-3xl border border-emerald-400/20 bg-emerald-500/10 p-4 text-emerald-200">
+            <div className="text-[11px] font-black uppercase tracking-[0.2em]">文本测评</div>
+            <div className="mt-2 text-base font-black">始终可用</div>
+            <p className="mt-2 text-xs leading-6 font-semibold opacity-90">
+              就算机器人离线，也可以先用键盘完成 8 维测评，不会卡在第一步。
+            </p>
+          </div>
+          <div
+            className={`rounded-3xl border p-4 ${
+              desktopVoiceReady
+                ? "border-amber-400/20 bg-amber-500/10 text-amber-200"
+                : "border-slate-700 bg-slate-900/70 text-slate-300"
+            }`}
+          >
+            <div className="text-[11px] font-black uppercase tracking-[0.2em]">电脑麦克风</div>
+            <div className="mt-2 text-base font-black">{desktopVoiceLabel}</div>
+            <p className="mt-2 text-xs leading-6 font-semibold opacity-90">
+              {desktopVoiceReady
+                ? `本机转写引擎已就绪，当前提供者：${desktopVoiceStatus.active_provider || desktopVoiceStatus.provider_preference}。`
+                : desktopVoiceStatus.primary_error || "本机语音运行时未启动，先用文本作答即可。"}
+            </p>
+          </div>
+          <div
+            className={`rounded-3xl border p-4 ${
+              assessmentState.device_online
+                ? "border-cyan-400/20 bg-cyan-500/10 text-cyan-200"
+                : "border-slate-700 bg-slate-900/70 text-slate-300"
+            }`}
+          >
+            <div className="text-[11px] font-black uppercase tracking-[0.2em]">机器人语音与扫脸</div>
+            <div className="mt-2 text-base font-black">{assessmentState.device_online ? "设备在线" : "设备未在线"}</div>
+            <p className="mt-2 text-xs leading-6 font-semibold opacity-90">
+              {assessmentState.device_online
+                ? `当前设备 ${preferredDeviceId || activationRuntime.preferred_device_id || "已绑定"} 可用于机器人语音和主人扫脸。`
+                : "这部分只是硬件增强链路，离线时不会阻断首次激活。"}
+            </p>
+          </div>
+        </div>
+
         <div className="grid grid-cols-12 gap-6">
           <section className="col-span-4 rounded-[2rem] border border-white/10 bg-slate-950/45 p-6 flex flex-col gap-4">
             <div className="flex items-center gap-3">
@@ -656,7 +797,7 @@ export const ActivationGate: React.FC<ActivationGateProps> = ({ onActivated }) =
               className="rounded-2xl bg-indigo-500/15 border border-indigo-400/20 text-indigo-200 py-3 font-black text-sm flex items-center justify-center gap-2 disabled:opacity-50"
             >
               {busy ? <LoaderCircle className="animate-spin" size={16} /> : <Sparkles size={16} />}
-              生成 AI 身份草稿
+              {activationRuntime.ai_ready ? "生成 AI 身份草稿" : "尝试生成 AI 身份草稿"}
             </button>
             <div className={`rounded-3xl border px-4 py-4 space-y-3 ${identitySourceTone}`}>
               <div className="flex items-center justify-between gap-3">
@@ -838,6 +979,24 @@ export const ActivationGate: React.FC<ActivationGateProps> = ({ onActivated }) =
                 提交这一轮回答
               </button>
               <button
+                onClick={handleDesktopVoiceAnswer}
+                disabled={!canUseDesktopVoice || desktopVoiceBusy || busy || psychometricCompleted}
+                className="rounded-2xl border border-amber-400/25 bg-amber-500/10 text-amber-200 px-5 py-3 text-sm font-black flex items-center gap-2 disabled:opacity-50"
+              >
+                {desktopVoiceBusy ? (
+                  <LoaderCircle className="animate-spin" size={16} />
+                ) : desktopVoiceRecording ? (
+                  <PauseCircle size={16} />
+                ) : (
+                  <Mic size={16} />
+                )}
+                {desktopVoiceRecording
+                  ? "结束电脑麦克风回答"
+                  : desktopVoiceReady
+                    ? "用电脑麦克风回答（推荐）"
+                    : "电脑麦克风未就绪"}
+              </button>
+              <button
                 onClick={handleToggleVoice}
                 disabled={!canUseRobotVoice || voiceBusy || psychometricCompleted}
                 className="rounded-2xl border border-cyan-400/25 bg-cyan-500/10 text-cyan-200 px-5 py-3 text-sm font-black flex items-center gap-2 disabled:opacity-50"
@@ -849,25 +1008,7 @@ export const ActivationGate: React.FC<ActivationGateProps> = ({ onActivated }) =
                 ) : (
                   <PlayCircle size={16} />
                 )}
-                {assessmentState.voice_session_active
-                  ? "停止机器人语音测评"
-                  : assessmentState.device_online
-                    ? "开启机器人语音测评"
-                    : "设备离线，机器人语音不可用"}
-              </button>
-              <button
-                onClick={handleDesktopVoiceAnswer}
-                disabled={!identityReady || desktopVoiceBusy || busy || psychometricCompleted}
-                className="rounded-2xl border border-amber-400/25 bg-amber-500/10 text-amber-200 px-5 py-3 text-sm font-black flex items-center gap-2 disabled:opacity-50"
-              >
-                {desktopVoiceBusy ? (
-                  <LoaderCircle className="animate-spin" size={16} />
-                ) : desktopVoiceRecording ? (
-                  <PauseCircle size={16} />
-                ) : (
-                  <Mic size={16} />
-                )}
-                {desktopVoiceRecording ? "结束本地语音回答" : "本地语音回答"}
+                {robotVoiceLabel}
               </button>
               <button
                 onClick={handleForceFinish}

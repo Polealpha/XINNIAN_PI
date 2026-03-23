@@ -548,6 +548,18 @@ class ActivationPromptPackResponse(BaseModel):
     preferred_code_model: str = ""
 
 
+class ActivationRuntimeStatusResponse(BaseModel):
+    ok: bool
+    ai_ready: bool = False
+    ai_detail: str = ""
+    text_assessment_ready: bool = True
+    desktop_voice_ready: bool = False
+    desktop_voice_detail: str = ""
+    device_online: bool = False
+    robot_voice_ready: bool = False
+    preferred_device_id: str = ""
+
+
 class PsychometricScores(BaseModel):
     E: float = 0.0
     I: float = 0.0
