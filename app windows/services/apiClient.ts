@@ -49,6 +49,9 @@ const resolveTimeoutForPath = (path: string, overrideTimeoutMs?: number) => {
   if (path === "/api/assistant/send") {
     return ASSISTANT_SEND_TIMEOUT_MS;
   }
+  if (path.startsWith("/api/llm/care")) {
+    return ASSISTANT_SEND_TIMEOUT_MS;
+  }
   if (path === "/api/desktop/voice/transcribe") {
     return DESKTOP_AUDIO_TIMEOUT_MS;
   }

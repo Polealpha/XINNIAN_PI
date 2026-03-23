@@ -303,6 +303,9 @@ class CareResponse(BaseModel):
     text: str
     followup_question: str = ""
     style: str = "warm"
+    source: str = "fallback"
+    detail: str = ""
+    ai_ready: bool = False
 
 
 class DailySummaryRequest(BaseModel):

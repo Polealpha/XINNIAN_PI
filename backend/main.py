@@ -55,6 +55,7 @@ from .assessment_prompts import (
 )
 from .personality_prompts import PERSONALITY_EXTRACTION_PROMPT, PERSONALITY_SYSTEM_PROMPT
 from .assistant_service import AssistantService, build_session_key, normalize_surface
+from .care_prompts import CARE_RESPONSE_RULES, CARE_SYSTEM_PROMPT
 from .desktop_speech import DesktopSpeechService
 from .db import get_db, init_db
 from .openclaw_gateway import OpenClawGatewayError
@@ -280,7 +281,7 @@ def _desktop_runtime_status_payload() -> Dict[str, object]:
         "ok": True,
         "source": "desktop_backend",
         "emotion_chain_ready": True,
-        "proactive_care_ready": True,
+        "proactive_care_ready": bool(assistant_chain.get("gateway_ready")),
         "active_care_strategy": str(engine_cfg.policy.care_delivery_strategy or "policy"),
         "voice_chain": voice_chain,
         "assistant_chain": assistant_chain,
@@ -291,6 +292,7 @@ def _desktop_runtime_status_payload() -> Dict[str, object]:
             "text_risk_ready": text_lexicon.exists(),
             "care_policy_templates": str(care_templates),
             "care_policy_ready": care_templates.exists(),
+            "care_openclaw_entrypoint": "llm_care",
             "summary_enabled": True,
             "desktop_backend_local": True,
         },
@@ -4751,6 +4753,117 @@ def _build_care_context(payload: CareRequest) -> Dict[str, object]:
     }
 
 
+def _normalize_care_runtime(runtime: Dict[str, object]) -> Dict[str, object]:
+    gateway_ready = bool(runtime.get("gateway_ready"))
+    gateway_error = str(runtime.get("gateway_error") or "").strip()
+    detail = gateway_error if gateway_error else ("OpenClaw ready" if gateway_ready else "OpenClaw unavailable")
+    return {
+        "ai_ready": gateway_ready,
+        "ai_detail": detail,
+    }
+
+
+def _build_care_prompt(
+    context: Dict[str, object],
+    user_profile: Dict[str, object],
+    runtime_status: Dict[str, object],
+) -> str:
+    payload = {
+        "project": "共鸣连接",
+        "channel": "主动关怀",
+        "runtime": runtime_status,
+        "user_profile": user_profile,
+        "care_context": context,
+    }
+    return (
+        f"{CARE_SYSTEM_PROMPT}\n\n"
+        f"{CARE_RESPONSE_RULES}\n\n"
+        "下面是本次需要回应的结构化上下文，请只输出给用户的话，不要复述这些字段：\n"
+        f"{json.dumps(payload, ensure_ascii=False)}"
+    )
+
+
+def _fallback_care_text(payload: CareRequest, user_profile: Dict[str, object], detail: str = "") -> str:
+    raw_text = str(payload.context or "").strip()
+    emotion = str(payload.current_emotion or "").strip().lower()
+    preferred_name = str((user_profile.get("identity") or {}).get("preferred_name") or "").strip()
+    prefix = f"{preferred_name}，" if preferred_name else ""
+    if emotion in {"sad", "sadness", "down", "depressed"}:
+        base = f"{prefix}我听出来你现在有点低落，我们先别急着把所有事一次想完。先把眼前最压人的那一件事说清楚，我陪你一起拆开。"
+    elif emotion in {"angry", "anger", "frustrated", "irritated"}:
+        base = f"{prefix}你现在这股顶着的劲我接到了。先别急着硬扛，先停十秒，把最让你卡住的那一点拎出来，我们只处理那一件。"
+    elif emotion in {"fear", "anxious", "anxiety", "stress", "stressed"}:
+        base = f"{prefix}先稳一下，我们先只看当前这一分钟要处理的事。你可以先做一次慢呼气，然后告诉我最担心的是哪一块。"
+    elif raw_text:
+        base = f"{prefix}我在，刚刚这句话我接住了。我们先不求一下子理顺全部，只把现在最需要回应的那一点说清楚。"
+    else:
+        base = f"{prefix}我在这里，先陪你把现在的状态稳住。你可以直接说一句此刻最想解决的事。"
+    if detail:
+        return f"{base}"
+    return base
+
+
+async def _run_care_reply(
+    conn: Connection,
+    user_id: int,
+    payload: CareRequest,
+    entrypoint: str,
+) -> CareResponse:
+    user_profile = _build_assistant_identity_context(conn, int(user_id))
+    context = _build_care_context(payload)
+    runtime_snapshot = _normalize_care_runtime(assistant_service.runtime_status())
+    prompt = _build_care_prompt(context, user_profile, runtime_snapshot)
+    if not bool(runtime_snapshot.get("ai_ready")):
+        fallback_text = _fallback_care_text(payload, user_profile, str(runtime_snapshot.get("ai_detail") or ""))
+        return CareResponse(
+            text=fallback_text,
+            followup_question="",
+            style="warm",
+            source="fallback",
+            detail=str(runtime_snapshot.get("ai_detail") or ""),
+            ai_ready=False,
+        )
+    try:
+        assistant_reply = await assistant_service.send_message(
+            conn,
+            user_id=int(user_id),
+            text=prompt,
+            surface="desktop",
+            session_key=f"desktop:{int(user_id)}:care",
+            metadata={
+                "entrypoint": entrypoint,
+                "assistant_mode": "product",
+                "assistant_native_control": False,
+                "current_emotion": payload.current_emotion,
+                "care_channel": "proactive_care",
+                "care_runtime": runtime_snapshot,
+                "user_profile": user_profile,
+            },
+        )
+        safe_text, _rewritten = _sanitize_outbound_bot_text(str(assistant_reply.get("text") or ""))
+        if safe_text:
+            return CareResponse(
+                text=safe_text,
+                followup_question="",
+                style="warm",
+                source="ai",
+                detail=str(runtime_snapshot.get("ai_detail") or ""),
+                ai_ready=True,
+            )
+        raise RuntimeError("OpenClaw returned empty care reply")
+    except Exception as exc:
+        detail = str(exc).strip() or str(runtime_snapshot.get("ai_detail") or "")
+        fallback_text = _fallback_care_text(payload, user_profile, detail)
+        return CareResponse(
+            text=fallback_text,
+            followup_question="",
+            style="warm",
+            source="fallback",
+            detail=detail,
+            ai_ready=bool(runtime_snapshot.get("ai_ready")),
+        )
+
+
 def _inject_tooling_budget(
     context: Dict[str, object],
     conn: Connection,
@@ -4799,33 +4912,7 @@ async def llm_care(
     conn: Connection = Depends(get_db),
 ) -> CareResponse:
     user = _parse_access_token_for_local_desktop(credentials, conn, request)
-    context = _build_care_context(payload)
-    assistant_prompt = (
-        "请基于以下情绪上下文，用中文给出一句温和、简洁、可执行的回应，"
-        "优先接住情绪，再给一个轻建议，最多一个问题。\n"
-        f"{json.dumps(context, ensure_ascii=False)}"
-    )
-    try:
-        assistant_reply = await assistant_service.send_message(
-            conn,
-            user_id=int(user["id"]),
-            text=assistant_prompt,
-            surface="desktop",
-            session_key=f"desktop:{int(user['id'])}:care",
-            metadata={
-                "entrypoint": "llm_care",
-                "current_emotion": payload.current_emotion,
-                "user_profile": _build_assistant_identity_context(conn, int(user["id"])),
-            },
-        )
-    except Exception:
-        assistant_reply = {"text": "我在这里陪着你。"}
-    safe_text, _rewritten = _sanitize_outbound_bot_text(str(assistant_reply.get("text") or ""))
-    return CareResponse(
-        text=safe_text or "我在这里陪着你。",
-        followup_question="",
-        style="warm",
-    )
+    return await _run_care_reply(conn, int(user["id"]), payload, entrypoint="llm_care")
 
 
 @app.post("/api/llm/care/stream")
@@ -4836,32 +4923,12 @@ async def llm_care_stream(
     conn: Connection = Depends(get_db),
 ):
     user = _parse_access_token_for_local_desktop(credentials, conn, request)
-    context = _build_care_context(payload)
-    assistant_prompt = (
-        "请基于以下情绪上下文，用中文给出一句温和、简洁、可执行的回应，"
-        "优先接住情绪，再给一个轻建议，最多一个问题。\n"
-        f"{json.dumps(context, ensure_ascii=False)}"
-    )
-    try:
-        assistant_reply = await assistant_service.send_message(
-            conn,
-            user_id=int(user["id"]),
-            text=assistant_prompt,
-            surface="desktop",
-            session_key=f"desktop:{int(user['id'])}:care",
-            metadata={
-                "entrypoint": "llm_care_stream",
-                "current_emotion": payload.current_emotion,
-                "user_profile": _build_assistant_identity_context(conn, int(user["id"])),
-            },
-        )
-        final_text = _sanitize_outbound_bot_text(str(assistant_reply.get("text") or ""))[0] or "我在这里陪着你。"
-    except Exception:
-        final_text = "我在这里陪着你。"
+    care_reply = await _run_care_reply(conn, int(user["id"]), payload, entrypoint="llm_care_stream")
+    final_text = str(care_reply.text or "").strip() or "我在这里陪着你。"
 
     async def event_stream():
         try:
-            yield _sse("start", {"ok": True})
+            yield _sse("start", {"ok": True, "source": care_reply.source, "ai_ready": care_reply.ai_ready})
             sent_text = ""
             for char in final_text[:100]:
                 delta = char
@@ -4875,6 +4942,9 @@ async def llm_care_stream(
                     "text": sent_text or final_text,
                     "followup_question": "",
                     "style": "warm",
+                    "source": care_reply.source,
+                    "detail": care_reply.detail,
+                    "ai_ready": care_reply.ai_ready,
                 },
             )
         except Exception as exc:
