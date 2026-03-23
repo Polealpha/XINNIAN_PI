@@ -422,6 +422,8 @@ class AssistantRuntimeStatusResponse(BaseModel):
     ok: bool
     gateway_ready: bool = False
     gateway_error: str = ""
+    provider_network_ok: bool = False
+    provider_network_detail: str = ""
     state_dir: str = ""
     workspace_dir: str = ""
     desktop_tools: list[str] = Field(default_factory=list)

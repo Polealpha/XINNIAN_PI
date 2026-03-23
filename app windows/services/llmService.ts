@@ -1,5 +1,5 @@
 import { ChatAttachment, EmotionEvent, EmotionType } from "../types";
-import { apiPost, getAccessToken, getLocalApiBase } from "./apiClient";
+import { apiPost } from "./apiClient";
 
 export interface CareHistoryItem {
   sender: string;
@@ -13,19 +13,10 @@ interface CareStreamHandlers {
   onDone?: (fullText: string) => void;
 }
 
-interface CareApiResponse {
-  text?: string;
-  followup_question?: string;
-  style?: string;
-  source?: string;
-  detail?: string;
-  ai_ready?: boolean;
-}
-
 const CARE_FALLBACK_TEXT = "我在这里陪着你。如果你愿意，可以继续告诉我现在最卡的是哪一点。";
 const CARE_ERROR_FALLBACK_TEXT = "我在，先慢一点。你可以先说一句最想解决的事，我们一步一步来。";
 
-const buildCarePayload = (
+const buildAssistantPayload = (
   currentEmotion: EmotionType,
   context: string,
   history: CareHistoryItem[],
@@ -35,17 +26,24 @@ const buildCarePayload = (
   expressionConfidence?: number,
   attachments: ChatAttachment[] = []
 ) => ({
-  current_emotion: currentEmotion,
-  context,
-  current_ts_ms: currentTsMs,
-  history: history.slice(-6),
-  memory_summary: memorySummary || "",
-  expression_label: expressionLabel || "unknown",
-  expression_confidence:
-    typeof expressionConfidence === "number" && Number.isFinite(expressionConfidence)
-      ? expressionConfidence
-      : 0,
+  text: context,
+  surface: "desktop",
   attachments,
+  metadata: {
+    entrypoint: "llm_care",
+    care_channel: "proactive_care",
+    assistant_mode: "product",
+    assistant_native_control: false,
+    current_emotion: currentEmotion,
+    current_ts_ms: currentTsMs,
+    history: history.slice(-6),
+    memory_summary: memorySummary || "",
+    expression_label: expressionLabel || "unknown",
+    expression_confidence:
+      typeof expressionConfidence === "number" && Number.isFinite(expressionConfidence)
+        ? expressionConfidence
+        : 0,
+  },
 });
 
 export const generateCareMessage = async (
@@ -59,9 +57,9 @@ export const generateCareMessage = async (
   attachments: ChatAttachment[] = []
 ): Promise<string> => {
   try {
-    const response = (await apiPost(
-      "/api/llm/care",
-      buildCarePayload(
+    const response = await apiPost(
+      "/api/assistant/send",
+      buildAssistantPayload(
         currentEmotion,
         context,
         history,
@@ -72,13 +70,10 @@ export const generateCareMessage = async (
         attachments
       ),
       true
-    )) as CareApiResponse;
-    if (response.source && response.source !== "ai") {
-      console.warn("Care response downgraded from AI:", response.detail || response.source);
-    }
+    );
     return response.text || CARE_FALLBACK_TEXT;
   } catch (error) {
-    console.error("Care API Error:", error);
+    console.error("Care assistant error:", error);
     return CARE_ERROR_FALLBACK_TEXT;
   }
 };
@@ -97,70 +92,27 @@ export const generateCareMessageStream = async (
 ): Promise<string> => {
   try {
     handlers.onStart?.();
-    const token = getAccessToken();
-    const response = await fetch(`${getLocalApiBase()}/api/llm/care/stream`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        ...(token ? { Authorization: `Bearer ${token}` } : {}),
-      },
-      body: JSON.stringify(
-        buildCarePayload(
-          currentEmotion,
-          context,
-          history,
-          currentTsMs,
-          memorySummary,
-          expressionLabel,
-          expressionConfidence,
-          attachments
-        )
-      ),
-      signal,
-    });
-    if (!response.ok || !response.body) {
-      throw new Error(`care_stream_failed:${response.status}`);
-    }
-    const reader = response.body.getReader();
-    const decoder = new TextDecoder("utf-8");
-    let buffer = "";
-    let fullText = "";
-    while (true) {
-      const { value, done } = await reader.read();
-      if (done) break;
+    const fullText = await generateCareMessage(
+      currentEmotion,
+      context,
+      history,
+      currentTsMs,
+      memorySummary,
+      expressionLabel,
+      expressionConfidence,
+      attachments
+    );
+    let streamedText = "";
+    for (const char of fullText) {
       if (signal?.aborted) return "";
-      buffer += decoder.decode(value, { stream: true });
-      let boundary = buffer.indexOf("\n\n");
-      while (boundary >= 0) {
-        const block = buffer.slice(0, boundary);
-        buffer = buffer.slice(boundary + 2);
-        const lines = block.split(/\r?\n/);
-        let event = "";
-        const dataLines: string[] = [];
-        for (const line of lines) {
-          if (line.startsWith("event:")) event = line.slice(6).trim();
-          if (line.startsWith("data:")) dataLines.push(line.slice(5).trim());
-        }
-        if (event && dataLines.length > 0) {
-          const payload = JSON.parse(dataLines.join("\n")) as CareApiResponse & { text?: string; message?: string };
-          if (event === "delta" && payload.text) {
-            fullText += payload.text;
-            handlers.onDelta?.(payload.text, fullText);
-          } else if (event === "done") {
-            const finalText = payload.text || fullText || CARE_FALLBACK_TEXT;
-            handlers.onDone?.(finalText);
-            return finalText;
-          } else if (event === "error") {
-            throw new Error(payload.message || payload.detail || "care_stream_error");
-          }
-        }
-        boundary = buffer.indexOf("\n\n");
-      }
+      streamedText += char;
+      handlers.onDelta?.(char, streamedText);
+      await new Promise((resolve) => window.setTimeout(resolve, 10));
     }
-    handlers.onDone?.(fullText);
-    return fullText || CARE_FALLBACK_TEXT;
+    handlers.onDone?.(streamedText);
+    return streamedText;
   } catch (error) {
-    console.error("Care stream failed, falling back to non-stream care:", error);
+    console.error("Care stream emulation failed:", error);
     if (signal?.aborted) return "";
     return generateCareMessage(
       currentEmotion,

@@ -104,3 +104,51 @@ def test_llm_care_returns_project_fallback_when_openclaw_not_ready(tmp_path, mon
         assert payload["ai_ready"] is False
         assert "OPENCLAW_STATE_DIR" in payload["detail"]
         assert "低落" in payload["text"] or "先别急" in payload["text"]
+
+
+def test_assistant_send_uses_same_openclaw_chain_for_proactive_care(tmp_path, monkeypatch):
+    db_path = tmp_path / "auth.db"
+    workspace_dir = tmp_path / "workspace"
+    monkeypatch.setattr(db, "DB_PATH", str(db_path))
+    monkeypatch.setattr(main.assistant_service, "store", AssistantWorkspaceStore(str(workspace_dir)))
+    db.init_db()
+    token = _seed_user(db_path, "care-chat@example.com")
+    headers = {"Authorization": f"Bearer {token}"}
+
+    captured = {}
+
+    async def fake_send_message(session_key: str, text: str) -> str:
+        captured["session_key"] = session_key
+        captured["text"] = text
+        return "我接住你了，我们先只处理眼前这一件。"
+
+    monkeypatch.setattr(main.assistant_service.gateway, "send_message", fake_send_message)
+
+    with TestClient(main.app) as client:
+        response = client.post(
+            "/api/assistant/send",
+            headers=headers,
+            json={
+                "text": "今天事情太多，我有点乱。",
+                "surface": "desktop",
+                "metadata": {
+                    "entrypoint": "llm_care",
+                    "care_channel": "proactive_care",
+                    "assistant_mode": "product",
+                    "assistant_native_control": False,
+                    "current_emotion": "stress",
+                    "history": [{"sender": "user", "text": "我今天状态不太稳", "timestamp_ms": int(time.time() * 1000)}],
+                    "memory_summary": "最近工作切换频繁。",
+                    "expression_label": "sadness",
+                    "expression_confidence": 0.66,
+                },
+            },
+        )
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["text"] == "我接住你了，我们先只处理眼前这一件。"
+
+    assert captured["session_key"] == "desktop:1"
+    assert "共鸣连接" in captured["text"]
+    assert "主动关怀" in captured["text"]
+    assert "今天事情太多，我有点乱。" in captured["text"]

@@ -54,6 +54,7 @@ def _build_client(repo_path: str) -> OpenClawGatewayClient:
         OpenClawGatewayConfig(
             state_dir="",
             workspace_dir=repo_path,
+            codex_home=repo_path,
             repo_path=repo_path,
             url="ws://127.0.0.1:18789",
             origin="http://127.0.0.1:18789",
@@ -116,6 +117,7 @@ def test_build_codex_home_config_keeps_only_minimal_trusted_paths(tmp_path):
         OpenClawGatewayConfig(
             state_dir="",
             workspace_dir=str(workspace_dir),
+            codex_home=str(tmp_path / "codex-home"),
             repo_path=str(repo_dir),
             url="ws://127.0.0.1:18789",
             origin="http://127.0.0.1:18789",
@@ -126,10 +128,7 @@ def test_build_codex_home_config_keeps_only_minimal_trusted_paths(tmp_path):
     )
 
     config = client._build_codex_home_config()
-    escaped_workspace = str(Path(workspace_dir).resolve()).replace("\\", "\\\\")
-    escaped_repo = str(Path(repo_dir).resolve()).replace("\\", "\\\\")
-
     assert 'model = "gpt-5.4"' in config
-    assert f"[projects.'{escaped_workspace}']" in config
-    assert f"[projects.'{escaped_repo}']" in config
+    assert 'personality = "pragmatic"' in config
+    assert "[projects." not in config
     assert "mcp_servers" not in config

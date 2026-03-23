@@ -281,7 +281,7 @@ def _desktop_runtime_status_payload() -> Dict[str, object]:
         "ok": True,
         "source": "desktop_backend",
         "emotion_chain_ready": True,
-        "proactive_care_ready": bool(assistant_chain.get("gateway_ready")),
+        "proactive_care_ready": bool(assistant_chain.get("gateway_ready")) and bool(assistant_chain.get("provider_network_ok")),
         "active_care_strategy": str(engine_cfg.policy.care_delivery_strategy or "policy"),
         "voice_chain": voice_chain,
         "assistant_chain": assistant_chain,

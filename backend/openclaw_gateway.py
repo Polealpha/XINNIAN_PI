@@ -8,6 +8,7 @@ import json
 import os
 import re
 import shutil
+import sqlite3
 import subprocess
 import time
 import uuid
@@ -31,6 +32,7 @@ class OpenClawGatewayError(RuntimeError):
 class OpenClawGatewayConfig:
     state_dir: str
     workspace_dir: str
+    codex_home: str
     repo_path: str
     url: str
     origin: str
@@ -40,9 +42,13 @@ class OpenClawGatewayConfig:
 
 
 def discover_openclaw_state_dir(configured: str, workspace_dir: str) -> Path:
+    configured_path = Path(configured).expanduser().resolve() if configured else None
     candidates: List[Path] = []
-    if configured:
-        candidates.append(Path(configured).expanduser())
+    if configured_path is not None:
+        copied = _materialize_openclaw_state_dir(configured_path, workspace_dir)
+        if copied is not None:
+            return copied
+        candidates.append(configured_path)
     candidates.extend(
         [
             Path.home() / ".openclaw",
@@ -60,6 +66,40 @@ def discover_openclaw_state_dir(configured: str, workspace_dir: str) -> Path:
     raise OpenClawGatewayError("OpenClaw state dir not found; set OPENCLAW_STATE_DIR")
 
 
+def _materialize_openclaw_state_dir(target: Path, workspace_dir: str) -> Optional[Path]:
+    target = target.expanduser().resolve()
+    if (target / "openclaw.json").exists() and (target / "identity" / "device.json").exists():
+        return target
+    fallback_candidates = [
+        Path.home() / ".openclaw",
+        Path(os.environ.get("APPDATA", "")) / "Antigravity" / "openclaw",
+        Path(os.environ.get("LOCALAPPDATA", "")) / "Antigravity" / "openclaw",
+        Path(os.environ.get("LOCALAPPDATA", "")) / "com.lbjlaq.antigravity-tools" / "openclaw",
+        Path(workspace_dir).expanduser().resolve() / ".openclaw",
+        Path(workspace_dir).expanduser().resolve() / ".." / ".openclaw",
+    ]
+    source: Optional[Path] = None
+    for candidate in fallback_candidates:
+        candidate = candidate.expanduser().resolve()
+        if candidate == target:
+            continue
+        if (candidate / "openclaw.json").exists() and (candidate / "identity" / "device.json").exists():
+            source = candidate
+            break
+    if source is None:
+        return None
+    try:
+        target.mkdir(parents=True, exist_ok=True)
+        (target / "identity").mkdir(parents=True, exist_ok=True)
+        for rel in ("openclaw.json", "identity/device.json", "identity/device-auth.json"):
+            src = source / rel
+            if src.exists():
+                shutil.copy2(src, target / rel)
+        return target if (target / "openclaw.json").exists() and (target / "identity" / "device.json").exists() else None
+    except Exception:
+        return None
+
+
 class OpenClawGatewayClient:
     def __init__(self, config: OpenClawGatewayConfig) -> None:
         self.config = config
@@ -68,31 +108,44 @@ class OpenClawGatewayClient:
         normalized_session_key = self._normalize_agent_session_key(str(session_key))
         runtime = self._load_runtime()
         timeout_ms = max(5000, int(self.config.timeout_ms))
+        timeout_ms = min(timeout_ms, 120000)
+        agent_error: Optional[Exception] = None
         try:
             return await self._send_message_via_agent(runtime, normalized_session_key, str(text), timeout_ms)
-        except Exception:
-            pass
-        async with self._connect(runtime) as ws:
-            inbox: List[Dict[str, object]] = []
-            await self._connect_session(ws, runtime, inbox)
-            baseline = await self._latest_assistant_message(ws, normalized_session_key, inbox)
-            run_id = f"assistant-{int(time.time() * 1000)}-{uuid.uuid4().hex[:8]}"
-            response = await self._rpc_request(
-                ws,
-                "chat.send",
-                {
-                    "sessionKey": normalized_session_key,
-                    "message": str(text),
-                    "deliver": False,
-                    "timeoutMs": timeout_ms,
-                    "idempotencyKey": run_id,
-                },
-                inbox,
-                timeout_ms=max(timeout_ms, 15000),
-            )
-            if not response.get("ok"):
-                raise OpenClawGatewayError(f"OpenClaw chat.send failed: {response.get('error')}")
-            return await self._wait_for_reply(ws, normalized_session_key, run_id, baseline, inbox, timeout_ms)
+        except Exception as exc:
+            agent_error = exc
+        try:
+            async with self._connect(runtime) as ws:
+                inbox: List[Dict[str, object]] = []
+                await self._connect_session(ws, runtime, inbox)
+                baseline = await self._latest_assistant_message(ws, normalized_session_key, inbox)
+                run_id = f"assistant-{int(time.time() * 1000)}-{uuid.uuid4().hex[:8]}"
+                response = await self._rpc_request(
+                    ws,
+                    "chat.send",
+                    {
+                        "sessionKey": normalized_session_key,
+                        "message": str(text),
+                        "deliver": False,
+                        "timeoutMs": timeout_ms,
+                        "idempotencyKey": run_id,
+                    },
+                    inbox,
+                    timeout_ms=max(timeout_ms, 15000),
+                )
+                if not response.get("ok"):
+                    raise OpenClawGatewayError(f"OpenClaw chat.send failed: {response.get('error')}")
+                return await self._wait_for_reply(ws, normalized_session_key, run_id, baseline, inbox, timeout_ms)
+        except OpenClawGatewayError:
+            raise
+        except Exception as exc:
+            detail = str(exc).strip() or exc.__class__.__name__
+            if agent_error is not None:
+                agent_detail = str(agent_error).strip() or agent_error.__class__.__name__
+                raise OpenClawGatewayError(
+                    f"OpenClaw provider failed via agent ({agent_detail}) and websocket fallback ({detail})"
+                ) from exc
+            raise OpenClawGatewayError(f"OpenClaw websocket fallback failed: {detail}") from exc
 
     async def reset_session(self, session_key: str) -> None:
         normalized_session_key = self._normalize_agent_session_key(str(session_key))
@@ -156,28 +209,31 @@ class OpenClawGatewayClient:
             **os.environ,
             "OPENCLAW_STATE_DIR": str(runtime["state_dir"]),
         }
-        env["CODEX_HOME"] = str(self._prepare_codex_home(runtime))
+        codex_home = self._prepare_codex_home(runtime)
+        env["CODEX_HOME"] = str(codex_home)
+        codex_tmp = codex_home / "tmp"
+        codex_tmp.mkdir(parents=True, exist_ok=True)
+        env["TMP"] = str(codex_tmp)
+        env["TEMP"] = str(codex_tmp)
+        env["TMPDIR"] = str(codex_tmp)
+        command_timeout_s = min(120.0, max(30.0, timeout_ms / 1000.0))
         if os.name == "nt":
-            prompt_b64 = base64.b64encode(text.encode("utf-8")).decode("ascii")
-            escaped_repo = str(repo_root).replace("'", "''")
-            escaped_session = str(session_key).replace("'", "''")
-            script = (
-                "$OutputEncoding = [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new(); "
-                "$prompt = [System.Text.Encoding]::UTF8.GetString([System.Convert]::FromBase64String"
-                f"('{prompt_b64}')); "
-                f"Set-Location '{escaped_repo}'; "
-                f"node scripts/run-node.mjs agent --session-id '{escaped_session}' --message $prompt --thinking low --json"
-            )
-            process = await asyncio.create_subprocess_exec(
-                "powershell",
-                "-NoLogo",
-                "-NoProfile",
-                "-Command",
-                script,
+            stdout, stderr, payload_text, returncode = await self._run_windows_command(
+                [
+                    "node",
+                    str(launcher),
+                    "agent",
+                    "--session-id",
+                    session_key,
+                    "--message",
+                    text,
+                    "--thinking",
+                    "low",
+                    "--json",
+                ],
                 cwd=str(repo_root),
                 env=env,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
+                timeout_s=command_timeout_s,
             )
         else:
             process = await asyncio.create_subprocess_exec(
@@ -196,10 +252,22 @@ class OpenClawGatewayClient:
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
             )
-        stdout, stderr, payload_text = await self._collect_agent_output(process, timeout_s=max(30.0, timeout_ms / 1000.0))
+            stdout, stderr, payload_text = await self._collect_agent_output(
+                process, timeout_s=command_timeout_s
+            )
+            returncode = process.returncode
         if payload_text:
             return payload_text
-        if process.returncode != 0:
+        direct_cli_markers = (
+            "spawn EPERM",
+            "spawn eperm",
+            "gateway closed",
+            "returned no text payload",
+        )
+        agent_failed = returncode != 0 or not stdout.strip()
+        if agent_failed or any(marker in stderr.lower() for marker in [m.lower() for m in direct_cli_markers]):
+            return await self._send_message_via_direct_cli(runtime, text, timeout_ms)
+        if returncode != 0:
             raise OpenClawGatewayError(
                 f"OpenClaw agent command failed: {stderr.strip()}"
             )
@@ -211,9 +279,122 @@ class OpenClawGatewayClient:
             raise OpenClawGatewayError("OpenClaw agent command produced no output")
         raise OpenClawGatewayError("OpenClaw agent command returned no text payload")
 
+    async def _send_message_via_direct_cli(
+        self,
+        runtime: Dict[str, str],
+        text: str,
+        timeout_ms: int,
+    ) -> str:
+        repo_root = Path(str(self.config.repo_path or "")).expanduser().resolve()
+        openclaw_json = self._read_json(Path(str(runtime["state_dir"])) / "openclaw.json")
+        defaults = ((openclaw_json.get("agents") or {}).get("defaults") or {}) if isinstance(openclaw_json, dict) else {}
+        cli_backends = (defaults.get("cliBackends") or {}) if isinstance(defaults, dict) else {}
+        backend = cli_backends.get("codex-cli") if isinstance(cli_backends, dict) else None
+        if not isinstance(backend, dict):
+            raise OpenClawGatewayError("OpenClaw direct CLI fallback unavailable: codex-cli backend missing")
+        command = str(backend.get("command") or "").strip()
+        args = [str(item) for item in (backend.get("args") or []) if str(item).strip()]
+        if not command or not args:
+            raise OpenClawGatewayError("OpenClaw direct CLI fallback unavailable: codex-cli command incomplete")
+        primary_model = str(((defaults.get("model") or {}) if isinstance(defaults, dict) else {}).get("primary") or "").strip()
+        if "/" in primary_model:
+            provider_id, model_id = primary_model.split("/", 1)
+            if provider_id.strip().lower() == "codex-cli" and model_id.strip():
+                model_arg = str(backend.get("modelArg") or "").strip()
+                if model_arg and model_arg not in args:
+                    args.extend([model_arg, model_id.strip()])
+        env = {
+            **os.environ,
+            "OPENCLAW_STATE_DIR": str(runtime["state_dir"]),
+        }
+        codex_home = self._prepare_codex_home(runtime)
+        env["CODEX_HOME"] = str(codex_home)
+        codex_tmp = codex_home / "tmp"
+        codex_tmp.mkdir(parents=True, exist_ok=True)
+        env["TMP"] = str(codex_tmp)
+        env["TEMP"] = str(codex_tmp)
+        env["TMPDIR"] = str(codex_tmp)
+        command_timeout_s = min(120.0, max(30.0, timeout_ms / 1000.0))
+        if os.name == "nt":
+            stdout_text, stderr_text, _payload_text, returncode = await self._run_windows_command(
+                [command, *args],
+                cwd=str(repo_root),
+                env=env,
+                timeout_s=command_timeout_s,
+                input_text=str(text),
+            )
+        else:
+            try:
+                process = await asyncio.create_subprocess_exec(
+                    command,
+                    *args,
+                    cwd=str(repo_root),
+                    env=env,
+                    stdin=asyncio.subprocess.PIPE,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
+                )
+            except Exception as exc:
+                raise OpenClawGatewayError(f"OpenClaw direct CLI spawn failed: {exc}") from exc
+            try:
+                stdout, stderr = await asyncio.wait_for(
+                    process.communicate(str(text).encode("utf-8")),
+                    timeout=command_timeout_s,
+                )
+            except asyncio.TimeoutError as exc:
+                await self._stop_agent_process(process)
+                raise OpenClawGatewayError("OpenClaw direct CLI command timed out") from exc
+            stdout_text = stdout.decode("utf-8", errors="ignore").strip()
+            stderr_text = stderr.decode("utf-8", errors="ignore").strip()
+            returncode = process.returncode
+        payload_text = self._extract_agent_payload_text(stdout_text)
+        if payload_text:
+            return payload_text
+        if returncode == 0 and stdout_text:
+            return stdout_text
+        detail = stderr_text or stdout_text or f"exit code {returncode}"
+        raise OpenClawGatewayError(f"OpenClaw direct CLI command failed: {detail}")
+
+    async def _run_windows_command(
+        self,
+        argv: List[str],
+        cwd: str,
+        env: Dict[str, str],
+        timeout_s: float,
+        input_text: Optional[str] = None,
+    ) -> tuple[str, str, Optional[str], int]:
+        def _invoke() -> tuple[str, str, int]:
+            completed = subprocess.run(
+                argv,
+                cwd=cwd,
+                env=env,
+                input=input_text.encode("utf-8") if input_text is not None else None,
+                capture_output=True,
+                timeout=timeout_s,
+            )
+            stdout_text = completed.stdout.decode("utf-8", errors="ignore").strip()
+            stderr_text = completed.stderr.decode("utf-8", errors="ignore").strip()
+            return stdout_text, stderr_text, int(completed.returncode or 0)
+
+        try:
+            stdout_text, stderr_text, returncode = await asyncio.to_thread(_invoke)
+        except subprocess.TimeoutExpired as exc:
+            raise OpenClawGatewayError("OpenClaw agent command timed out") from exc
+        payload_text = self._extract_agent_payload_text(stdout_text)
+        return stdout_text, stderr_text, payload_text, returncode
+
     def _prepare_codex_home(self, runtime: Dict[str, str]) -> Path:
         configured = str(os.environ.get("CODEX_HOME", "") or "").strip()
-        codex_home = Path(configured).expanduser() if configured else Path(str(runtime["state_dir"])) / "codex-home"
+        if configured:
+            codex_home_root = Path(configured).expanduser()
+        elif str(self.config.codex_home or "").strip():
+            codex_home_root = Path(str(self.config.codex_home)).expanduser()
+        else:
+            codex_home_root = Path(str(self.config.workspace_dir)).expanduser().resolve().parent / "codex_home"
+        codex_home_root.mkdir(parents=True, exist_ok=True)
+        codex_home = codex_home_root / "runtime"
+        if codex_home.exists():
+            shutil.rmtree(codex_home, ignore_errors=True)
         codex_home.mkdir(parents=True, exist_ok=True)
         source_home = Path.home() / ".codex"
         for name in ("auth.json", "cap_sid"):
@@ -225,22 +406,35 @@ class OpenClawGatewayClient:
                         shutil.copy2(src, dest)
                 except Exception:
                     pass
+        self._repair_codex_home_state(codex_home)
         (codex_home / "config.toml").write_text(self._build_codex_home_config(), encoding="utf-8")
         return codex_home
 
+    def _repair_codex_home_state(self, codex_home: Path) -> None:
+        state_db = codex_home / "state_5.sqlite"
+        journal_candidates = [
+            codex_home / "state_5.sqlite-journal",
+            codex_home / "state_5.sqlite-shm",
+            codex_home / "state_5.sqlite-wal",
+        ]
+        # Keep the OAuth/token files but always rebuild Codex's transient state db.
+        # The desktop environment tends to leave this sqlite runtime in a corrupted
+        # or locked state, while a clean home reliably boots the provider.
+        if state_db.exists():
+            with contextlib.suppress(Exception):
+                state_db.unlink()
+            for candidate in journal_candidates:
+                with contextlib.suppress(Exception):
+                    candidate.unlink()
+            return
+        for candidate in journal_candidates:
+            with contextlib.suppress(Exception):
+                candidate.unlink()
+
     def _build_codex_home_config(self) -> str:
-        workspace_dir = str(Path(self.config.workspace_dir).expanduser().resolve()).replace("\\", "\\\\")
-        repo_path = str(Path(self.config.repo_path).expanduser().resolve()).replace("\\", "\\\\")
         return (
             'model = "gpt-5.4"\n'
-            'model_reasoning_effort = "high"\n'
             'personality = "pragmatic"\n\n'
-            f"[projects.'{workspace_dir}']\n"
-            'trust_level = "trusted"\n\n'
-            f"[projects.'{repo_path}']\n"
-            'trust_level = "trusted"\n\n'
-            "[windows]\n"
-            'sandbox = "unelevated"\n'
         )
 
     async def _collect_agent_output(
@@ -312,6 +506,13 @@ class OpenClawGatewayClient:
     @classmethod
     def _extract_agent_payload_text(cls, output: str) -> Optional[str]:
         for parsed in reversed(cls._extract_agent_json_candidates(output)):
+            if isinstance(parsed, dict):
+                item = parsed.get("item")
+                if isinstance(item, dict):
+                    item_type = str(item.get("type") or "").strip().lower()
+                    item_text = str(item.get("text") or "").strip()
+                    if item_type == "agent_message" and item_text:
+                        return item_text
             payloads = (((parsed.get("result") or {}).get("payloads")) if isinstance(parsed, dict) else None) or []
             for payload in payloads:
                 text = str(payload.get("text") or "").strip() if isinstance(payload, dict) else ""

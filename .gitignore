@@ -33,6 +33,9 @@ downloads/
 third_party/
 assistant_data/openclaw_state/
 assistant_data/openclaw_state_runtime/
+assistant_data/codex_home/
+.tmp/
+pytest-run-*/
 .codex-openclaw-probe/
 .codex-openclaw-e2e/
 .codex-openclaw-probe-runtime/

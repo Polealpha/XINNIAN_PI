@@ -18,6 +18,7 @@ from urllib.parse import urlparse
 import httpx
 
 from .assistant_store import AssistantWorkspaceStore
+from .care_prompts import ASSISTANT_PRODUCT_PROMPT, CARE_RESPONSE_RULES, CARE_SYSTEM_PROMPT
 from .openclaw_gateway import (
     OpenClawGatewayClient,
     OpenClawGatewayConfig,
@@ -29,6 +30,7 @@ from .settings import (
     DESKTOP_APP_ALLOWLIST_JSON,
     OPENCLAW_CLIENT_ID,
     OPENCLAW_CLIENT_MODE,
+    OPENCLAW_CODEX_HOME,
     OPENCLAW_GATEWAY_ORIGIN,
     OPENCLAW_REPO_PATH,
     OPENCLAW_GATEWAY_URL,
@@ -80,6 +82,7 @@ class AssistantService:
             OpenClawGatewayConfig(
                 state_dir=OPENCLAW_STATE_DIR,
                 workspace_dir=self.workspace_dir,
+                codex_home=OPENCLAW_CODEX_HOME,
                 repo_path=OPENCLAW_REPO_PATH,
                 url=OPENCLAW_GATEWAY_URL,
                 origin=OPENCLAW_GATEWAY_ORIGIN,
@@ -327,9 +330,12 @@ class AssistantService:
             gateway_ready = False
             gateway_error = f"OpenClaw runtime probe failed: {exc}"
             resolved_state_dir = str(OPENCLAW_STATE_DIR or "")
+        provider_network_ok, provider_network_detail = self._probe_provider_network()
         return {
             "gateway_ready": gateway_ready,
             "gateway_error": gateway_error,
+            "provider_network_ok": provider_network_ok,
+            "provider_network_detail": provider_network_detail,
             "state_dir": resolved_state_dir,
             "workspace_dir": str(self.workspace_dir),
             "desktop_tools": [
@@ -347,6 +353,17 @@ class AssistantService:
             ],
             "robot_bridge_ready": True,
         }
+
+    def _probe_provider_network(self) -> Tuple[bool, str]:
+        targets = [("api.openai.com", 443), ("chatgpt.com", 443)]
+        errors: List[str] = []
+        for host, port in targets:
+            try:
+                with socket.create_connection((host, int(port)), timeout=1.5):
+                    return True, f"provider endpoint reachable: {host}:{port}"
+            except OSError as exc:
+                errors.append(f"{host}:{port} ({exc})")
+        return False, "provider endpoints unreachable: " + "; ".join(errors)
 
     def _probe_gateway_socket(self, url: str) -> Tuple[bool, str]:
         parsed = urlparse(str(url or "").strip())
@@ -372,6 +389,9 @@ class AssistantService:
         native_control_enabled: bool = True,
     ) -> str:
         lines = []
+        care_channel = ""
+        if isinstance(metadata, dict):
+            care_channel = str(metadata.get("care_channel") or "").strip().lower()
         if str(assistant_mode or "").strip().lower() == "agent":
             lines.append("[assistant_mode=agent]")
             lines.append(f"[assistant_native_control={str(bool(native_control_enabled)).lower()}]")
@@ -379,16 +399,50 @@ class AssistantService:
                 "Agent mode is enabled. Prefer native OpenClaw execution first. "
                 "Do not mention workspace files, prompts, bootstrap, logs, or internal setup."
             )
+        elif care_channel == "proactive_care":
+            lines.extend(self._compose_proactive_care_block(text, metadata))
         else:
-            lines.append("Answer the final user request directly in concise Chinese. Do not ask the user to resend unless the input is actually empty.")
+            lines.extend(
+                [
+                    ASSISTANT_PRODUCT_PROMPT,
+                    "请直接处理这次用户请求；如果只是普通聊天，就正常聊天；如果用户明显难受，再轻量关怀。",
+                    "不要要求用户重复发送，除非输入真的为空。",
+                ]
+            )
         for item in tool_results:
             lines.append(f"Tool result [{item.name}] ok={str(item.ok).lower()}: {item.detail}")
         if attachments:
             lines.append(f"Attachments: {json.dumps(attachments, ensure_ascii=False)}")
-        if metadata:
+        if metadata and care_channel != "proactive_care":
             lines.append(f"Metadata: {json.dumps(metadata, ensure_ascii=False)}")
-        lines.append(str(text or "").strip())
+        if care_channel != "proactive_care":
+            lines.append(str(text or "").strip())
         return "\n".join(lines).strip()
+
+    def _compose_proactive_care_block(self, text: str, metadata: Optional[Dict[str, object]]) -> List[str]:
+        payload = dict(metadata or {})
+        context = {
+            "project": "共鸣连接",
+            "channel": "主动关怀",
+            "current_emotion": str(payload.get("current_emotion") or "").strip(),
+            "current_ts_ms": payload.get("current_ts_ms"),
+            "history": payload.get("history") if isinstance(payload.get("history"), list) else [],
+            "memory_summary": str(payload.get("memory_summary") or "").strip(),
+            "expression_modality": {
+                "label": str(payload.get("expression_label") or "unknown").strip() or "unknown",
+                "confidence": float(payload.get("expression_confidence") or 0.0),
+                "note": "这是算法观测信号，不等于用户明确确认。",
+            },
+            "user_profile": payload.get("user_profile") if isinstance(payload.get("user_profile"), dict) else {},
+            "user_message": str(text or "").strip(),
+        }
+        return [
+            "[care_channel=proactive_care]",
+            CARE_SYSTEM_PROMPT,
+            CARE_RESPONSE_RULES,
+            "以下是这次主动关怀需要使用的上下文。只输出给用户的话，不要复述这些字段，不要输出内部说明：",
+            json.dumps(context, ensure_ascii=False),
+        ]
 
     def _compose_exact_reply_message(self, exact_reply_target: str) -> str:
         return (

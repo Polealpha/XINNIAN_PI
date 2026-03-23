@@ -53,6 +53,12 @@ const resolveOpenClawStateDir = (runtimeRoot) => {
 };
 
 const resolveOpenClawCodexHome = (runtimeRoot) => {
+  if (process.env.OPENCLAW_CODEX_HOME) {
+    return process.env.OPENCLAW_CODEX_HOME;
+  }
+  if (process.env.LOCALAPPDATA) {
+    return path.join(process.env.LOCALAPPDATA, "EmoResonance", "codex_home");
+  }
   return path.join(runtimeRoot, "assistant_data", "codex_home");
 };
 
@@ -77,12 +83,21 @@ const ensureOpenClawCodexHome = (runtimeRoot, workspaceDir, openClawRepo) => {
   const codexHome = resolveOpenClawCodexHome(runtimeRoot);
   const sourceCodexHome = path.join(os.homedir(), ".codex");
   fs.mkdirSync(codexHome, { recursive: true });
+  fs.mkdirSync(path.join(codexHome, "tmp"), { recursive: true });
   for (const name of ["auth.json", "cap_sid"]) {
     const src = path.join(sourceCodexHome, name);
     const dest = path.join(codexHome, name);
     if (fs.existsSync(src)) {
       fs.copyFileSync(src, dest);
     }
+  }
+  for (const stale of ["state_5.sqlite", "state_5.sqlite-journal", "state_5.sqlite-shm", "state_5.sqlite-wal"]) {
+    const target = path.join(codexHome, stale);
+    try {
+      if (fs.existsSync(target) && fs.statSync(target).size === 0) {
+        fs.rmSync(target, { force: true });
+      }
+    } catch {}
   }
   const escapeTomlPath = (value) => String(value || "").replace(/\\/g, "\\\\");
   const config = [
@@ -214,7 +229,11 @@ const startLocalBackend = () => {
         OPENCLAW_STATE_DIR: resolveOpenClawStateDir(runtimeRoot),
         OPENCLAW_GATEWAY_URL: `ws://127.0.0.1:${LOCAL_OPENCLAW_GATEWAY_PORT}`,
         OPENCLAW_GATEWAY_ORIGIN: `http://127.0.0.1:${LOCAL_OPENCLAW_GATEWAY_PORT}`,
+        OPENCLAW_CODEX_HOME: process.env.OPENCLAW_CODEX_HOME || codexHome,
         CODEX_HOME: process.env.CODEX_HOME || codexHome,
+        TMP: path.join(codexHome, "tmp"),
+        TEMP: path.join(codexHome, "tmp"),
+        TMPDIR: path.join(codexHome, "tmp"),
         ALLOW_UNVERIFIED_LOCAL_DESKTOP_TOKENS: "1",
         DEFAULT_ROBOT_DEVICE_IP: process.env.DEFAULT_ROBOT_DEVICE_IP || "192.168.137.50",
       },
@@ -272,7 +291,11 @@ const startLocalOpenClawGateway = () => {
       env: {
         ...process.env,
         OPENCLAW_STATE_DIR: process.env.OPENCLAW_STATE_DIR || stateDir,
+        OPENCLAW_CODEX_HOME: process.env.OPENCLAW_CODEX_HOME || codexHome,
         CODEX_HOME: process.env.CODEX_HOME || codexHome,
+        TMP: path.join(codexHome, "tmp"),
+        TEMP: path.join(codexHome, "tmp"),
+        TMPDIR: path.join(codexHome, "tmp"),
       },
       windowsHide: true,
       stdio: ["ignore", "pipe", "pipe"],
