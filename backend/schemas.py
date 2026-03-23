@@ -535,6 +535,8 @@ class ActivationIdentityInferResponse(BaseModel):
     onboarding_notes: str = ""
     voice_intro_summary: str = ""
     confidence: float = 0.0
+    inference_source: str = "heuristic"
+    inference_detail: str = ""
     raw_json: dict = Field(default_factory=dict)
 
 
@@ -622,6 +624,11 @@ class ActivationAssessmentStateResponse(BaseModel):
     inference_version: str = "assessment-v1"
     required_min_turns: int = 12
     max_turns: int = 28
+    question_source: str = "question_bank"
+    scoring_source: str = "pending"
+    question_pair: str = ""
+    mode_hint: str = ""
+    can_submit_text: bool = True
 
 
 class ActivationAssessmentTurnResponse(ActivationAssessmentStateResponse):

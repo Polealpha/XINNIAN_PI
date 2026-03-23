@@ -107,6 +107,8 @@ def test_activation_assessment_flow_persists_profile_and_memory(tmp_path, monkey
         started = client.post("/api/activation/assessment/start", headers=headers, json={"surface": "desktop", "voice_mode": "text"})
         assert started.status_code == 200
         assert started.json()["latest_question"]
+        assert started.json()["question_source"] == "ai"
+        assert started.json()["mode_hint"] == "device_offline_text_available"
 
         for _ in range(12):
             response = client.post(
@@ -120,6 +122,7 @@ def test_activation_assessment_flow_persists_profile_and_memory(tmp_path, monkey
         assert final_payload["status"] == "completed"
         assert final_payload["type_code"]
         assert final_payload["scores"]["I"] > final_payload["scores"]["E"]
+        assert final_payload["scoring_source"] == "ai"
 
         activation_state = client.get("/api/activation/state", headers=headers)
         assert activation_state.status_code == 200
@@ -134,4 +137,3 @@ def test_activation_assessment_flow_persists_profile_and_memory(tmp_path, monkey
     memory_text = memory_path.read_text(encoding="utf-8")
     assert "psychometric_profile" in memory_text
     assert "类型" in memory_text
-

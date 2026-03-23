@@ -925,6 +925,16 @@ def _assessment_response(session: Dict[str, object], device_online: bool = False
     evidence = (final or session).get("evidence_summary")
     if not isinstance(evidence, dict):
         evidence = {}
+    voice_mode = str(session.get("voice_mode") or "idle")
+    voice_session_active = bool(session.get("voice_session_active"))
+    if not bool(device_online):
+        mode_hint = "device_offline_text_available"
+    elif voice_session_active and voice_mode == "robot":
+        mode_hint = "robot_voice_active"
+    elif voice_mode == "robot":
+        mode_hint = "robot_voice_ready"
+    else:
+        mode_hint = "text_mode_ready"
     return ActivationAssessmentStateResponse(
         ok=True,
         exists=bool(exists and session),
@@ -946,13 +956,18 @@ def _assessment_response(session: Dict[str, object], device_online: bool = False
         },
         conversation_count=max(0, int((final or session).get("conversation_count") or session.get("effective_turn_count") or 0)),
         finish_reason=str(session.get("finish_reason") or ""),
-        voice_mode=str(session.get("voice_mode") or "idle"),
-        voice_session_active=bool(session.get("voice_session_active")),
+        voice_mode=voice_mode,
+        voice_session_active=voice_session_active,
         device_online=bool(device_online),
         summary=str((final or session).get("summary") or (session.get("profile_preview") or {}).get("summary") or ""),
         response_style=str((final or session).get("response_style") or (session.get("profile_preview") or {}).get("response_style") or ""),
         care_style=str((final or session).get("care_style") or (session.get("profile_preview") or {}).get("care_style") or ""),
         inference_version=str((final or session).get("inference_version") or "assessment-v1"),
+        question_source=str(session.get("question_source") or "question_bank"),
+        scoring_source=str(session.get("scoring_source") or "pending"),
+        question_pair=str(session.get("question_pair") or ""),
+        mode_hint=mode_hint,
+        can_submit_text=True,
     )
 
 
@@ -1024,10 +1039,14 @@ async def _assessment_apply_turn(
         "followup_rules": [],
     }
     scoring = await _assessment_score_model(int(user_id), question, session_payload, answer_text)
+    scoring_source = "ai"
     if not scoring:
         scoring = score_answer_heuristic(question, answer_text)
+        scoring_source = "heuristic"
     merged = merge_scoring(session_payload, question, answer_text, scoring, int(time.time() * 1000))
     merged["voice_mode"] = str(voice_mode or "text").strip() or "text"
+    merged["scoring_source"] = scoring_source
+    merged["question_pair"] = str(question.get("pair") or merged.get("question_pair") or "")
 
     terminator = await _assessment_terminate_model(int(user_id), merged)
     if terminator.get("should_finish") and merged.get("status") != "completed":
@@ -1042,6 +1061,8 @@ async def _assessment_apply_turn(
         if suggested:
             merged["latest_question"] = str(suggested.get("prompt") or merged.get("latest_question") or "")
             merged["last_question_id"] = str(suggested.get("id") or merged.get("last_question_id") or "")
+            merged["question_pair"] = str(suggested.get("pair") or merged.get("question_pair") or "")
+            merged["question_source"] = "ai"
 
     _append_assessment_turn_event(
         conn,
@@ -2833,15 +2854,29 @@ async def activation_identity_infer(
         f"{IDENTITY_EXTRACTION_PROMPT}\n\n"
         f"输入数据：{json.dumps(inference_input, ensure_ascii=False)}"
     )
+    raw = ""
+    used_heuristic = False
+    inference_detail = ""
     try:
         raw = await assistant_service.gateway.send_message(session_key, prompt)
         parsed = _extract_json_block(raw)
     except OpenClawGatewayError:
-        raw = ""
         parsed = _heuristic_activation_identity(
             transcript=transcript,
             observed_name=str(inference_input["observed_name"]),
         )
+        used_heuristic = True
+        inference_detail = "OpenClaw unavailable, fell back to local conservative parsing."
+    if not parsed or not any(
+        str(parsed.get(key) or "").strip()
+        for key in ("preferred_name", "role_label", "relation_to_robot", "identity_summary")
+    ):
+        parsed = _heuristic_activation_identity(
+            transcript=transcript,
+            observed_name=str(inference_input["observed_name"]),
+        )
+        used_heuristic = True
+        inference_detail = inference_detail or "Model output was empty, fell back to local conservative parsing."
     preferred_name = str(parsed.get("preferred_name") or "").strip()
     if not preferred_name and inference_input["observed_name"]:
         preferred_name = str(inference_input["observed_name"]).strip()
@@ -2864,6 +2899,8 @@ async def activation_identity_infer(
         onboarding_notes=onboarding_notes,
         voice_intro_summary=voice_intro_summary,
         confidence=max(0.0, min(1.0, confidence)),
+        inference_source="heuristic" if used_heuristic or bool(parsed.get("heuristic")) else "ai",
+        inference_detail=inference_detail,
         raw_json=parsed or {"raw_text": raw},
     )
 
@@ -2902,6 +2939,8 @@ async def activation_assessment_start(
         if model_question:
             session_payload["last_question_id"] = str(model_question.get("id") or "")
             session_payload["latest_question"] = str(model_question.get("prompt") or "")
+            session_payload["question_pair"] = str(model_question.get("pair") or "")
+            session_payload["question_source"] = "ai"
         session_id = _save_assessment_session(conn, int(user["id"]), session_payload, session_id=None)
         existing = session_payload
     device_online, _selected = _assessment_device_online(conn, int(user["id"]), payload.device_id)

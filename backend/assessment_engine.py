@@ -163,6 +163,9 @@ def build_initial_session(now_ms: int) -> Dict[str, object]:
         "last_question_id": str(question["id"]),
         "latest_question": str(question["prompt"]),
         "latest_transcript": "",
+        "question_pair": str(question.get("pair") or ""),
+        "question_source": "question_bank",
+        "scoring_source": "pending",
         "type_code": "",
         "profile_preview": {},
         "voice_mode": "idle",
@@ -427,6 +430,8 @@ def merge_scoring(
         next_question = select_next_question(scores, asked_ids, confidence)
         merged["latest_question"] = str(next_question["prompt"])
         merged["last_question_id"] = str(next_question["id"])
+        merged["question_pair"] = str(next_question.get("pair") or "")
+        merged["question_source"] = "question_bank"
     return merged
 
 
@@ -502,4 +507,3 @@ def extract_termination_from_model(raw: str) -> Dict[str, object]:
         "reason": str(parsed.get("reason") or "").strip(),
         "missing_pair": str(parsed.get("missing_pair") or "").strip(),
     }
-

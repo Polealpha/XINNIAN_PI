@@ -77,6 +77,7 @@ def test_activation_endpoints_and_login_state(tmp_path, monkeypatch):
         assert inferred_json["preferred_name"] == "小北"
         assert inferred_json["role_label"] == "owner"
         assert inferred_json["confidence"] > 0.8
+        assert inferred_json["inference_source"] == "ai"
 
         completed = client.post(
             "/api/activation/complete",
@@ -154,6 +155,7 @@ def test_activation_identity_infer_falls_back_to_heuristics(tmp_path, monkeypatc
         assert payload["relation_to_robot"] == "primary_user"
         assert payload["confidence"] > 0.3
         assert "待确认" in payload["onboarding_notes"]
+        assert payload["inference_source"] == "heuristic"
 
 
 def test_activation_state_exposes_owner_binding_requirement(tmp_path, monkeypatch):

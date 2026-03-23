@@ -10,6 +10,8 @@ export interface ActivationIdentityInference {
   onboarding_notes: string;
   voice_intro_summary: string;
   confidence: number;
+  inference_source: string;
+  inference_detail: string;
   raw_json: Record<string, unknown>;
 }
 
@@ -80,6 +82,11 @@ export interface ActivationAssessmentState {
   inference_version: string;
   required_min_turns: number;
   max_turns: number;
+  question_source: string;
+  scoring_source: string;
+  question_pair: string;
+  mode_hint: string;
+  can_submit_text: boolean;
 }
 
 export interface ActivationAssessmentTurnResponse extends ActivationAssessmentState {

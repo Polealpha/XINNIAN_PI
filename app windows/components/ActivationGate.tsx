@@ -47,6 +47,8 @@ const emptyIdentity = (): ActivationIdentityInference => ({
   onboarding_notes: "",
   voice_intro_summary: "",
   confidence: 0,
+  inference_source: "heuristic",
+  inference_detail: "",
   raw_json: {},
 });
 
@@ -74,6 +76,11 @@ const emptyAssessment = (): ActivationAssessmentState => ({
   inference_version: "assessment-v1",
   required_min_turns: 12,
   max_turns: 28,
+  question_source: "question_bank",
+  scoring_source: "pending",
+  question_pair: "",
+  mode_hint: "text_mode_ready",
+  can_submit_text: true,
 });
 
 const scoreItems = (scores: ActivationAssessmentState["scores"]) => [
@@ -93,6 +100,32 @@ const confidenceItems = (confidence: ActivationAssessmentState["dimension_confid
   ["TF", confidence.TF],
   ["JP", confidence.JP],
 ];
+
+const ROLE_OPTIONS = [
+  { value: "owner", label: "主人" },
+  { value: "family", label: "家人" },
+  { value: "caregiver", label: "照护者" },
+  { value: "patient", label: "被照护者" },
+  { value: "operator", label: "设备操作员" },
+  { value: "admin", label: "管理员" },
+  { value: "unknown", label: "待确认" },
+];
+
+const RELATION_OPTIONS = [
+  { value: "primary_user", label: "主要使用者" },
+  { value: "family_member", label: "家庭成员" },
+  { value: "caregiver", label: "照护关系" },
+  { value: "maintainer", label: "维护/调试关系" },
+  { value: "unknown", label: "待确认" },
+];
+
+const HUMAN_ROLE_LABELS: Record<string, string> = Object.fromEntries(
+  ROLE_OPTIONS.map((item) => [item.value, item.label])
+);
+
+const HUMAN_RELATION_LABELS: Record<string, string> = Object.fromEntries(
+  RELATION_OPTIONS.map((item) => [item.value, item.label])
+);
 
 export const ActivationGate: React.FC<ActivationGateProps> = ({ onActivated }) => {
   const [booting, setBooting] = useState(true);
@@ -138,6 +171,8 @@ export const ActivationGate: React.FC<ActivationGateProps> = ({ onActivated }) =
       onboarding_notes: activation.onboarding_notes || "",
       voice_intro_summary: activation.voice_intro_summary || "",
       confidence: identityDone ? 1 : 0,
+      inference_source: identityDone ? "confirmed" : "heuristic",
+      inference_detail: identityDone ? "当前身份信息已经保存，可继续微调。" : "",
       raw_json: {},
     });
     setAssessmentState(assessment);
@@ -265,6 +300,33 @@ export const ActivationGate: React.FC<ActivationGateProps> = ({ onActivated }) =
     () => confidenceItems(assessmentState.dimension_confidence),
     [assessmentState.dimension_confidence]
   );
+  const canUseRobotVoice = identityReady && assessmentState.device_online && !psychometricCompleted;
+  const identitySourceLabel =
+    identityState.inference_source === "ai"
+      ? "AI 草稿"
+      : identityState.inference_source === "confirmed"
+        ? "已确认"
+        : "保守草稿";
+  const identitySourceTone =
+    identityState.inference_source === "ai"
+      ? "border-emerald-400/20 bg-emerald-500/10 text-emerald-200"
+      : identityState.inference_source === "confirmed"
+        ? "border-cyan-400/20 bg-cyan-500/10 text-cyan-200"
+        : "border-amber-400/20 bg-amber-500/10 text-amber-200";
+  const assessmentQuestionSourceLabel =
+    assessmentState.question_source === "ai" ? "AI 编排问题" : "题库保底问题";
+  const assessmentScoringSourceLabel =
+    assessmentState.scoring_source === "ai"
+      ? "AI 评分中"
+      : assessmentState.scoring_source === "heuristic"
+        ? "规则保底评分"
+        : "等待作答";
+  const assessmentModeMessage =
+    assessmentState.mode_hint === "robot_voice_active"
+      ? "设备在线，当前由机器人本地播报、录音与转写。"
+      : assessmentState.mode_hint === "robot_voice_ready"
+        ? "设备在线，但你现在仍可直接用文本或电脑麦克风完成测评。"
+        : "设备离线只会影响机器人语音链路，不影响文本测评继续完成。";
 
   const handleInferIdentity = async () => {
     if (!introTranscript.trim()) {
@@ -523,8 +585,8 @@ export const ActivationGate: React.FC<ActivationGateProps> = ({ onActivated }) =
   }
 
   return (
-    <div className="min-h-screen bg-[#070b14] text-slate-100 px-8 py-7">
-      <div className="max-w-7xl mx-auto flex flex-col gap-6">
+    <div className="h-screen overflow-y-auto overflow-x-hidden bg-[#070b14] text-slate-100 px-8 py-7">
+      <div className="max-w-7xl mx-auto flex flex-col gap-6 pb-8">
         <div className="rounded-[2rem] border border-white/10 bg-slate-950/60 backdrop-blur-2xl px-8 py-6 flex items-center justify-between gap-6">
           <div className="flex items-center gap-4">
             <div className="w-14 h-14 rounded-3xl bg-emerald-500/15 text-emerald-300 border border-emerald-500/20 flex items-center justify-center">
@@ -563,19 +625,29 @@ export const ActivationGate: React.FC<ActivationGateProps> = ({ onActivated }) =
               <UserRound size={18} className="text-indigo-300" />
               <h2 className="text-lg font-black">1. 身份确认</h2>
             </div>
-            <p className="text-xs text-slate-400 font-semibold leading-6">
-              这一段只做“这个人是谁”的确认。先让对方做一句自我介绍，例如“我叫小北，是这个机器人的主人”。
-            </p>
+            <div className="rounded-3xl border border-white/10 bg-slate-900/60 p-4 space-y-3">
+              <p className="text-xs text-slate-300 font-semibold leading-6">
+                先输入一句自然自我介绍。系统会先尝试用 AI 生成身份草稿；如果 AI 当前不可用，会退回到本地保守规则，但会明确告诉你不是 AI 结果。
+              </p>
+              <div className="grid grid-cols-2 gap-3 text-[11px] font-semibold text-slate-400">
+                <div className="rounded-2xl border border-white/10 bg-slate-950/60 px-3 py-3">
+                  必填 1：一句自我介绍
+                </div>
+                <div className="rounded-2xl border border-white/10 bg-slate-950/60 px-3 py-3">
+                  选填 2：如果已知称呼，可提前补上
+                </div>
+              </div>
+            </div>
             <textarea
               value={introTranscript}
               onChange={(e) => setIntroTranscript(e.target.value)}
-              placeholder="输入第一次自我介绍，或者把机器人语音转写贴进来。"
+              placeholder="例如：我叫赵京亮，是这个机器人的主人，平时更喜欢安静、讲逻辑一点的交流。"
               className="min-h-[132px] rounded-3xl bg-slate-900/70 border border-white/10 px-4 py-4 text-sm font-semibold text-slate-100 outline-none resize-none"
             />
             <input
               value={observedName}
               onChange={(e) => setObservedName(e.target.value)}
-              placeholder="如果已经知道称呼，可以先填在这里"
+              placeholder="补充称呼，例如：赵京亮 / 京亮 / 爸爸"
               className="rounded-2xl bg-slate-900/70 border border-white/10 px-4 py-3 text-sm font-semibold text-slate-100 outline-none"
             />
             <button
@@ -584,34 +656,81 @@ export const ActivationGate: React.FC<ActivationGateProps> = ({ onActivated }) =
               className="rounded-2xl bg-indigo-500/15 border border-indigo-400/20 text-indigo-200 py-3 font-black text-sm flex items-center justify-center gap-2 disabled:opacity-50"
             >
               {busy ? <LoaderCircle className="animate-spin" size={16} /> : <Sparkles size={16} />}
-              生成身份草稿
+              生成 AI 身份草稿
             </button>
-            <div className="grid grid-cols-2 gap-3">
-              <input
-                value={identityState.preferred_name}
-                onChange={(e) => setIdentityState((prev) => ({ ...prev, preferred_name: e.target.value }))}
-                placeholder="称呼"
-                className="rounded-2xl bg-slate-900/70 border border-white/10 px-4 py-3 text-sm font-semibold outline-none"
-              />
-              <input
-                value={identityState.role_label}
-                onChange={(e) => setIdentityState((prev) => ({ ...prev, role_label: e.target.value }))}
-                placeholder="角色"
-                className="rounded-2xl bg-slate-900/70 border border-white/10 px-4 py-3 text-sm font-semibold outline-none"
-              />
+            <div className={`rounded-3xl border px-4 py-4 space-y-3 ${identitySourceTone}`}>
+              <div className="flex items-center justify-between gap-3">
+                <span className="text-xs font-black uppercase tracking-[0.2em]">草稿状态</span>
+                <span className="text-xs font-black">
+                  {identitySourceLabel} · 可信度 {Math.round((identityState.confidence || 0) * 100)}%
+                </span>
+              </div>
+              <p className="text-xs font-semibold leading-6">
+                {identityState.inference_source === "ai"
+                  ? "这份身份草稿来自 AI 提取，但仍建议你人工确认后再保存。"
+                  : identityState.inference_source === "confirmed"
+                    ? "当前身份信息已经保存，你仍然可以在下面继续手动修正。"
+                    : "当前不是 AI 草稿，而是本地保守规则给出的兜底结果。请务必人工确认。"}
+              </p>
+              {identityState.inference_detail && (
+                <p className="text-[11px] font-semibold leading-6 opacity-90">{identityState.inference_detail}</p>
+              )}
+              {identityState.onboarding_notes && (
+                <p className="text-[11px] font-semibold leading-6 opacity-90">{identityState.onboarding_notes}</p>
+              )}
             </div>
-            <input
-              value={identityState.relation_to_robot}
-              onChange={(e) => setIdentityState((prev) => ({ ...prev, relation_to_robot: e.target.value }))}
-              placeholder="与机器人的关系"
-              className="rounded-2xl bg-slate-900/70 border border-white/10 px-4 py-3 text-sm font-semibold outline-none"
-            />
+            <div className="grid grid-cols-2 gap-3">
+              <label className="rounded-2xl bg-slate-900/70 border border-white/10 px-4 py-3 text-sm font-semibold text-slate-100">
+                <div className="mb-2 text-[10px] font-black uppercase tracking-[0.2em] text-slate-500">称呼</div>
+                <input
+                  value={identityState.preferred_name}
+                  onChange={(e) => setIdentityState((prev) => ({ ...prev, preferred_name: e.target.value }))}
+                  placeholder="例如：赵京亮"
+                  className="w-full bg-transparent outline-none"
+                />
+              </label>
+              <label className="rounded-2xl bg-slate-900/70 border border-white/10 px-4 py-3 text-sm font-semibold text-slate-100">
+                <div className="mb-2 text-[10px] font-black uppercase tracking-[0.2em] text-slate-500">身份角色</div>
+                <select
+                  value={identityState.role_label || "unknown"}
+                  onChange={(e) => setIdentityState((prev) => ({ ...prev, role_label: e.target.value }))}
+                  className="w-full bg-transparent outline-none"
+                >
+                  {ROLE_OPTIONS.map((item) => (
+                    <option key={item.value} value={item.value} className="bg-slate-950 text-slate-100">
+                      {item.label}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            </div>
+            <label className="rounded-2xl bg-slate-900/70 border border-white/10 px-4 py-3 text-sm font-semibold text-slate-100">
+              <div className="mb-2 text-[10px] font-black uppercase tracking-[0.2em] text-slate-500">与机器人的关系</div>
+              <select
+                value={identityState.relation_to_robot || "unknown"}
+                onChange={(e) => setIdentityState((prev) => ({ ...prev, relation_to_robot: e.target.value }))}
+                className="w-full bg-transparent outline-none"
+              >
+                {RELATION_OPTIONS.map((item) => (
+                  <option key={item.value} value={item.value} className="bg-slate-950 text-slate-100">
+                    {item.label}
+                  </option>
+                ))}
+              </select>
+            </label>
             <textarea
               value={identityState.identity_summary}
               onChange={(e) => setIdentityState((prev) => ({ ...prev, identity_summary: e.target.value }))}
-              placeholder="身份摘要"
+              placeholder="一句话总结这个人是谁，以及机器人之后应该以什么身份对待他。"
               className="min-h-[90px] rounded-3xl bg-slate-900/70 border border-white/10 px-4 py-4 text-sm font-semibold text-slate-100 outline-none resize-none"
             />
+            <div className="rounded-3xl border border-white/10 bg-slate-900/60 p-4 text-xs leading-6 text-slate-400 font-semibold">
+              当前识别结果：
+              <span className="ml-2 text-slate-200">
+                {identityState.preferred_name || "未识别称呼"} / {HUMAN_ROLE_LABELS[identityState.role_label] || "待确认"} /{" "}
+                {HUMAN_RELATION_LABELS[identityState.relation_to_robot] || "待确认"}
+              </span>
+            </div>
             <button
               onClick={handleCompleteIdentity}
               disabled={busy || identityReady}
@@ -635,6 +754,27 @@ export const ActivationGate: React.FC<ActivationGateProps> = ({ onActivated }) =
               >
                 重开测评
               </button>
+            </div>
+
+            <div className="rounded-3xl border border-cyan-400/15 bg-cyan-500/8 p-4 space-y-3">
+              <div className="flex items-center justify-between gap-3 text-xs font-black">
+                <span className="text-cyan-200">当前测评模式</span>
+                <span className="text-cyan-100">
+                  {assessmentState.device_online ? "设备在线" : "设备离线"} · 文本测评可用
+                </span>
+              </div>
+              <p className="text-xs leading-6 font-semibold text-cyan-100/90">{assessmentModeMessage}</p>
+              <div className="flex flex-wrap gap-2 text-[11px] font-bold">
+                <span className="rounded-full border border-white/10 bg-white/5 px-3 py-1.5 text-slate-200">
+                  问题来源：{assessmentQuestionSourceLabel}
+                </span>
+                <span className="rounded-full border border-white/10 bg-white/5 px-3 py-1.5 text-slate-200">
+                  当前评分：{assessmentScoringSourceLabel}
+                </span>
+                <span className="rounded-full border border-white/10 bg-white/5 px-3 py-1.5 text-slate-200">
+                  当前维度：{assessmentState.question_pair || "待分配"}
+                </span>
+              </div>
             </div>
 
             <div className="rounded-3xl border border-white/10 bg-slate-900/70 p-4 space-y-3">
@@ -675,12 +815,15 @@ export const ActivationGate: React.FC<ActivationGateProps> = ({ onActivated }) =
                   ? assessmentState.latest_question || "点击“确认身份并进入测评”后会开始第一题。"
                   : "先完成左侧身份确认。"}
               </div>
+              <p className="mt-3 text-xs leading-6 font-semibold text-fuchsia-100/80">
+                这不是固定标准答案测试。至少认真回答 12 轮，系统才会开始形成稳定的人格特征判断；如果信号还不够，会继续追问到最多 28 轮。
+              </p>
             </div>
 
             <textarea
               value={answerDraft}
               onChange={(e) => setAnswerDraft(e.target.value)}
-              placeholder="把这一轮回答输入这里；如果走机器人语音模式，也可以把转写内容贴进来。"
+              placeholder="请用自然语言真实作答。可以讲偏好、例子、习惯和原因，越具体越容易测出稳定人格特征。"
               disabled={!identityReady || psychometricCompleted}
               className="min-h-[132px] rounded-3xl bg-slate-900/70 border border-white/10 px-4 py-4 text-sm font-semibold text-slate-100 outline-none resize-none disabled:opacity-50"
             />
@@ -696,7 +839,7 @@ export const ActivationGate: React.FC<ActivationGateProps> = ({ onActivated }) =
               </button>
               <button
                 onClick={handleToggleVoice}
-                disabled={!identityReady || voiceBusy || psychometricCompleted}
+                disabled={!canUseRobotVoice || voiceBusy || psychometricCompleted}
                 className="rounded-2xl border border-cyan-400/25 bg-cyan-500/10 text-cyan-200 px-5 py-3 text-sm font-black flex items-center gap-2 disabled:opacity-50"
               >
                 {voiceBusy ? (
@@ -706,7 +849,11 @@ export const ActivationGate: React.FC<ActivationGateProps> = ({ onActivated }) =
                 ) : (
                   <PlayCircle size={16} />
                 )}
-                {assessmentState.voice_session_active ? "停止机器人语音测评" : "开启机器人语音测评"}
+                {assessmentState.voice_session_active
+                  ? "停止机器人语音测评"
+                  : assessmentState.device_online
+                    ? "开启机器人语音测评"
+                    : "设备离线，机器人语音不可用"}
               </button>
               <button
                 onClick={handleDesktopVoiceAnswer}
@@ -740,6 +887,9 @@ export const ActivationGate: React.FC<ActivationGateProps> = ({ onActivated }) =
                 </div>
               ))}
             </div>
+            <div className="rounded-3xl border border-white/10 bg-slate-900/60 p-4 text-xs leading-6 text-slate-400 font-semibold">
+              判定逻辑说明：每一轮回答会先尝试走 AI 编排与 AI 评分；如果当前模型不可用，系统会降级到题库问题和保守规则评分，保证测评可以继续，但页面会明确标出不是 AI 结果。
+            </div>
           </section>
 
           <section className="col-span-3 rounded-[2rem] border border-white/10 bg-slate-950/45 p-6 flex flex-col gap-4">
@@ -767,14 +917,14 @@ export const ActivationGate: React.FC<ActivationGateProps> = ({ onActivated }) =
                 机器人语音状态
               </div>
               <p className="text-xs leading-6 font-semibold text-slate-400">
-                语音测评走开发板本地半双工：开发板本地播报问题、录音、转写，再由后端编排下一轮。
+                机器人语音只是“播报 + 录音 + 转写”的硬件链路；真正的人格测评核心仍然在后端文本/AI分析，不会因为设备离线就完全无法测。
               </p>
               <div className="text-sm font-bold text-slate-200">
                 {assessmentState.device_online
                   ? assessmentState.voice_session_active
                     ? "设备在线，机器人语音模式已开启"
-                    : "设备在线，但当前使用文本模式"
-                  : "设备离线，当前只能文本模式"}
+                    : "设备在线，但当前仍可直接用文本模式继续"
+                  : "设备离线，当前自动退回文本测评"}
               </div>
               <div className="text-xs leading-6 font-semibold text-slate-400">
                 最近转写：{assessmentState.latest_transcript || "暂无"}
