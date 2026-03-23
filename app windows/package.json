@@ -75,6 +75,10 @@
       {
         "from": "../models",
         "to": "bridge-runtime/models"
+      },
+      {
+        "from": "../../openclaw",
+        "to": "openclaw"
       }
     ],
     "win": {
