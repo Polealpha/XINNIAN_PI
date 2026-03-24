@@ -1,0 +1,66 @@
+{
+  "main": {
+    "session_key": "agent:main:main",
+    "msg": "????pong TEST_1771769131",
+    "ack": {
+      "type": "res",
+      "id": "acdc8d40-6ed1-4e08-8fad-2643ea983df0",
+      "ok": true,
+      "payload": {
+        "runId": "cmp-main-1771769131753",
+        "status": "started"
+      }
+    },
+    "events": [
+      {
+        "type": "event",
+        "event": "agent",
+        "payload": {
+          "runId": "cmp-main-1771769131753",
+          "stream": "lifecycle",
+          "data": {
+            "phase": "start",
+            "startedAt": 1771769131789
+          },
+          "sessionKey": "agent:main:main",
+          "seq": 1,
+          "ts": 1771769131789
+        },
+        "seq": 419
+      }
+    ],
+    "run_id": "cmp-main-1771769131753"
+  },
+  "wecom": {
+    "session_key": "agent:main:wecom",
+    "msg": "????pong TEST_1771769131",
+    "ack": {
+      "type": "res",
+      "id": "a04548e5-cd73-4892-8181-a6faf8224ccc",
+      "ok": true,
+      "payload": {
+        "runId": "cmp-wecom-1771769177258",
+        "status": "started"
+      }
+    },
+    "events": [
+      {
+        "type": "event",
+        "event": "agent",
+        "payload": {
+          "runId": "cmp-wecom-1771769177258",
+          "stream": "lifecycle",
+          "data": {
+            "phase": "start",
+            "startedAt": 1771769177292
+          },
+          "sessionKey": "agent:main:wecom",
+          "seq": 1,
+          "ts": 1771769177292
+        },
+        "seq": 423
+      }
+    ],
+    "run_id": "cmp-wecom-1771769177258"
+  }
+}

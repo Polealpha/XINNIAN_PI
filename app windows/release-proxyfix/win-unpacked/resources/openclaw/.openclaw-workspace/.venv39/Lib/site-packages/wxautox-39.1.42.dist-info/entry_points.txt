@@ -1,0 +1,3 @@
+[console_scripts]
+wxautox=wxautox.__main__:main
+

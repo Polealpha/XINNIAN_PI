@@ -1,0 +1,16 @@
+{
+  "target_contact_name": "夜半沉思",
+  "target_aliases": [
+    "夜半沉思"
+  ],
+  "poll_interval_sec": 1.5,
+  "startup_tail_only": true,
+  "notification_db_path": "C:\\Users\\jingk\\AppData\\Local\\Microsoft\\Windows\\Notifications\\wpndatabase.db",
+  "debug": true,
+  "openai_model": "gpt-4o-mini",
+  "system_prompt": "你是微信里的私人AI助手。用中文回复，简洁自然，聚焦可执行建议。",
+  "temperature": 0.6,
+  "max_tokens": 300,
+  "reply_prefix": "",
+  "fallback_reply_when_no_key": true
+}

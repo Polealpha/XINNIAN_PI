@@ -1,0 +1,25 @@
+{
+  "marker": "WXBRIDGE_TEST_1771767512",
+  "run_id": "wecom-test-1771767512514",
+  "send_ok": true,
+  "send_payload": {
+    "runId": "wecom-test-1771767512514",
+    "status": "started"
+  },
+  "events": [
+    {
+      "event": "agent",
+      "payload": {
+        "runId": "wecom-test-1771767512514",
+        "stream": "lifecycle",
+        "data": {
+          "phase": "start",
+          "startedAt": 1771767512547
+        },
+        "sessionKey": "agent:main:wecom",
+        "seq": 1,
+        "ts": 1771767512547
+      }
+    }
+  ]
+}

@@ -1,0 +1,26 @@
+Metadata-Version: 2.4
+Name: wxautox
+Version: 39.1.42
+Summary: wxauto 3.9 plus V2 version
+Author: Cluic
+Author-email: tikic@qq.com
+Requires-Python: >=3.9,<3.14
+Classifier: Programming Language :: Python :: 3
+Classifier: Programming Language :: Python :: 3.9
+Classifier: Programming Language :: Python :: 3.10
+Classifier: Programming Language :: Python :: 3.11
+Classifier: Programming Language :: Python :: 3.12
+Classifier: Programming Language :: Python :: 3.13
+Requires-Dist: colorama
+Requires-Dist: comtypes
+Requires-Dist: pillow
+Requires-Dist: psutil
+Requires-Dist: pyperclip
+Requires-Dist: pywin32
+Requires-Dist: requests
+Requires-Dist: tenacity
+Description-Content-Type: text/markdown
+
+# wxautoV2版本
+
+适用于微信客户端3.9.8+

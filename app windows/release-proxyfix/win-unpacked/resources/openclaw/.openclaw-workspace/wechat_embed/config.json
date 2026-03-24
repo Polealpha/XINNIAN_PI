@@ -1,0 +1,11 @@
+{
+  "target_contact_name": "夜半沉思",
+  "target_contact_wxid": "",
+  "openai_model": "gpt-4o-mini",
+  "system_prompt": "你是微信里的私人AI助手。用中文回复，简洁自然，聚焦可执行建议。",
+  "temperature": 0.6,
+  "max_tokens": 300,
+  "reply_prefix": "",
+  "fallback_reply_when_no_key": true,
+  "debug": true
+}
