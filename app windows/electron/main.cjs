@@ -62,6 +62,45 @@ const resolveOpenClawCodexHome = (runtimeRoot) => {
   return path.join(runtimeRoot, "assistant_data", "codex_home");
 };
 
+const resolveOpenClawProxyUrl = () => {
+  for (const key of ["OPENCLAW_PROXY_URL", "HTTPS_PROXY", "HTTP_PROXY", "ALL_PROXY"]) {
+    if (process.env[key]) {
+      return process.env[key];
+    }
+  }
+  if (process.platform === "win32") {
+    for (const port of [7897, 7890, 10808, 1080]) {
+      try {
+        const probe = spawnSync(
+          "cmd",
+          ["/c", `netstat -ano | findstr LISTENING | findstr 127.0.0.1:${port}`],
+          { stdio: "ignore", windowsHide: true }
+        );
+        if (probe.status === 0) {
+          return `http://127.0.0.1:${port}`;
+        }
+      } catch {}
+    }
+  }
+  return "";
+};
+
+const buildOpenClawProxyEnv = () => {
+  const proxyUrl = resolveOpenClawProxyUrl();
+  if (!proxyUrl) {
+    return {};
+  }
+  return {
+    OPENCLAW_PROXY_URL: proxyUrl,
+    HTTPS_PROXY: proxyUrl,
+    HTTP_PROXY: proxyUrl,
+    ALL_PROXY: proxyUrl,
+    https_proxy: proxyUrl,
+    http_proxy: proxyUrl,
+    all_proxy: proxyUrl,
+  };
+};
+
 const ensureOpenClawWorkspace = (workspaceDir) => {
   fs.mkdirSync(workspaceDir, { recursive: true });
   fs.mkdirSync(path.join(workspaceDir, "memory"), { recursive: true });
@@ -224,6 +263,7 @@ const startLocalBackend = () => {
       cwd: runtimeRoot,
       env: {
         ...process.env,
+        ...buildOpenClawProxyEnv(),
         PYTHONPATH: runtimeRoot,
         OPENCLAW_WORKSPACE_DIR: resolveOpenClawWorkspace(runtimeRoot),
         OPENCLAW_STATE_DIR: resolveOpenClawStateDir(runtimeRoot),
@@ -290,6 +330,7 @@ const startLocalOpenClawGateway = () => {
       cwd: workspaceDir,
       env: {
         ...process.env,
+        ...buildOpenClawProxyEnv(),
         OPENCLAW_STATE_DIR: process.env.OPENCLAW_STATE_DIR || stateDir,
         OPENCLAW_CODEX_HOME: process.env.OPENCLAW_CODEX_HOME || codexHome,
         CODEX_HOME: process.env.CODEX_HOME || codexHome,

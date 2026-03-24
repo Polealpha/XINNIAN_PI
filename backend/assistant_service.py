@@ -24,6 +24,7 @@ from .openclaw_gateway import (
     OpenClawGatewayConfig,
     OpenClawGatewayError,
     discover_openclaw_state_dir,
+    resolve_openclaw_proxy_url,
 )
 from .settings import (
     DEFAULT_ROBOT_DEVICE_IP,
@@ -355,6 +356,18 @@ class AssistantService:
         }
 
     def _probe_provider_network(self) -> Tuple[bool, str]:
+        proxy_url = resolve_openclaw_proxy_url()
+        if proxy_url:
+            parsed = urlparse(proxy_url)
+            proxy_host = parsed.hostname
+            proxy_port = parsed.port or (443 if parsed.scheme == "https" else 80)
+            if not proxy_host:
+                return False, f"configured proxy is invalid: {proxy_url}"
+            try:
+                with socket.create_connection((proxy_host, int(proxy_port)), timeout=1.5):
+                    return True, f"provider traffic routed via proxy: {proxy_url}"
+            except OSError as exc:
+                return False, f"configured proxy unreachable: {proxy_url} ({exc})"
         targets = [("api.openai.com", 443), ("chatgpt.com", 443)]
         errors: List[str] = []
         for host, port in targets:

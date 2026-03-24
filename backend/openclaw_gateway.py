@@ -9,12 +9,14 @@ import os
 import re
 import shutil
 import sqlite3
+import socket
 import subprocess
 import time
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, List, Optional
+from urllib.parse import urlparse
 
 from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat, load_pem_private_key, load_pem_public_key
 
@@ -28,6 +30,14 @@ class OpenClawGatewayError(RuntimeError):
     pass
 
 
+_LOCAL_PROXY_CANDIDATES = (
+    "http://127.0.0.1:7897",
+    "http://127.0.0.1:7890",
+    "http://127.0.0.1:10808",
+    "http://127.0.0.1:1080",
+)
+
+
 @dataclass
 class OpenClawGatewayConfig:
     state_dir: str
@@ -39,6 +49,54 @@ class OpenClawGatewayConfig:
     timeout_ms: int
     client_id: str
     client_mode: str
+
+
+def _proxy_endpoint_reachable(proxy_url: str, timeout_s: float = 0.3) -> bool:
+    parsed = urlparse(str(proxy_url or "").strip())
+    host = parsed.hostname
+    if not host:
+        return False
+    port = parsed.port or (443 if parsed.scheme == "https" else 80)
+    try:
+        with socket.create_connection((host, int(port)), timeout=timeout_s):
+            return True
+    except OSError:
+        return False
+
+
+def resolve_openclaw_proxy_url(env: Optional[Dict[str, str]] = None) -> str:
+    source = env or os.environ
+    for key in (
+        "OPENCLAW_PROXY_URL",
+        "HTTPS_PROXY",
+        "https_proxy",
+        "ALL_PROXY",
+        "all_proxy",
+        "HTTP_PROXY",
+        "http_proxy",
+    ):
+        value = str(source.get(key, "") or "").strip()
+        if value:
+            return value
+    for candidate in _LOCAL_PROXY_CANDIDATES:
+        if _proxy_endpoint_reachable(candidate):
+            return candidate
+    return ""
+
+
+def build_openclaw_proxy_env(env: Optional[Dict[str, str]] = None) -> Dict[str, str]:
+    proxy_url = resolve_openclaw_proxy_url(env)
+    if not proxy_url:
+        return {}
+    return {
+        "OPENCLAW_PROXY_URL": proxy_url,
+        "HTTPS_PROXY": proxy_url,
+        "https_proxy": proxy_url,
+        "HTTP_PROXY": proxy_url,
+        "http_proxy": proxy_url,
+        "ALL_PROXY": proxy_url,
+        "all_proxy": proxy_url,
+    }
 
 
 def discover_openclaw_state_dir(configured: str, workspace_dir: str) -> Path:
@@ -209,6 +267,7 @@ class OpenClawGatewayClient:
             **os.environ,
             "OPENCLAW_STATE_DIR": str(runtime["state_dir"]),
         }
+        env.update(build_openclaw_proxy_env(env))
         codex_home = self._prepare_codex_home(runtime)
         env["CODEX_HOME"] = str(codex_home)
         codex_tmp = codex_home / "tmp"
@@ -307,6 +366,7 @@ class OpenClawGatewayClient:
             **os.environ,
             "OPENCLAW_STATE_DIR": str(runtime["state_dir"]),
         }
+        env.update(build_openclaw_proxy_env(env))
         codex_home = self._prepare_codex_home(runtime)
         env["CODEX_HOME"] = str(codex_home)
         codex_tmp = codex_home / "tmp"

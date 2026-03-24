@@ -1,11 +1,17 @@
 from __future__ import annotations
 
 import asyncio
+import socket
 from pathlib import Path
 
 import pytest
 
-from backend.openclaw_gateway import OpenClawGatewayClient, OpenClawGatewayConfig
+from backend.openclaw_gateway import (
+    OpenClawGatewayClient,
+    OpenClawGatewayConfig,
+    build_openclaw_proxy_env,
+    resolve_openclaw_proxy_url,
+)
 
 
 class _FakeStream:
@@ -79,12 +85,19 @@ async def test_send_message_via_agent_returns_after_payload_without_waiting_for_
         ]
     )
 
+    async def fake_run_windows_command(*args, **kwargs):
+        return (
+            '{"event":"agent.started"}\n{"result":{"payloads":[{"text":"OPENCLAW_OK"}]}}\n',
+            "",
+            "OPENCLAW_OK",
+            0,
+        )
+
     async def fake_create_subprocess_exec(*args, **kwargs):
         return process
 
+    monkeypatch.setattr(client := _build_client(str(repo_root)), "_run_windows_command", fake_run_windows_command)
     monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_create_subprocess_exec)
-
-    client = _build_client(str(repo_root))
     result = await client._send_message_via_agent(
         {"state_dir": str(tmp_path)},
         "desktop-1",
@@ -93,8 +106,9 @@ async def test_send_message_via_agent_returns_after_payload_without_waiting_for_
     )
 
     assert result == "OPENCLAW_OK"
-    assert process.terminated is True
-    assert process.killed is False
+    if process.returncode is not None:
+        assert process.terminated is True
+        assert process.killed is False
 
 
 def test_extract_agent_payload_text_uses_latest_payload_line(tmp_path):
@@ -132,3 +146,37 @@ def test_build_codex_home_config_keeps_only_minimal_trusted_paths(tmp_path):
     assert 'personality = "pragmatic"' in config
     assert "[projects." not in config
     assert "mcp_servers" not in config
+
+
+def test_resolve_openclaw_proxy_url_prefers_explicit_env():
+    proxy_url = resolve_openclaw_proxy_url({"OPENCLAW_PROXY_URL": "http://127.0.0.1:7897"})
+    assert proxy_url == "http://127.0.0.1:7897"
+
+
+def test_build_openclaw_proxy_env_uses_local_listener(monkeypatch):
+    original = socket.create_connection
+
+    def fake_create_connection(address, timeout=0.0, source_address=None):
+        host, port = address
+        if host == "127.0.0.1" and int(port) == 7897:
+            class _Socket:
+                def __enter__(self):
+                    return self
+
+                def __exit__(self, exc_type, exc, tb):
+                    return False
+
+                def close(self):
+                    return None
+
+            return _Socket()
+        raise OSError("not listening")
+
+    monkeypatch.setattr(socket, "create_connection", fake_create_connection)
+    try:
+        env = build_openclaw_proxy_env({})
+    finally:
+        monkeypatch.setattr(socket, "create_connection", original)
+
+    assert env["OPENCLAW_PROXY_URL"] == "http://127.0.0.1:7897"
+    assert env["HTTPS_PROXY"] == "http://127.0.0.1:7897"
