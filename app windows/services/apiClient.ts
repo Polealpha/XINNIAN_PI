@@ -20,13 +20,14 @@ const LOCAL_PATH_PREFIXES = [
   "/api/assistant/",
   "/api/desktop/",
   "/api/llm/",
+  "/api/activation/",
+  "/api/device/owner/",
 ];
 
 const REMOTE_PATH_PREFIXES = [
   "/api/auth/",
   "/api/user/",
   "/api/chat/",
-  "/api/activation/",
   "/api/device/",
   "/api/client/",
   "/api/emotion/",

@@ -5,6 +5,7 @@ import sqlite3
 import time
 
 from fastapi.testclient import TestClient
+from jose import jwt
 
 import backend.auth as auth
 import backend.db as db
@@ -349,3 +350,150 @@ def test_owner_enrollment_requires_completed_assessment(tmp_path, monkeypatch):
         )
         assert response.status_code == 403
         assert "assessment" in response.json()["detail"].lower()
+
+
+def _foreign_access_token(user_id: int, username: str) -> str:
+    now = int(time.time())
+    payload = {
+        "sub": str(user_id),
+        "username": username,
+        "type": "access",
+        "iat": now,
+        "exp": now + 3600,
+        "jti": f"foreign-{user_id}",
+    }
+    return jwt.encode(payload, "foreign-secret", algorithm=auth.AUTH_ALGORITHM)
+
+
+def test_local_activation_state_accepts_remote_issued_token(tmp_path, monkeypatch):
+    db_path = tmp_path / "auth.db"
+    workspace_dir = tmp_path / "workspace"
+    monkeypatch.setattr(db, "DB_PATH", str(db_path))
+    monkeypatch.setattr(main.assistant_service, "store", AssistantWorkspaceStore(str(workspace_dir)))
+    monkeypatch.setattr(main, "ALLOW_UNVERIFIED_LOCAL_DESKTOP_TOKENS", True)
+    db.init_db()
+
+    token = _foreign_access_token(7, "remote@example.com")
+    headers = {"Authorization": f"Bearer {token}"}
+
+    with TestClient(main.app) as client:
+        response = client.get("/api/activation/state", headers=headers)
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["is_configured"] is False
+        assert payload["activation_required"] is True
+
+    conn = sqlite3.connect(str(db_path))
+    conn.row_factory = sqlite3.Row
+    try:
+        shadow_user = conn.execute("SELECT * FROM users WHERE id = ?", (7,)).fetchone()
+        assert shadow_user is not None
+        assert int(shadow_user["is_configured"] or 0) == 0
+        assert str(shadow_user["username"]) == "remote@example.com"
+    finally:
+        conn.close()
+
+
+def test_activation_runtime_status_requires_provider_network(tmp_path, monkeypatch):
+    db_path = tmp_path / "auth.db"
+    workspace_dir = tmp_path / "workspace"
+    monkeypatch.setattr(db, "DB_PATH", str(db_path))
+    monkeypatch.setattr(main.assistant_service, "store", AssistantWorkspaceStore(str(workspace_dir)))
+    monkeypatch.setattr(main, "ALLOW_UNVERIFIED_LOCAL_DESKTOP_TOKENS", True)
+    db.init_db()
+
+    token = _foreign_access_token(11, "runtime-remote@example.com")
+    headers = {"Authorization": f"Bearer {token}"}
+
+    monkeypatch.setattr(
+        main.assistant_service,
+        "runtime_status",
+        lambda: {
+            "gateway_ready": True,
+            "gateway_error": "",
+            "provider_network_ok": False,
+            "provider_network_detail": "provider timeout",
+        },
+    )
+
+    with TestClient(main.app) as client:
+        response = client.get("/api/activation/runtime/status", headers=headers)
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["ai_ready"] is False
+        assert "provider timeout" in payload["ai_detail"]
+
+
+def test_owner_binding_endpoints_accept_remote_issued_token(tmp_path, monkeypatch):
+    db_path = tmp_path / "auth.db"
+    workspace_dir = tmp_path / "workspace"
+    monkeypatch.setattr(db, "DB_PATH", str(db_path))
+    monkeypatch.setattr(main.assistant_service, "store", AssistantWorkspaceStore(str(workspace_dir)))
+    monkeypatch.setattr(main, "ALLOW_UNVERIFIED_LOCAL_DESKTOP_TOKENS", True)
+    db.init_db()
+
+    now_s = int(time.time())
+    now_ms = int(time.time() * 1000)
+    conn = sqlite3.connect(str(db_path))
+    try:
+        conn.execute(
+            "INSERT INTO users (id, username, password_hash, created_at, is_configured) VALUES (?, ?, ?, ?, 1)",
+            (9, "owner-remote@example.com", auth.hash_password("unused-secret"), now_s),
+        )
+        conn.execute(
+            "INSERT INTO devices (user_id, device_id, device_ip, updated_at, onboarding_state, identity_state) VALUES (?, ?, ?, ?, ?, ?)",
+            (9, "pi-zero", "127.0.0.1:8090", now_ms, "online", "unenrolled"),
+        )
+        conn.execute(
+            """
+            INSERT INTO user_psychometric_profiles (
+                user_id, type_code, scores_json, dimension_confidence_json, evidence_summary_json,
+                summary, response_style, care_style, conversation_count, completed_at_ms,
+                inference_version, profile_json, updated_at, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                9,
+                "INTJ",
+                "{}",
+                "{}",
+                "{}",
+                "stable profile",
+                "direct",
+                "calm",
+                12,
+                now_ms,
+                "assessment-v1",
+                "{}",
+                now_ms,
+                now_ms,
+            ),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    monkeypatch.setattr(
+        main,
+        "_post_device_json",
+        lambda device_ip, path, payload, timeout_sec=4.0: {"ok": True, "path": path, "owner_label": payload.get("owner_label")},
+    )
+
+    token = _foreign_access_token(9, "owner-remote@example.com")
+    headers = {"Authorization": f"Bearer {token}"}
+
+    with TestClient(main.app) as client:
+        status_response = client.get("/api/device/owner/status?device_id=pi-zero", headers=headers)
+        assert status_response.status_code == 200
+        assert status_response.json()["enrolled"] is False
+
+        start_response = client.post(
+            "/api/device/owner/enrollment/start",
+            headers=headers,
+            json={"device_id": "pi-zero", "owner_label": "owner"},
+        )
+        assert start_response.status_code == 200
+        payload = start_response.json()
+        assert payload["ok"] is True
+        assert payload["started"] is True
+        assert payload["device_id"] == "pi-zero"

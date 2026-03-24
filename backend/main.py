@@ -2628,7 +2628,13 @@ def _is_loopback_request(request: Optional[Request]) -> bool:
     return host in {"127.0.0.1", "::1", "localhost", "testclient"}
 
 
-def _ensure_shadow_user(conn: Connection, user_id: int, username: str) -> Dict[str, Any]:
+def _ensure_shadow_user(
+    conn: Connection,
+    user_id: int,
+    username: str,
+    *,
+    is_configured: bool = False,
+) -> Dict[str, Any]:
     now = int(time.time())
     existing = _get_user_by_id(conn, user_id)
     if existing:
@@ -2643,9 +2649,16 @@ def _ensure_shadow_user(conn: Connection, user_id: int, username: str) -> Dict[s
     conn.execute(
         """
         INSERT INTO users (id, username, password_hash, created_at, updated_at, is_configured)
-        VALUES (?, ?, ?, ?, ?, 1)
+        VALUES (?, ?, ?, ?, ?, ?)
         """,
-        (int(user_id), shadow_username, auth.hash_password(f"shadow-user-{user_id}"), now, now),
+        (
+            int(user_id),
+            shadow_username,
+            auth.hash_password(f"shadow-user-{user_id}"),
+            now,
+            now,
+            1 if is_configured else 0,
+        ),
     )
     conn.commit()
     created = _get_user_by_id(conn, user_id)
@@ -2677,6 +2690,31 @@ def _parse_access_token_for_local_desktop(
             raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token subject")
         username = str(payload.get("username") or f"desktop-shadow-{user_id}").strip()
         return _ensure_shadow_user(conn, user_id, username)
+
+
+def _parse_access_token_for_local_activation(
+    credentials: HTTPAuthorizationCredentials,
+    conn: Connection,
+    request: Optional[Request] = None,
+) -> Dict:
+    try:
+        return _parse_access_token(credentials, conn)
+    except HTTPException:
+        if not ALLOW_UNVERIFIED_LOCAL_DESKTOP_TOKENS or not _is_loopback_request(request):
+            raise
+        if credentials is None or credentials.scheme.lower() != "bearer":
+            raise
+        payload = auth.decode_token_unverified(credentials.credentials)
+        if not payload or payload.get("type") != "access":
+            raise
+        try:
+            user_id = int(payload.get("sub", 0))
+        except Exception as exc:
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token subject") from exc
+        if user_id <= 0:
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token subject")
+        username = str(payload.get("username") or f"desktop-shadow-{user_id}").strip()
+        return _ensure_shadow_user(conn, user_id, username, is_configured=False)
 
 
 def _bridge_user_from_request(request: Request, conn: Connection) -> Dict:
@@ -2786,27 +2824,34 @@ def me_api(
 
 @app.get("/api/activation/state", response_model=ActivationProfileResponse)
 def activation_state(
+    request: Request,
     credentials: HTTPAuthorizationCredentials = Depends(bearer_scheme),
     conn: Connection = Depends(get_db),
 ) -> ActivationProfileResponse:
-    user = _parse_access_token(credentials, conn)
+    user = _parse_access_token_for_local_activation(credentials, conn, request)
     profile = _get_activation_profile(conn, int(user["id"]))
     return _activation_response(conn, user, profile)
 
 
 @app.get("/api/activation/runtime/status", response_model=ActivationRuntimeStatusResponse)
 def activation_runtime_status(
+    request: Request,
     credentials: HTTPAuthorizationCredentials = Depends(bearer_scheme),
     conn: Connection = Depends(get_db),
 ) -> ActivationRuntimeStatusResponse:
-    user = _parse_access_token(credentials, conn)
+    user = _parse_access_token_for_local_activation(credentials, conn, request)
     runtime = assistant_service.runtime_status()
     device_online, selected = _assessment_device_online(conn, int(user["id"]))
     preferred_device_id = str((selected or {}).get("device_id") or "").strip()
+    gateway_ready = bool(runtime.get("gateway_ready"))
+    provider_network_ok = bool(runtime.get("provider_network_ok"))
+    ai_detail = str(runtime.get("gateway_error") or "").strip()
+    if not ai_detail:
+        ai_detail = str(runtime.get("provider_network_detail") or "").strip()
     return ActivationRuntimeStatusResponse(
         ok=True,
-        ai_ready=bool(runtime.get("gateway_ready")),
-        ai_detail=str(runtime.get("gateway_error") or "").strip(),
+        ai_ready=bool(gateway_ready and provider_network_ok),
+        ai_detail=ai_detail,
         text_assessment_ready=True,
         desktop_voice_ready=False,
         desktop_voice_detail="桌面麦克风转写由本地桌面后端提供，需本机运行时可用。",
@@ -2819,10 +2864,11 @@ def activation_runtime_status(
 @app.post("/api/activation/complete", response_model=ActivationProfileResponse)
 def activation_complete(
     payload: ActivationCompleteRequest,
+    request: Request,
     credentials: HTTPAuthorizationCredentials = Depends(bearer_scheme),
     conn: Connection = Depends(get_db),
 ) -> ActivationProfileResponse:
-    user = _parse_access_token(credentials, conn)
+    user = _parse_access_token_for_local_activation(credentials, conn, request)
     preferred_name = str(payload.preferred_name or "").strip()
     if not preferred_name:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="preferred_name is required")
@@ -2860,10 +2906,11 @@ def activation_complete(
 @app.post("/api/activation/identity/infer", response_model=ActivationIdentityInferResponse)
 async def activation_identity_infer(
     payload: ActivationIdentityInferRequest,
+    request: Request,
     credentials: HTTPAuthorizationCredentials = Depends(bearer_scheme),
     conn: Connection = Depends(get_db),
 ) -> ActivationIdentityInferResponse:
-    user = _parse_access_token(credentials, conn)
+    user = _parse_access_token_for_local_activation(credentials, conn, request)
     transcript = str(payload.transcript or "").strip()
     if not transcript:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="transcript is required")
@@ -2932,10 +2979,11 @@ async def activation_identity_infer(
 
 @app.get("/api/activation/prompt-pack", response_model=ActivationPromptPackResponse)
 def activation_prompt_pack(
+    request: Request,
     credentials: HTTPAuthorizationCredentials = Depends(bearer_scheme),
     conn: Connection = Depends(get_db),
 ) -> ActivationPromptPackResponse:
-    _parse_access_token(credentials, conn)
+    _parse_access_token_for_local_activation(credentials, conn, request)
     return ActivationPromptPackResponse(
         ok=True,
         system_prompt=ACTIVATION_SYSTEM_PROMPT,
@@ -2948,10 +2996,11 @@ def activation_prompt_pack(
 @app.post("/api/activation/assessment/start", response_model=ActivationAssessmentStateResponse)
 async def activation_assessment_start(
     payload: ActivationAssessmentStartRequest,
+    request: Request,
     credentials: HTTPAuthorizationCredentials = Depends(bearer_scheme),
     conn: Connection = Depends(get_db),
 ) -> ActivationAssessmentStateResponse:
-    user = _parse_access_token(credentials, conn)
+    user = _parse_access_token_for_local_activation(credentials, conn, request)
     if not bool(user.get("is_configured", 0)):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Identity activation must complete first")
     session_id, existing = _load_assessment_session(conn, int(user["id"]), active_only=True)
@@ -2974,10 +3023,11 @@ async def activation_assessment_start(
 
 @app.get("/api/activation/assessment/state", response_model=ActivationAssessmentStateResponse)
 def activation_assessment_state(
+    request: Request,
     credentials: HTTPAuthorizationCredentials = Depends(bearer_scheme),
     conn: Connection = Depends(get_db),
 ) -> ActivationAssessmentStateResponse:
-    user = _parse_access_token(credentials, conn)
+    user = _parse_access_token_for_local_activation(credentials, conn, request)
     _session_id, session_payload = _load_assessment_session(conn, int(user["id"]), active_only=False)
     device_online, _selected = _assessment_device_online(conn, int(user["id"]))
     if not session_payload:
@@ -3002,10 +3052,11 @@ def activation_assessment_state(
 @app.post("/api/activation/assessment/turn", response_model=ActivationAssessmentTurnResponse)
 async def activation_assessment_turn(
     payload: ActivationAssessmentTurnRequest,
+    request: Request,
     credentials: HTTPAuthorizationCredentials = Depends(bearer_scheme),
     conn: Connection = Depends(get_db),
 ) -> ActivationAssessmentTurnResponse:
-    user = _parse_access_token(credentials, conn)
+    user = _parse_access_token_for_local_activation(credentials, conn, request)
     session_id, session_payload = _load_assessment_session(conn, int(user["id"]), active_only=True)
     if not session_payload or session_id is None:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Assessment session not started")
@@ -3031,10 +3082,11 @@ async def activation_assessment_turn(
 
 @app.post("/api/activation/assessment/finish", response_model=ActivationAssessmentFinishResponse)
 def activation_assessment_finish(
+    request: Request,
     credentials: HTTPAuthorizationCredentials = Depends(bearer_scheme),
     conn: Connection = Depends(get_db),
 ) -> ActivationAssessmentFinishResponse:
-    user = _parse_access_token(credentials, conn)
+    user = _parse_access_token_for_local_activation(credentials, conn, request)
     session_id, session_payload = _load_assessment_session(conn, int(user["id"]), active_only=True)
     if not session_payload or session_id is None:
         profile = _get_psychometric_profile(conn, int(user["id"]))
@@ -3065,10 +3117,11 @@ def activation_assessment_finish(
 @app.post("/api/activation/assessment/voice/start")
 def activation_assessment_voice_start(
     payload: ActivationAssessmentVoiceRequest,
+    request: Request,
     credentials: HTTPAuthorizationCredentials = Depends(bearer_scheme),
     conn: Connection = Depends(get_db),
 ) -> Dict[str, object]:
-    user = _parse_access_token(credentials, conn)
+    user = _parse_access_token_for_local_activation(credentials, conn, request)
     device_online, selected = _assessment_device_online(conn, int(user["id"]), payload.device_id)
     if not selected or not device_online:
         return {"ok": True, "device_online": False, "state": "offline", "detail": "Device offline; voice mode unavailable"}
@@ -3100,10 +3153,11 @@ def activation_assessment_voice_start(
 @app.post("/api/activation/assessment/voice/stop")
 def activation_assessment_voice_stop(
     payload: ActivationAssessmentVoiceRequest,
+    request: Request,
     credentials: HTTPAuthorizationCredentials = Depends(bearer_scheme),
     conn: Connection = Depends(get_db),
 ) -> Dict[str, object]:
-    user = _parse_access_token(credentials, conn)
+    user = _parse_access_token_for_local_activation(credentials, conn, request)
     device_online, selected = _assessment_device_online(conn, int(user["id"]), payload.device_id)
     if not selected or not device_online:
         return {"ok": True, "device_online": False, "state": "offline"}
@@ -3123,10 +3177,11 @@ def activation_assessment_voice_stop(
 @app.post("/api/activation/assessment/voice/poll", response_model=ActivationAssessmentVoicePollResponse)
 async def activation_assessment_voice_poll(
     payload: ActivationAssessmentVoicePollRequest,
+    request: Request,
     credentials: HTTPAuthorizationCredentials = Depends(bearer_scheme),
     conn: Connection = Depends(get_db),
 ) -> ActivationAssessmentVoicePollResponse:
-    user = _parse_access_token(credentials, conn)
+    user = _parse_access_token_for_local_activation(credentials, conn, request)
     user_id = int(user["id"])
     session_id, session_payload = _load_assessment_session(conn, user_id, active_only=True)
     device_online, selected = _assessment_device_online(conn, user_id, payload.device_id)
@@ -3227,20 +3282,22 @@ async def activation_assessment_voice_poll(
 
 @app.get("/api/activation/personality/state", response_model=ActivationPersonalityStateResponse)
 def activation_personality_state(
+    request: Request,
     credentials: HTTPAuthorizationCredentials = Depends(bearer_scheme),
     conn: Connection = Depends(get_db),
 ) -> ActivationPersonalityStateResponse:
-    user = _parse_access_token(credentials, conn)
+    user = _parse_access_token_for_local_activation(credentials, conn, request)
     return _personality_response(_get_personality_profile(conn, int(user["id"])))
 
 
 @app.post("/api/activation/personality/infer", response_model=ActivationPersonalityInferResponse)
 async def activation_personality_infer(
     payload: ActivationPersonalityInferRequest,
+    request: Request,
     credentials: HTTPAuthorizationCredentials = Depends(bearer_scheme),
     conn: Connection = Depends(get_db),
 ) -> ActivationPersonalityInferResponse:
-    user = _parse_access_token(credentials, conn)
+    user = _parse_access_token_for_local_activation(credentials, conn, request)
     answers = [str(item).strip() for item in payload.answers or [] if str(item).strip()]
     transcript = str(payload.transcript or "").strip()
     merged_lines = []
@@ -3307,10 +3364,11 @@ async def activation_personality_infer(
 @app.post("/api/activation/personality/complete", response_model=ActivationPersonalityStateResponse)
 def activation_personality_complete(
     payload: ActivationPersonalityCompleteRequest,
+    request: Request,
     credentials: HTTPAuthorizationCredentials = Depends(bearer_scheme),
     conn: Connection = Depends(get_db),
 ) -> ActivationPersonalityStateResponse:
-    user = _parse_access_token(credentials, conn)
+    user = _parse_access_token_for_local_activation(credentials, conn, request)
     summary = str(payload.summary or "").strip()
     if not summary:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="summary is required")
@@ -3759,10 +3817,11 @@ def owner_enrollment(
 @app.get("/api/device/owner/status", response_model=OwnerStatusResponse)
 def owner_status(
     device_id: str,
+    request: Request,
     credentials: HTTPAuthorizationCredentials = Depends(bearer_scheme),
     conn: Connection = Depends(get_db),
 ) -> OwnerStatusResponse:
-    user = _parse_access_token(credentials, conn)
+    user = _parse_access_token_for_local_activation(credentials, conn, request)
     profile = _get_owner_profile(conn, int(user["id"]), device_id)
     return OwnerStatusResponse(
         ok=True,
@@ -3779,10 +3838,11 @@ def owner_status(
 @app.post("/api/device/owner/enrollment/start", response_model=OwnerEnrollmentStartResponse)
 def owner_enrollment_start(
     payload: OwnerEnrollmentStartRequest,
+    request: Request,
     credentials: HTTPAuthorizationCredentials = Depends(bearer_scheme),
     conn: Connection = Depends(get_db),
 ) -> OwnerEnrollmentStartResponse:
-    user = _parse_access_token(credentials, conn)
+    user = _parse_access_token_for_local_activation(credentials, conn, request)
     if not bool(user.get("is_configured", 0)):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Activation must complete before face enrollment")
     if not bool(_get_psychometric_profile(conn, int(user["id"]))):
