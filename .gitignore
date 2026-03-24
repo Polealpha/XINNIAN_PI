@@ -24,6 +24,7 @@ build/
 app windows/node_modules/
 app windows/dist/
 app windows/release/
+app windows/release-*/
 app windows/.vite/
 app windows/vendor/
 app windows/share/
