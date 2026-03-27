@@ -540,7 +540,7 @@ class ActivationIdentityInferResponse(BaseModel):
     onboarding_notes: str = ""
     voice_intro_summary: str = ""
     confidence: float = 0.0
-    inference_source: str = "heuristic"
+    inference_source: str = "blocked"
     inference_detail: str = ""
     raw_json: dict = Field(default_factory=dict)
 
@@ -557,6 +557,9 @@ class ActivationRuntimeStatusResponse(BaseModel):
     ok: bool
     ai_ready: bool = False
     ai_detail: str = ""
+    gateway_ready: bool = False
+    provider_network_ok: bool = False
+    blocking_reason: str = ""
     text_assessment_ready: bool = True
     desktop_voice_ready: bool = False
     desktop_voice_detail: str = ""
@@ -565,22 +568,26 @@ class ActivationRuntimeStatusResponse(BaseModel):
     preferred_device_id: str = ""
 
 
-class PsychometricScores(BaseModel):
-    E: float = 0.0
-    I: float = 0.0
-    S: float = 0.0
-    N: float = 0.0
-    T: float = 0.0
-    F: float = 0.0
-    J: float = 0.0
-    P: float = 0.0
+class CognitiveFunctionScores(BaseModel):
+    Se: float = 0.0
+    Si: float = 0.0
+    Ne: float = 0.0
+    Ni: float = 0.0
+    Te: float = 0.0
+    Ti: float = 0.0
+    Fe: float = 0.0
+    Fi: float = 0.0
 
 
-class PsychometricConfidence(BaseModel):
-    EI: float = 0.0
-    SN: float = 0.0
-    TF: float = 0.0
-    JP: float = 0.0
+class CognitiveFunctionConfidence(BaseModel):
+    Se: float = 0.0
+    Si: float = 0.0
+    Ne: float = 0.0
+    Ni: float = 0.0
+    Te: float = 0.0
+    Ti: float = 0.0
+    Fe: float = 0.0
+    Fi: float = 0.0
 
 
 class PsychometricEvidenceSummary(BaseModel):
@@ -627,9 +634,11 @@ class ActivationAssessmentStateResponse(BaseModel):
     latest_transcript: str = ""
     last_question_id: str = ""
     type_code: str = ""
-    scores: PsychometricScores = Field(default_factory=PsychometricScores)
-    dimension_confidence: PsychometricConfidence = Field(default_factory=PsychometricConfidence)
+    mapped_type_code: str = ""
+    cognitive_scores: CognitiveFunctionScores = Field(default_factory=CognitiveFunctionScores)
+    function_confidence: CognitiveFunctionConfidence = Field(default_factory=CognitiveFunctionConfidence)
     evidence_summary: PsychometricEvidenceSummary = Field(default_factory=PsychometricEvidenceSummary)
+    dominant_stack: list[str] = Field(default_factory=list)
     conversation_count: int = 0
     finish_reason: str = ""
     voice_mode: str = "idle"
@@ -641,11 +650,14 @@ class ActivationAssessmentStateResponse(BaseModel):
     inference_version: str = "assessment-v1"
     required_min_turns: int = 12
     max_turns: int = 28
-    question_source: str = "question_bank"
+    question_source: str = "ai_required"
     scoring_source: str = "pending"
     question_pair: str = ""
     mode_hint: str = ""
     can_submit_text: bool = True
+    assessment_ready: bool = False
+    ai_required: bool = True
+    blocking_reason: str = ""
 
 
 class ActivationAssessmentTurnResponse(ActivationAssessmentStateResponse):

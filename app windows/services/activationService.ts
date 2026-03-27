@@ -19,6 +19,9 @@ export interface ActivationRuntimeStatus {
   ok: boolean;
   ai_ready: boolean;
   ai_detail: string;
+  gateway_ready: boolean;
+  provider_network_ok: boolean;
+  blocking_reason: string;
   text_assessment_ready: boolean;
   desktop_voice_ready: boolean;
   desktop_voice_detail: string;
@@ -44,22 +47,26 @@ export interface PersonalityProfile {
   raw_json?: Record<string, unknown>;
 }
 
-export interface PsychometricScores {
-  E: number;
-  I: number;
-  S: number;
-  N: number;
-  T: number;
-  F: number;
-  J: number;
-  P: number;
+export interface CognitiveFunctionScores {
+  Se: number;
+  Si: number;
+  Ne: number;
+  Ni: number;
+  Te: number;
+  Ti: number;
+  Fe: number;
+  Fi: number;
 }
 
-export interface PsychometricConfidence {
-  EI: number;
-  SN: number;
-  TF: number;
-  JP: number;
+export interface CognitiveFunctionConfidence {
+  Se: number;
+  Si: number;
+  Ne: number;
+  Ni: number;
+  Te: number;
+  Ti: number;
+  Fe: number;
+  Fi: number;
 }
 
 export interface AssessmentEvidenceSummary {
@@ -80,9 +87,11 @@ export interface ActivationAssessmentState {
   latest_transcript: string;
   last_question_id: string;
   type_code: string;
-  scores: PsychometricScores;
-  dimension_confidence: PsychometricConfidence;
+  mapped_type_code: string;
+  cognitive_scores: CognitiveFunctionScores;
+  function_confidence: CognitiveFunctionConfidence;
   evidence_summary: AssessmentEvidenceSummary;
+  dominant_stack: string[];
   conversation_count: number;
   finish_reason: string;
   voice_mode: string;
@@ -99,6 +108,9 @@ export interface ActivationAssessmentState {
   question_pair: string;
   mode_hint: string;
   can_submit_text: boolean;
+  assessment_ready: boolean;
+  ai_required: boolean;
+  blocking_reason: string;
 }
 
 export interface ActivationAssessmentTurnResponse extends ActivationAssessmentState {

@@ -11,9 +11,11 @@
     "prepare:python-runtime": "python ../scripts/prepare_desktop_python_runtime.py --target \"vendor/python-site-packages\" --requirements ../backend/requirements.txt",
     "prepare:openclaw-runtime": "powershell -NoLogo -NoProfile -ExecutionPolicy Bypass -File ../scripts/prepare_desktop_openclaw_runtime.ps1 -Source ../../openclaw -Target ./vendor/openclaw-runtime",
     "prepare:desktop-runtime": "npm run prepare:python-runtime && npm run prepare:openclaw-runtime",
+    "build:installer": "powershell -NoLogo -NoProfile -ExecutionPolicy Bypass -File ../scripts/build_desktop_installer.ps1 -AppDir ./release/win-unpacked -OutputFile \"./release/EmoResonance Setup 0.0.1.exe\"",
+    "verify:installer": "powershell -NoLogo -NoProfile -ExecutionPolicy Bypass -File ../scripts/verify_desktop_installer.ps1 -ReleaseDir ./release",
     "electron:dev": "concurrently -k \"vite\" \"wait-on http://localhost:3001 && cross-env ELECTRON_DEV_URL=http://localhost:3001 electron electron/main.cjs\"",
     "electron:pack": "npm run prepare:desktop-runtime && vite build && electron-builder --dir",
-    "electron:dist": "npm run prepare:desktop-runtime && vite build && electron-builder"
+    "electron:dist": "npm run prepare:desktop-runtime && vite build && electron-builder --dir && npm run build:installer && npm run verify:installer"
   },
   "dependencies": {
     "lucide-react": "^0.555.0",
@@ -35,7 +37,7 @@
   "build": {
     "appId": "com.emoresonance.desktop",
     "productName": "EmoResonance",
-    "compression": "store",
+    "compression": "normal",
     "icon": "assets/app-icon.ico",
     "directories": {
       "output": "release"
@@ -108,7 +110,7 @@
     },
     "nsis": {
       "differentialPackage": false,
-      "useZip": true,
+      "useZip": false,
       "oneClick": false,
       "allowToChangeInstallationDirectory": true,
       "installerIcon": "assets/app-icon.ico",

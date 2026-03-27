@@ -760,7 +760,9 @@ def _load_assessment_session(conn: Connection, user_id: int, active_only: bool =
     payload.setdefault("completed_at_ms", int(row.get("completed_at_ms") or 0) or None)
     payload.setdefault("updated_at_ms", int(row.get("updated_at") or 0) or None)
     payload["scores"] = normalize_scores(payload.get("scores"))
+    payload["cognitive_scores"] = normalize_scores(payload.get("cognitive_scores") or payload.get("scores"))
     payload["dimension_confidence"] = normalize_confidence(payload.get("dimension_confidence"))
+    payload["function_confidence"] = normalize_confidence(payload.get("function_confidence") or payload.get("dimension_confidence"))
     return int(row["id"]), payload
 
 
@@ -768,7 +770,9 @@ def _save_assessment_session(conn: Connection, user_id: int, session_payload: Di
     now_ms = int(time.time() * 1000)
     payload = dict(session_payload)
     payload["scores"] = normalize_scores(payload.get("scores"))
+    payload["cognitive_scores"] = normalize_scores(payload.get("cognitive_scores") or payload.get("scores"))
     payload["dimension_confidence"] = normalize_confidence(payload.get("dimension_confidence"))
+    payload["function_confidence"] = normalize_confidence(payload.get("function_confidence") or payload.get("dimension_confidence"))
     session_json = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
     status_value = str(payload.get("status") or "active").strip() or "active"
     started_at_ms = int(payload.get("started_at_ms") or now_ms)
@@ -843,11 +847,16 @@ def _get_psychometric_profile(conn: Connection, user_id: int) -> Dict[str, objec
         return {}
     payload = dict(row)
     merged = parse_json_dict(str(payload.get("profile_json") or "{}"))
+    raw_scores = parse_json_dict(str(payload.get("scores_json") or "{}"))
+    raw_confidence = parse_json_dict(str(payload.get("dimension_confidence_json") or "{}"))
     merged.update(
         {
             "type_code": str(payload.get("type_code") or "").strip(),
-            "scores": parse_json_dict(str(payload.get("scores_json") or "{}")),
-            "dimension_confidence": parse_json_dict(str(payload.get("dimension_confidence_json") or "{}")),
+            "mapped_type_code": str(merged.get("mapped_type_code") or payload.get("type_code") or "").strip(),
+            "scores": raw_scores,
+            "cognitive_scores": parse_json_dict(str((merged.get("cognitive_scores") or raw_scores) or "{}")),
+            "dimension_confidence": raw_confidence,
+            "function_confidence": parse_json_dict(str((merged.get("function_confidence") or raw_confidence) or "{}")),
             "evidence_summary": parse_json_dict(str(payload.get("evidence_summary_json") or "{}")),
             "summary": str(payload.get("summary") or "").strip(),
             "response_style": str(payload.get("response_style") or "").strip(),
@@ -855,11 +864,17 @@ def _get_psychometric_profile(conn: Connection, user_id: int) -> Dict[str, objec
             "conversation_count": int(payload.get("conversation_count") or 0),
             "completed_at_ms": int(payload.get("completed_at_ms") or 0) or None,
             "updated_at_ms": int(payload.get("updated_at") or 0) or None,
-            "inference_version": str(payload.get("inference_version") or "assessment-v1").strip() or "assessment-v1",
+            "inference_version": str(payload.get("inference_version") or "assessment-v2-jung8").strip() or "assessment-v2-jung8",
+            "dominant_stack": [str(item).strip() for item in merged.get("dominant_stack") or [] if str(item).strip()],
+            "assessment_ready": bool(merged.get("assessment_ready", True)),
+            "ai_required": bool(merged.get("ai_required", True)),
+            "completion_reason": str(merged.get("completion_reason") or "").strip(),
         }
     )
     merged["scores"] = normalize_scores(merged.get("scores"))
+    merged["cognitive_scores"] = normalize_scores(merged.get("cognitive_scores") or merged.get("scores"))
     merged["dimension_confidence"] = normalize_confidence(merged.get("dimension_confidence"))
+    merged["function_confidence"] = normalize_confidence(merged.get("function_confidence") or merged.get("dimension_confidence"))
     evidence = merged.get("evidence_summary")
     if not isinstance(evidence, dict):
         evidence = {}
@@ -872,12 +887,14 @@ def _get_psychometric_profile(conn: Connection, user_id: int) -> Dict[str, objec
 
 def _upsert_psychometric_profile(conn: Connection, user_id: int, profile: Dict[str, object]) -> Dict[str, object]:
     now_ms = int(time.time() * 1000)
-    scores = normalize_scores(profile.get("scores"))
-    confidence = normalize_confidence(profile.get("dimension_confidence"))
+    scores = normalize_scores(profile.get("cognitive_scores") or profile.get("scores"))
+    confidence = normalize_confidence(profile.get("function_confidence") or profile.get("dimension_confidence"))
     evidence_summary = profile.get("evidence_summary") if isinstance(profile.get("evidence_summary"), dict) else {}
     payload = dict(profile)
     payload["scores"] = scores
+    payload["cognitive_scores"] = scores
     payload["dimension_confidence"] = confidence
+    payload["function_confidence"] = confidence
     payload["evidence_summary"] = evidence_summary
     conn.execute(
         """
@@ -902,7 +919,7 @@ def _upsert_psychometric_profile(conn: Connection, user_id: int, profile: Dict[s
         """,
         (
             int(user_id),
-            str(profile.get("type_code") or derive_type_code(scores)).strip() or None,
+            str(profile.get("mapped_type_code") or profile.get("type_code") or derive_type_code(scores)).strip() or None,
             json.dumps(scores, ensure_ascii=False, separators=(",", ":")),
             json.dumps(confidence, ensure_ascii=False, separators=(",", ":")),
             json.dumps(evidence_summary, ensure_ascii=False, separators=(",", ":")),
@@ -911,7 +928,7 @@ def _upsert_psychometric_profile(conn: Connection, user_id: int, profile: Dict[s
             str(profile.get("care_style") or "").strip() or None,
             int(profile.get("conversation_count") or 0),
             int(profile.get("completed_at_ms") or 0) or None,
-            str(profile.get("inference_version") or "assessment-v1").strip() or "assessment-v1",
+            str(profile.get("inference_version") or "assessment-v2-jung8").strip() or "assessment-v2-jung8",
             json.dumps(payload, ensure_ascii=False, separators=(",", ":")),
             now_ms,
             now_ms,
@@ -923,14 +940,17 @@ def _upsert_psychometric_profile(conn: Connection, user_id: int, profile: Dict[s
 
 def _assessment_response(session: Dict[str, object], device_online: bool = False, exists: bool = True) -> ActivationAssessmentStateResponse:
     final = session.get("final_result") if isinstance(session.get("final_result"), dict) else {}
-    scores = normalize_scores((final or session).get("scores"))
-    confidence = normalize_confidence((final or session).get("dimension_confidence"))
+    scores = normalize_scores((final or session).get("cognitive_scores") or (final or session).get("scores"))
+    confidence = normalize_confidence((final or session).get("function_confidence") or (final or session).get("dimension_confidence"))
     evidence = (final or session).get("evidence_summary")
     if not isinstance(evidence, dict):
         evidence = {}
     voice_mode = str(session.get("voice_mode") or "idle")
     voice_session_active = bool(session.get("voice_session_active"))
-    if not bool(device_online):
+    blocking_reason = str(session.get("blocking_reason") or "").strip()
+    if blocking_reason:
+        mode_hint = "ai_blocked"
+    elif not bool(device_online):
         mode_hint = "device_offline_text_available"
     elif voice_session_active and voice_mode == "robot":
         mode_hint = "robot_voice_active"
@@ -950,13 +970,15 @@ def _assessment_response(session: Dict[str, object], device_online: bool = False
         latest_question=str(session.get("latest_question") or ""),
         latest_transcript=str(session.get("latest_transcript") or ""),
         last_question_id=str(session.get("last_question_id") or ""),
-        type_code=str((final or session).get("type_code") or ""),
-        scores=scores,
-        dimension_confidence=confidence,
+        type_code=str((final or session).get("type_code") or (final or session).get("mapped_type_code") or ""),
+        mapped_type_code=str((final or session).get("mapped_type_code") or (final or session).get("type_code") or ""),
+        cognitive_scores=scores,
+        function_confidence=confidence,
         evidence_summary={
             "highlights": [str(item).strip() for item in evidence.get("highlights") or [] if str(item).strip()],
             "notes": str(evidence.get("notes") or "").strip(),
         },
+        dominant_stack=[str(item).strip() for item in ((final or session).get("dominant_stack") or []) if str(item).strip()],
         conversation_count=max(0, int((final or session).get("conversation_count") or session.get("effective_turn_count") or 0)),
         finish_reason=str(session.get("finish_reason") or ""),
         voice_mode=voice_mode,
@@ -965,13 +987,36 @@ def _assessment_response(session: Dict[str, object], device_online: bool = False
         summary=str((final or session).get("summary") or (session.get("profile_preview") or {}).get("summary") or ""),
         response_style=str((final or session).get("response_style") or (session.get("profile_preview") or {}).get("response_style") or ""),
         care_style=str((final or session).get("care_style") or (session.get("profile_preview") or {}).get("care_style") or ""),
-        inference_version=str((final or session).get("inference_version") or "assessment-v1"),
-        question_source=str(session.get("question_source") or "question_bank"),
+        inference_version=str((final or session).get("inference_version") or "assessment-v2-jung8"),
+        question_source=str(session.get("question_source") or "ai_required"),
         scoring_source=str(session.get("scoring_source") or "pending"),
         question_pair=str(session.get("question_pair") or ""),
         mode_hint=mode_hint,
-        can_submit_text=True,
+        can_submit_text=not bool(blocking_reason),
+        assessment_ready=bool((final or session).get("assessment_ready")),
+        ai_required=bool((final or session).get("ai_required", True)),
+        blocking_reason=blocking_reason,
     )
+
+
+def _activation_ai_runtime_snapshot() -> Dict[str, object]:
+    runtime = assistant_service.runtime_status()
+    gateway_ready = bool(runtime.get("gateway_ready"))
+    provider_network_ok = bool(runtime.get("provider_network_ok"))
+    ai_detail = str(runtime.get("gateway_error") or runtime.get("provider_network_detail") or "").strip()
+    blocking_reason = ""
+    if not gateway_ready:
+        blocking_reason = str(runtime.get("gateway_error") or "OpenClaw gateway unavailable").strip()
+    elif not provider_network_ok:
+        blocking_reason = str(runtime.get("provider_network_detail") or "OpenClaw provider network unavailable").strip()
+    return {
+        "runtime": runtime,
+        "gateway_ready": gateway_ready,
+        "provider_network_ok": provider_network_ok,
+        "ai_ready": bool(gateway_ready and provider_network_ok),
+        "ai_detail": ai_detail,
+        "blocking_reason": blocking_reason,
+    }
 
 
 def _compact_text(text: str) -> str:
@@ -1032,40 +1077,95 @@ async def _assessment_apply_turn(
     voice_mode: str,
     surface: str,
 ) -> tuple[Dict[str, object], ActivationAssessmentTurnResponse]:
+    ai_snapshot = _activation_ai_runtime_snapshot()
+    if not bool(ai_snapshot["ai_ready"]):
+        session_payload["status"] = "blocked"
+        session_payload["blocking_reason"] = str(ai_snapshot["blocking_reason"] or "AI 未就绪，正式测评已暂停。")
+        session_payload["assessment_ready"] = False
+        _save_assessment_session(conn, int(user_id), session_payload, session_id=int(session_id))
+        device_online, _selected = _assessment_device_online(conn, int(user_id), device_id)
+        response = _assessment_response(session_payload, device_online=device_online, exists=True)
+        return session_payload, ActivationAssessmentTurnResponse(
+            **response.model_dump(),
+            question_changed=False,
+            just_completed=False,
+        )
+
     question_id = str(session_payload.get("last_question_id") or "").strip()
     question = QUESTION_MAP.get(question_id) or {
         "id": question_id or "ad-hoc",
-        "pair": "EI",
+        "pair": str(session_payload.get("question_pair") or "Ni"),
         "prompt": str(session_payload.get("latest_question") or ""),
-        "dimension_targets": ["E", "I"],
+        "dimension_targets": [str(session_payload.get("question_pair") or "Ni")],
         "difficulty": 2,
         "followup_rules": [],
     }
-    scoring = await _assessment_score_model(int(user_id), question, session_payload, answer_text)
-    scoring_source = "ai"
-    if not scoring:
-        scoring = score_answer_heuristic(question, answer_text)
-        scoring_source = "heuristic"
+    try:
+        scoring = await _assessment_score_model(int(user_id), question, session_payload, answer_text)
+        if not scoring:
+            raise RuntimeError("assessment_scoring_empty")
+        scoring_source = "ai"
+    except Exception as exc:
+        session_payload["status"] = "blocked"
+        session_payload["blocking_reason"] = f"AI 评分未完成：{exc}"
+        session_payload["assessment_ready"] = False
+        _save_assessment_session(conn, int(user_id), session_payload, session_id=int(session_id))
+        device_online, _selected = _assessment_device_online(conn, int(user_id), device_id)
+        response = _assessment_response(session_payload, device_online=device_online, exists=True)
+        return session_payload, ActivationAssessmentTurnResponse(
+            **response.model_dump(),
+            question_changed=False,
+            just_completed=False,
+        )
+
     merged = merge_scoring(session_payload, question, answer_text, scoring, int(time.time() * 1000))
     merged["voice_mode"] = str(voice_mode or "text").strip() or "text"
     merged["scoring_source"] = scoring_source
     merged["question_pair"] = str(question.get("pair") or merged.get("question_pair") or "")
+    merged["status"] = "active"
+    merged["blocking_reason"] = ""
 
-    terminator = await _assessment_terminate_model(int(user_id), merged)
+    try:
+        terminator = await _assessment_terminate_model(int(user_id), merged)
+        if not terminator:
+            raise RuntimeError("assessment_terminator_empty")
+    except Exception as exc:
+        merged["status"] = "blocked"
+        merged["blocking_reason"] = f"AI 终止判定未完成：{exc}"
+        merged["assessment_ready"] = False
+        _save_assessment_session(conn, int(user_id), merged, session_id=int(session_id))
+        device_online, _selected = _assessment_device_online(conn, int(user_id), device_id)
+        response = _assessment_response(merged, device_online=device_online, exists=True)
+        return merged, ActivationAssessmentTurnResponse(
+            **response.model_dump(),
+            question_changed=False,
+            just_completed=False,
+        )
+
     if terminator.get("should_finish") and merged.get("status") != "completed":
-        merged["status"] = "completed"
         merged["completed_at_ms"] = int(time.time() * 1000)
         merged["finish_reason"] = str(terminator.get("reason") or "model_finish")
         merged["final_result"] = build_final_profile(merged)
-        merged["latest_question"] = ""
-        merged["last_question_id"] = ""
-    elif merged.get("status") != "completed" and terminator.get("missing_pair"):
-        suggested = await _assessment_pick_model_question(int(user_id), _get_activation_profile(conn, int(user_id)), merged)
-        if suggested:
+        if bool((merged.get("final_result") or {}).get("assessment_ready")):
+            merged["status"] = "completed"
+            merged["latest_question"] = ""
+            merged["last_question_id"] = ""
+        else:
+            merged["status"] = "blocked"
+            merged["blocking_reason"] = "AI 尚未得到稳定八功能结果，正式测评继续等待更多信号。"
+    elif merged.get("status") != "completed":
+        try:
+            suggested = await _assessment_pick_model_question(int(user_id), _get_activation_profile(conn, int(user_id)), merged)
+            if not suggested:
+                raise RuntimeError("assessment_question_empty")
             merged["latest_question"] = str(suggested.get("prompt") or merged.get("latest_question") or "")
             merged["last_question_id"] = str(suggested.get("id") or merged.get("last_question_id") or "")
             merged["question_pair"] = str(suggested.get("pair") or merged.get("question_pair") or "")
             merged["question_source"] = "ai"
+        except Exception as exc:
+            merged["status"] = "blocked"
+            merged["blocking_reason"] = f"AI 下一题生成未完成：{exc}"
+            merged["assessment_ready"] = False
 
     _append_assessment_turn_event(
         conn,
@@ -1079,7 +1179,13 @@ async def _assessment_apply_turn(
         scoring,
     )
     if merged.get("status") == "completed":
-        merged["final_result"] = _persist_assessment_completion(conn, int(user_id), merged)
+        try:
+            merged["final_result"] = await _persist_assessment_completion(conn, int(user_id), merged)
+        except Exception as exc:
+            merged["status"] = "blocked"
+            merged["assessment_ready"] = False
+            merged["blocking_reason"] = f"AI 记忆压缩写入失败：{exc}"
+            merged["final_result"] = {}
 
     _save_assessment_session(conn, int(user_id), merged, session_id=int(session_id))
     device_online, _selected = _assessment_device_online(conn, int(user_id), device_id)
@@ -1245,10 +1351,7 @@ async def _assessment_pick_model_question(
         f"输入数据：{json.dumps({'user_id': user_id, 'identity': activation_profile, 'session': session_payload}, ensure_ascii=False)}"
     )
     session_key = f"activation:{int(user_id)}:assessment:conductor:{int(time.time() * 1000)}"
-    try:
-        raw = await assistant_service.gateway.send_message(session_key, prompt)
-    except Exception:
-        return {}
+    raw = await assistant_service.gateway.send_message(session_key, prompt)
     return extract_next_question_from_model(raw)
 
 
@@ -1263,10 +1366,7 @@ async def _assessment_score_model(
         f"输入数据：{json.dumps({'question': question, 'session': session_payload, 'answer': answer}, ensure_ascii=False)}"
     )
     session_key = f"activation:{int(user_id)}:assessment:scorer:{int(time.time() * 1000)}"
-    try:
-        raw = await assistant_service.gateway.send_message(session_key, prompt)
-    except Exception:
-        return {}
+    raw = await assistant_service.gateway.send_message(session_key, prompt)
     return extract_scoring_from_model(raw)
 
 
@@ -1276,21 +1376,41 @@ async def _assessment_terminate_model(user_id: int, session_payload: Dict[str, o
         f"输入数据：{json.dumps(session_payload, ensure_ascii=False)}"
     )
     session_key = f"activation:{int(user_id)}:assessment:terminator:{int(time.time() * 1000)}"
-    try:
-        raw = await assistant_service.gateway.send_message(session_key, prompt)
-    except Exception:
-        return {}
+    raw = await assistant_service.gateway.send_message(session_key, prompt)
     return extract_termination_from_model(raw)
 
 
+async def _assessment_memory_writer_model(user_id: int, final_profile: Dict[str, object], session_payload: Dict[str, object]) -> Dict[str, object]:
+    prompt = (
+        f"{ASSESSMENT_MEMORY_WRITER_PROMPT}\n\n"
+        f"输入数据：{json.dumps({'final_profile': final_profile, 'session': session_payload}, ensure_ascii=False)}"
+    )
+    session_key = f"activation:{int(user_id)}:assessment:memory:{int(time.time() * 1000)}"
+    raw = await assistant_service.gateway.send_message(session_key, prompt)
+    parsed = parse_json_dict(raw)
+    machine_readable = str(parsed.get("machine_readable") or "").strip()
+    ai_readable = str(parsed.get("ai_readable") or "").strip()
+    if not machine_readable or not ai_readable:
+        raise RuntimeError("AI memory compression returned incomplete payload")
+    return {
+        "memory_title": str(parsed.get("memory_title") or "psychometric_profile").strip() or "psychometric_profile",
+        "machine_readable": machine_readable,
+        "ai_readable": ai_readable,
+    }
+
+
 def _assessment_sync_personality_profile(conn: Connection, user_id: int, psychometric: Dict[str, object]) -> None:
-    type_code = str(psychometric.get("type_code") or "").strip()
-    traits = [f"类型:{type_code}"] if type_code else []
-    for pair in PAIR_KEYS:
-        conf = psychometric.get("dimension_confidence") or {}
-        score = float((conf or {}).get(pair, 0.0) or 0.0)
-        if score >= 0.78:
-            traits.append(f"{pair}稳定")
+    type_code = str(psychometric.get("mapped_type_code") or psychometric.get("type_code") or "").strip()
+    function_confidence = normalize_confidence(psychometric.get("function_confidence") or psychometric.get("dimension_confidence"))
+    traits = [f"兼容类型:{type_code}"] if type_code else []
+    for function_name in psychometric.get("dominant_stack") or []:
+        label = str(function_name).strip()
+        if label:
+            traits.append(f"主功能:{label}")
+    for function_name in PAIR_KEYS:
+        score = float(function_confidence.get(function_name, 0.0) or 0.0)
+        if score >= 0.72:
+            traits.append(f"{function_name}信号稳定")
     summary = str(psychometric.get("summary") or "").strip()
     _upsert_personality_profile(
         conn,
@@ -1303,25 +1423,38 @@ def _assessment_sync_personality_profile(conn: Connection, user_id: int, psychom
             "topics": [],
             "boundaries": [],
             "signals": [str(item) for item in ((psychometric.get("evidence_summary") or {}).get("highlights") or [])[:4]],
-            "confidence": min(0.99, max(normalize_confidence(psychometric.get("dimension_confidence")).values() or [0.0])),
+            "confidence": min(0.99, max(function_confidence.values() or [0.0])),
             "sample_count": int(psychometric.get("conversation_count") or 0),
-            "inference_version": str(psychometric.get("inference_version") or "assessment-v1"),
+            "inference_version": str(psychometric.get("inference_version") or "assessment-v2-jung8"),
             "profile": {"source": "psychometric_assessment", "psychometric_profile": psychometric},
         },
     )
 
 
-def _persist_assessment_completion(conn: Connection, user_id: int, session_payload: Dict[str, object]) -> Dict[str, object]:
+async def _persist_assessment_completion(conn: Connection, user_id: int, session_payload: Dict[str, object]) -> Dict[str, object]:
     final_profile = build_final_profile(session_payload)
+    if not bool(final_profile.get("assessment_ready")):
+        raise RuntimeError("assessment_result_not_ready")
+    memory_payload = await _assessment_memory_writer_model(int(user_id), final_profile, session_payload)
+    final_profile["memory_summary"] = {
+        "machine_readable": memory_payload["machine_readable"],
+        "ai_readable": memory_payload["ai_readable"],
+    }
     psychometric = _upsert_psychometric_profile(conn, int(user_id), final_profile)
     _assessment_sync_personality_profile(conn, int(user_id), psychometric)
     activation = _get_activation_profile(conn, int(user_id))
     preferred_name = str(activation.get("preferred_name") or "").strip()
     assistant_service.store.append_memory(
         int(user_id),
-        title="psychometric_profile",
-        content=build_memory_summary(psychometric, preferred_name=preferred_name),
+        title=str(memory_payload["memory_title"] or "psychometric_profile"),
+        content=f"{memory_payload['machine_readable']}\n{memory_payload['ai_readable']}",
         tags=["activation", "assessment", "psychometric"],
+    )
+    assistant_service.store.append_memory(
+        int(user_id),
+        title="psychometric_index_backup",
+        content=build_memory_summary(psychometric, preferred_name=preferred_name),
+        tags=["activation", "assessment", "psychometric", "backup"],
     )
     return psychometric
 
@@ -2840,19 +2973,17 @@ def activation_runtime_status(
     conn: Connection = Depends(get_db),
 ) -> ActivationRuntimeStatusResponse:
     user = _parse_access_token_for_local_activation(credentials, conn, request)
-    runtime = assistant_service.runtime_status()
+    snapshot = _activation_ai_runtime_snapshot()
     device_online, selected = _assessment_device_online(conn, int(user["id"]))
     preferred_device_id = str((selected or {}).get("device_id") or "").strip()
-    gateway_ready = bool(runtime.get("gateway_ready"))
-    provider_network_ok = bool(runtime.get("provider_network_ok"))
-    ai_detail = str(runtime.get("gateway_error") or "").strip()
-    if not ai_detail:
-        ai_detail = str(runtime.get("provider_network_detail") or "").strip()
     return ActivationRuntimeStatusResponse(
         ok=True,
-        ai_ready=bool(gateway_ready and provider_network_ok),
-        ai_detail=ai_detail,
-        text_assessment_ready=True,
+        ai_ready=bool(snapshot["ai_ready"]),
+        ai_detail=str(snapshot["ai_detail"] or ""),
+        gateway_ready=bool(snapshot["gateway_ready"]),
+        provider_network_ok=bool(snapshot["provider_network_ok"]),
+        blocking_reason=str(snapshot["blocking_reason"] or ""),
+        text_assessment_ready=bool(snapshot["ai_ready"]),
         desktop_voice_ready=False,
         desktop_voice_detail="桌面麦克风转写由本地桌面后端提供，需本机运行时可用。",
         device_online=device_online,
@@ -2914,6 +3045,22 @@ async def activation_identity_infer(
     transcript = str(payload.transcript or "").strip()
     if not transcript:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="transcript is required")
+    ai_snapshot = _activation_ai_runtime_snapshot()
+    if not bool(ai_snapshot["ai_ready"]):
+        return ActivationIdentityInferResponse(
+            ok=False,
+            preferred_name="",
+            role_label="owner",
+            relation_to_robot="primary_user",
+            pronouns="",
+            identity_summary="",
+            onboarding_notes="AI 未就绪，身份草稿暂停生成。你可以先手动填写基础身份信息。",
+            voice_intro_summary="",
+            confidence=0.0,
+            inference_source="blocked",
+            inference_detail=str(ai_snapshot["blocking_reason"] or "AI 未就绪，身份草稿暂停。"),
+            raw_json={"blocking_reason": str(ai_snapshot["blocking_reason"] or "")},
+        )
     inference_input = {
         "transcript": transcript,
         "surface": str(payload.surface or "robot").strip() or "robot",
@@ -2927,28 +3074,27 @@ async def activation_identity_infer(
         f"输入数据：{json.dumps(inference_input, ensure_ascii=False)}"
     )
     raw = ""
-    used_heuristic = False
     inference_detail = ""
-    try:
-        raw = await assistant_service.gateway.send_message(session_key, prompt)
-        parsed = _extract_json_block(raw)
-    except Exception as exc:
-        parsed = _heuristic_activation_identity(
-            transcript=transcript,
-            observed_name=str(inference_input["observed_name"]),
-        )
-        used_heuristic = True
-        inference_detail = f"AI identity inference unavailable ({exc}), fell back to local conservative parsing."
+    raw = await assistant_service.gateway.send_message(session_key, prompt)
+    parsed = _extract_json_block(raw)
     if not parsed or not any(
         str(parsed.get(key) or "").strip()
         for key in ("preferred_name", "role_label", "relation_to_robot", "identity_summary")
     ):
-        parsed = _heuristic_activation_identity(
-            transcript=transcript,
-            observed_name=str(inference_input["observed_name"]),
+        return ActivationIdentityInferResponse(
+            ok=False,
+            preferred_name="",
+            role_label="owner",
+            relation_to_robot="primary_user",
+            pronouns="",
+            identity_summary="",
+            onboarding_notes="AI 返回为空，身份草稿暂停生成。你可以先手动填写基础身份信息。",
+            voice_intro_summary="",
+            confidence=0.0,
+            inference_source="blocked",
+            inference_detail="AI 身份草稿返回为空，请稍后重试。",
+            raw_json={"raw_text": raw},
         )
-        used_heuristic = True
-        inference_detail = inference_detail or "Model output was empty, fell back to local conservative parsing."
     preferred_name = str(parsed.get("preferred_name") or "").strip()
     if not preferred_name and inference_input["observed_name"]:
         preferred_name = str(inference_input["observed_name"]).strip()
@@ -2971,7 +3117,7 @@ async def activation_identity_infer(
         onboarding_notes=onboarding_notes,
         voice_intro_summary=voice_intro_summary,
         confidence=max(0.0, min(1.0, confidence)),
-        inference_source="heuristic" if used_heuristic or bool(parsed.get("heuristic")) else "ai",
+        inference_source="ai",
         inference_detail=inference_detail,
         raw_json=parsed or {"raw_text": raw},
     )
@@ -3003,14 +3149,27 @@ async def activation_assessment_start(
     user = _parse_access_token_for_local_activation(credentials, conn, request)
     if not bool(user.get("is_configured", 0)):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Identity activation must complete first")
+    ai_snapshot = _activation_ai_runtime_snapshot()
     session_id, existing = _load_assessment_session(conn, int(user["id"]), active_only=True)
+    if not bool(ai_snapshot["ai_ready"]):
+        blocked_payload = dict(existing or build_initial_session(int(time.time() * 1000)))
+        blocked_payload["status"] = "blocked"
+        blocked_payload["blocking_reason"] = str(ai_snapshot["blocking_reason"] or "AI 未就绪，正式测评已暂停。")
+        blocked_payload["assessment_ready"] = False
+        if existing and session_id is not None:
+            _save_assessment_session(conn, int(user["id"]), blocked_payload, session_id=int(session_id))
+        device_online, _selected = _assessment_device_online(conn, int(user["id"]), payload.device_id)
+        return _assessment_response(blocked_payload, device_online=device_online, exists=bool(existing))
     if payload.reset or not existing:
         now_ms = int(time.time() * 1000)
         session_payload = build_initial_session(now_ms)
         session_payload["voice_mode"] = str(payload.voice_mode or "text").strip() or "text"
         activation = _get_activation_profile(conn, int(user["id"]))
         model_question = await _assessment_pick_model_question(int(user["id"]), activation, session_payload)
-        if model_question:
+        if not model_question:
+            session_payload["status"] = "blocked"
+            session_payload["blocking_reason"] = "AI 没有生成首个正式测评问题。"
+        else:
             session_payload["last_question_id"] = str(model_question.get("id") or "")
             session_payload["latest_question"] = str(model_question.get("prompt") or "")
             session_payload["question_pair"] = str(model_question.get("pair") or "")
@@ -3081,7 +3240,7 @@ async def activation_assessment_turn(
 
 
 @app.post("/api/activation/assessment/finish", response_model=ActivationAssessmentFinishResponse)
-def activation_assessment_finish(
+async def activation_assessment_finish(
     request: Request,
     credentials: HTTPAuthorizationCredentials = Depends(bearer_scheme),
     conn: Connection = Depends(get_db),
@@ -3100,12 +3259,15 @@ def activation_assessment_finish(
                 persisted=True,
             )
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Assessment session not started")
-    if session_payload.get("status") != "completed":
-        session_payload["status"] = "completed"
-        session_payload["completed_at_ms"] = int(time.time() * 1000)
-        session_payload["finish_reason"] = str(session_payload.get("finish_reason") or "manual_finish")
-        session_payload["final_result"] = build_final_profile(session_payload)
-    session_payload["final_result"] = _persist_assessment_completion(conn, int(user["id"]), session_payload)
+    if not bool(_activation_ai_runtime_snapshot()["ai_ready"]):
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="AI not ready; formal assessment cannot finish")
+    final_profile = session_payload.get("final_result") if isinstance(session_payload.get("final_result"), dict) else build_final_profile(session_payload)
+    if not bool(final_profile.get("assessment_ready")):
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Assessment signal is not stable enough to finish")
+    session_payload["status"] = "completed"
+    session_payload["completed_at_ms"] = int(time.time() * 1000)
+    session_payload["finish_reason"] = str(final_profile.get("completion_reason") or session_payload.get("finish_reason") or "formal_finish")
+    session_payload["final_result"] = await _persist_assessment_completion(conn, int(user["id"]), session_payload)
     _save_assessment_session(conn, int(user["id"]), session_payload, session_id=int(session_id))
     device_online, _selected = _assessment_device_online(conn, int(user["id"]))
     return ActivationAssessmentFinishResponse(

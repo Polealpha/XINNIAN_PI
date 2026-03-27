@@ -41,3 +41,5 @@ pytest-run-*/
 .codex-openclaw-e2e/
 .codex-openclaw-probe-runtime/
 tmp/
+installer_probe_*/
+app windows/'/

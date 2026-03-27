@@ -14,6 +14,13 @@ from packaging.requirements import Requirement
 
 DIST_NAME_RE = re.compile(r"^[A-Za-z0-9_.-]+")
 
+REQUIRED_RUNTIME_MARKERS = (
+    "fastapi",
+    "uvicorn",
+    "pydantic",
+    "httpx",
+)
+
 
 def normalize_name(value: str) -> str:
     return re.sub(r"[-_.]+", "-", str(value or "").strip()).lower()
@@ -113,8 +120,18 @@ def copy_distributions(dists: Iterable[metadata.Distribution], target_dir: Path)
 
 def clean_target(target_dir: Path) -> None:
     if target_dir.exists():
-        shutil.rmtree(target_dir)
+        stale_dir = target_dir.with_name(f"{target_dir.name}-stale")
+        if stale_dir.exists():
+            shutil.rmtree(stale_dir, ignore_errors=True)
+        target_dir.rename(stale_dir)
+        shutil.rmtree(stale_dir, ignore_errors=True)
     target_dir.mkdir(parents=True, exist_ok=True)
+
+
+def target_looks_ready(target_dir: Path) -> bool:
+    if not target_dir.exists():
+        return False
+    return all((target_dir / marker).exists() for marker in REQUIRED_RUNTIME_MARKERS)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -143,6 +160,10 @@ def main() -> int:
     if missing:
         print("Missing installed distributions:", ", ".join(sorted(set(missing))), file=sys.stderr)
         return 2
+
+    if target_looks_ready(target_dir):
+        print(f"Reusing existing vendored runtime at {target_dir}")
+        return 0
 
     clean_target(target_dir)
     copy_distributions(dists, target_dir)

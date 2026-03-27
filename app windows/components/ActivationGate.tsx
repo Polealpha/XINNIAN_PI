@@ -1,19 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import {
-  Bot,
-  Brain,
-  Camera,
-  CheckCircle2,
-  ChevronRight,
-  LoaderCircle,
-  Mic,
-  PauseCircle,
-  PlayCircle,
-  ScanFace,
-  ShieldCheck,
-  Sparkles,
-  UserRound,
-} from "lucide-react";
+import { Brain, Camera, CheckCircle2, ChevronRight, LoaderCircle, Mic, PauseCircle, PlayCircle, ScanFace, ShieldCheck, Sparkles, UserRound } from "lucide-react";
 
 import { getActivationState } from "../services/authService";
 import {
@@ -33,149 +19,32 @@ import {
   type ActivationIdentityInference,
   type ActivationRuntimeStatus,
 } from "../services/activationService";
-import {
-  createDesktopVoiceRecorder,
-  getDesktopVoiceStatus,
-  transcribeDesktopAudio,
-  type DesktopVoiceStatus,
-} from "../services/desktopVoiceService";
+import { createDesktopVoiceRecorder, getDesktopVoiceStatus, transcribeDesktopAudio, type DesktopVoiceStatus } from "../services/desktopVoiceService";
 
-interface ActivationGateProps {
-  onActivated: () => Promise<void> | void;
-}
+interface ActivationGateProps { onActivated: () => Promise<void> | void; }
+const ROLE_OPTIONS = [{ value: "owner", label: "主人" }, { value: "family", label: "家人" }, { value: "caregiver", label: "照护者" }];
+const RELATION_OPTIONS = [{ value: "primary_user", label: "主要使用者" }, { value: "family_member", label: "家庭成员" }, { value: "caregiver", label: "照护关系" }];
+const FUNCTION_LABELS: Record<string, string> = { Se: "外倾感觉", Si: "内倾感觉", Ne: "外倾直觉", Ni: "内倾直觉", Te: "外倾思考", Ti: "内倾思考", Fe: "外倾情感", Fi: "内倾情感" };
 
-const emptyIdentity = (): ActivationIdentityInference => ({
-  ok: true,
-  preferred_name: "",
-  role_label: "owner",
-  relation_to_robot: "primary_user",
-  pronouns: "",
-  identity_summary: "",
-  onboarding_notes: "",
-  voice_intro_summary: "",
-  confidence: 0,
-  inference_source: "heuristic",
-  inference_detail: "",
-  raw_json: {},
-});
-
+const emptyIdentity = (): ActivationIdentityInference => ({ ok: false, preferred_name: "", role_label: "owner", relation_to_robot: "primary_user", pronouns: "", identity_summary: "", onboarding_notes: "", voice_intro_summary: "", confidence: 0, inference_source: "blocked", inference_detail: "", raw_json: {} });
 const emptyAssessment = (): ActivationAssessmentState => ({
-  ok: true,
-  exists: false,
-  status: "idle",
-  turn_count: 0,
-  effective_turn_count: 0,
-  latest_question: "",
-  latest_transcript: "",
-  last_question_id: "",
-  type_code: "",
-  scores: { E: 0, I: 0, S: 0, N: 0, T: 0, F: 0, J: 0, P: 0 },
-  dimension_confidence: { EI: 0, SN: 0, TF: 0, JP: 0 },
-  evidence_summary: { highlights: [], notes: "" },
-  conversation_count: 0,
-  finish_reason: "",
-  voice_mode: "idle",
-  voice_session_active: false,
-  device_online: false,
-  summary: "",
-  response_style: "",
-  care_style: "",
-  inference_version: "assessment-v1",
-  required_min_turns: 12,
-  max_turns: 28,
-  question_source: "question_bank",
-  scoring_source: "pending",
-  question_pair: "",
-  mode_hint: "text_mode_ready",
-  can_submit_text: true,
+  ok: true, exists: false, status: "idle", turn_count: 0, effective_turn_count: 0, latest_question: "", latest_transcript: "", last_question_id: "",
+  type_code: "", mapped_type_code: "", cognitive_scores: { Se: 0, Si: 0, Ne: 0, Ni: 0, Te: 0, Ti: 0, Fe: 0, Fi: 0 }, function_confidence: { Se: 0, Si: 0, Ne: 0, Ni: 0, Te: 0, Ti: 0, Fe: 0, Fi: 0 },
+  evidence_summary: { highlights: [], notes: "" }, dominant_stack: [], conversation_count: 0, finish_reason: "", voice_mode: "idle", voice_session_active: false, device_online: false,
+  summary: "", response_style: "", care_style: "", inference_version: "assessment-v2-jung8", required_min_turns: 12, max_turns: 28, question_source: "ai_required", scoring_source: "pending",
+  question_pair: "", mode_hint: "ai_blocked", can_submit_text: false, assessment_ready: false, ai_required: true, blocking_reason: "",
 });
+const emptyRuntime = (): ActivationRuntimeStatus => ({ ok: true, ai_ready: false, ai_detail: "", gateway_ready: false, provider_network_ok: false, blocking_reason: "", text_assessment_ready: false, desktop_voice_ready: false, desktop_voice_detail: "", device_online: false, robot_voice_ready: false, preferred_device_id: "" });
+const emptyDesktopVoice = (): DesktopVoiceStatus => ({ ok: false, ready: false, provider_preference: "faster_whisper", fallback_provider: "sherpa_onnx", active_provider: "", primary_ready: false, primary_engine: "", primary_error: "", fallback_ready: false, fallback_engine: "", fallback_error: "", language: "zh", max_sec: 45, model_name: "small", beam_size: 5, best_of: 5, preprocess_enabled: true, trim_silence_enabled: true, initial_prompt_enabled: false, hotwords_enabled: false });
+const sortedFunctions = (scores: ActivationAssessmentState["cognitive_scores"]) => Object.entries(scores).sort((a, b) => b[1] - a[1]);
 
-const emptyActivationRuntime = (): ActivationRuntimeStatus => ({
-  ok: true,
-  ai_ready: false,
-  ai_detail: "",
-  text_assessment_ready: true,
-  desktop_voice_ready: false,
-  desktop_voice_detail: "",
-  device_online: false,
-  robot_voice_ready: false,
-  preferred_device_id: "",
-});
-
-const emptyDesktopVoiceStatus = (): DesktopVoiceStatus => ({
-  ok: false,
-  ready: false,
-  provider_preference: "faster_whisper",
-  fallback_provider: "sherpa_onnx",
-  active_provider: "",
-  primary_ready: false,
-  primary_engine: "",
-  primary_error: "",
-  fallback_ready: false,
-  fallback_engine: "",
-  fallback_error: "",
-  language: "zh",
-  max_sec: 45,
-  model_name: "small",
-  beam_size: 5,
-  best_of: 5,
-  preprocess_enabled: true,
-  trim_silence_enabled: true,
-  initial_prompt_enabled: false,
-  hotwords_enabled: false,
-});
-
-const scoreItems = (scores: ActivationAssessmentState["scores"]) => [
-  ["E", scores.E],
-  ["I", scores.I],
-  ["S", scores.S],
-  ["N", scores.N],
-  ["T", scores.T],
-  ["F", scores.F],
-  ["J", scores.J],
-  ["P", scores.P],
-];
-
-const confidenceItems = (confidence: ActivationAssessmentState["dimension_confidence"]) => [
-  ["EI", confidence.EI],
-  ["SN", confidence.SN],
-  ["TF", confidence.TF],
-  ["JP", confidence.JP],
-];
-
-const ROLE_OPTIONS = [
-  { value: "owner", label: "主人" },
-  { value: "family", label: "家人" },
-  { value: "caregiver", label: "照护者" },
-  { value: "patient", label: "被照护者" },
-  { value: "operator", label: "设备操作员" },
-  { value: "admin", label: "管理员" },
-  { value: "unknown", label: "待确认" },
-];
-
-const RELATION_OPTIONS = [
-  { value: "primary_user", label: "主要使用者" },
-  { value: "family_member", label: "家庭成员" },
-  { value: "caregiver", label: "照护关系" },
-  { value: "maintainer", label: "维护/调试关系" },
-  { value: "unknown", label: "待确认" },
-];
-
-const HUMAN_ROLE_LABELS: Record<string, string> = Object.fromEntries(
-  ROLE_OPTIONS.map((item) => [item.value, item.label])
-);
-
-const HUMAN_RELATION_LABELS: Record<string, string> = Object.fromEntries(
-  RELATION_OPTIONS.map((item) => [item.value, item.label])
-);
-
-export const ActivationGate: React.FC<ActivationGateProps> = ({ onActivated }) => {
+export function ActivationGate({ onActivated }: ActivationGateProps) {
   const [booting, setBooting] = useState(true);
   const [busy, setBusy] = useState(false);
-  const [finishing, setFinishing] = useState(false);
   const [voiceBusy, setVoiceBusy] = useState(false);
   const [desktopVoiceBusy, setDesktopVoiceBusy] = useState(false);
   const [desktopVoiceRecording, setDesktopVoiceRecording] = useState(false);
+  const [finishing, setFinishing] = useState(false);
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
   const [identityReady, setIdentityReady] = useState(false);
@@ -183,914 +52,262 @@ export const ActivationGate: React.FC<ActivationGateProps> = ({ onActivated }) =
   const [ownerBindingRequired, setOwnerBindingRequired] = useState(false);
   const [ownerBindingCompleted, setOwnerBindingCompleted] = useState(false);
   const [preferredDeviceId, setPreferredDeviceId] = useState("");
-  const [activationRuntime, setActivationRuntime] = useState<ActivationRuntimeStatus>(emptyActivationRuntime);
-  const [desktopVoiceStatus, setDesktopVoiceStatus] = useState<DesktopVoiceStatus>(emptyDesktopVoiceStatus);
-  const [identityState, setIdentityState] = useState(emptyIdentity);
-  const [assessmentState, setAssessmentState] = useState<ActivationAssessmentState>(emptyAssessment);
+  const [runtime, setRuntime] = useState<ActivationRuntimeStatus>(emptyRuntime);
+  const [desktopVoiceStatus, setDesktopVoiceStatus] = useState<DesktopVoiceStatus>(emptyDesktopVoice);
+  const [identity, setIdentity] = useState<ActivationIdentityInference>(emptyIdentity);
+  const [assessment, setAssessment] = useState<ActivationAssessmentState>(emptyAssessment);
   const [introTranscript, setIntroTranscript] = useState("");
   const [observedName, setObservedName] = useState("");
   const [answerDraft, setAnswerDraft] = useState("");
   const [scanState, setScanState] = useState("");
-  const desktopVoiceRecorderRef = useRef<{ stop: () => Promise<Blob> } | null>(null);
+  const recorderRef = useRef<{ stop: () => Promise<Blob> } | null>(null);
+
+  const fail = (value: unknown) => (value instanceof Error ? value.message : String(value));
+  const canFinish = identityReady && psychometricCompleted && (!ownerBindingRequired || ownerBindingCompleted);
+  const aiTone = runtime.ai_ready ? "border-emerald-400/20 bg-emerald-500/10 text-emerald-200" : "border-amber-400/20 bg-amber-500/10 text-amber-200";
+  const functionCards = useMemo(() => sortedFunctions(assessment.cognitive_scores), [assessment.cognitive_scores]);
+  const progress = assessment.max_turns > 0 ? Math.min(100, (assessment.effective_turn_count / assessment.max_turns) * 100) : 0;
 
   const loadState = async () => {
-    const [activation, assessment, runtimeResult, desktopVoiceResult] = await Promise.all([
+    const [activation, assessmentState, runtimeState, desktopVoice] = await Promise.all([
       getActivationState(),
       getAssessmentState(),
-      getActivationRuntimeStatus().catch(() => emptyActivationRuntime()),
-      getDesktopVoiceStatus().catch(
-        () =>
-          ({
-            ...emptyDesktopVoiceStatus(),
-            primary_error: "桌面语音运行时未启动，本次先用文本作答。",
-          }) as DesktopVoiceStatus
-      ),
+      getActivationRuntimeStatus().catch(() => emptyRuntime()),
+      getDesktopVoiceStatus().catch(() => emptyDesktopVoice()),
     ]);
     const identityDone = !activation.activation_required;
-    const assessmentDone =
-      activation.psychometric_completed || assessment.status === "completed" || Boolean(assessment.completed_at_ms);
+    const assessmentDone = activation.psychometric_completed || assessmentState.status === "completed" || Boolean(assessmentState.completed_at_ms);
     const preferredDevice = String(activation.preferred_device_id || "").trim();
-
     setIdentityReady(identityDone);
     setPsychometricCompleted(Boolean(assessmentDone));
     setOwnerBindingRequired(Boolean(activation.owner_binding_required));
     setOwnerBindingCompleted(Boolean(activation.owner_binding_completed));
     setPreferredDeviceId(preferredDevice);
-    setActivationRuntime(runtimeResult);
-    setDesktopVoiceStatus(desktopVoiceResult);
-    setIdentityState({
-      ok: true,
-      preferred_name: activation.preferred_name || "",
-      role_label: activation.role_label || "owner",
-      relation_to_robot: activation.relation_to_robot || "primary_user",
-      pronouns: activation.pronouns || "",
-      identity_summary: activation.identity_summary || "",
-      onboarding_notes: activation.onboarding_notes || "",
-      voice_intro_summary: activation.voice_intro_summary || "",
-      confidence: identityDone ? 1 : 0,
-      inference_source: identityDone ? "confirmed" : "heuristic",
-      inference_detail: identityDone ? "当前身份信息已经保存，可继续微调。" : "",
-      raw_json: {},
-    });
-    setAssessmentState({
-      ...assessment,
-      device_online: Boolean(assessment.device_online || runtimeResult.device_online),
-    });
-    if (preferredDevice && activation.owner_binding_completed) {
-      setScanState(`主人面部档案已绑定到设备 ${preferredDevice}。`);
-    } else if (preferredDevice && activation.owner_binding_required) {
-      setScanState(`当前设备 ${preferredDevice} 还没有主人面部档案，首次激活需要完成扫脸绑定。`);
-    }
-
-    if (identityDone && !assessmentDone && !assessment.exists) {
-      const started = await startAssessment({ surface: "desktop", voice_mode: "text", reset: false });
-      setAssessmentState(started);
+    setRuntime(runtimeState);
+    setDesktopVoiceStatus(desktopVoice);
+    setIdentity({ ok: identityDone, preferred_name: activation.preferred_name || "", role_label: activation.role_label || "owner", relation_to_robot: activation.relation_to_robot || "primary_user", pronouns: activation.pronouns || "", identity_summary: activation.identity_summary || "", onboarding_notes: activation.onboarding_notes || "", voice_intro_summary: activation.voice_intro_summary || "", confidence: identityDone ? 1 : 0, inference_source: identityDone ? "confirmed" : "blocked", inference_detail: identityDone ? "身份信息已确认。" : "", raw_json: {} });
+    setAssessment({ ...assessmentState, device_online: Boolean(assessmentState.device_online || runtimeState.device_online) });
+    setScanState(preferredDevice ? (activation.owner_binding_completed ? `主人档案已绑定到设备 ${preferredDevice}。` : `人格测评完成后，可在设备 ${preferredDevice} 上做人脸绑定。`) : "");
+    if (identityDone && !assessmentDone && !assessmentState.exists && runtimeState.ai_ready) {
+      setAssessment(await startAssessment({ surface: "desktop", voice_mode: "text", reset: false }));
     }
   };
 
   useEffect(() => {
     let active = true;
-    const bootstrap = async () => {
-      setBooting(true);
-      setError("");
-      try {
-        await loadState();
-      } catch (err) {
-        if (!active) return;
-        setError(err instanceof Error ? err.message : String(err));
-      } finally {
-        if (active) {
-          setBooting(false);
-        }
-      }
-    };
-    bootstrap();
-    return () => {
-      active = false;
-    };
+    (async () => {
+      try { await loadState(); } catch (err) { if (active) setError(fail(err)); } finally { if (active) setBooting(false); }
+    })();
+    return () => { active = false; };
   }, []);
 
   useEffect(() => {
-    if (!assessmentState.voice_session_active || psychometricCompleted) {
-      return;
-    }
+    if (!assessment.voice_session_active || psychometricCompleted) return;
     let cancelled = false;
-
     const tick = async () => {
       try {
         const result = await pollAssessmentVoice({ speakQuestion: true, windowMs: 5200 });
         if (cancelled) return;
-        setAssessmentState(result.state);
-        if (result.state.status === "completed") {
-          setPsychometricCompleted(true);
-        }
-        if (!result.device_online) {
-          setSuccess("设备离线，语音测评已自动退回文本模式。");
-          setAssessmentState((prev) => ({
-            ...prev,
-            voice_session_active: false,
-            voice_mode: "text",
-            device_online: false,
-          }));
-          return;
-        }
-        if (result.transcript && result.transcript_processed) {
-          setSuccess(`已收到语音回答：${result.transcript}`);
-        }
-      } catch (err) {
-        if (cancelled) return;
-        setError(err instanceof Error ? err.message : String(err));
-        setAssessmentState((prev) => ({
-          ...prev,
-          voice_session_active: false,
-          voice_mode: "text",
-        }));
-      }
+        setAssessment(result.state);
+        if (result.state.status === "completed") setPsychometricCompleted(true);
+        if (result.state.blocking_reason) setError(result.state.blocking_reason);
+      } catch (err) { if (!cancelled) setError(fail(err)); }
     };
-
-    tick();
-    const timer = window.setInterval(tick, 2200);
-    return () => {
-      cancelled = true;
-      window.clearInterval(timer);
-    };
-  }, [assessmentState.voice_session_active, psychometricCompleted]);
+    void tick();
+    const timer = window.setInterval(() => void tick(), 2200);
+    return () => { cancelled = true; window.clearInterval(timer); };
+  }, [assessment.voice_session_active, psychometricCompleted]);
 
   useEffect(() => {
-    if (!preferredDeviceId || !ownerBindingRequired || ownerBindingCompleted) {
-      return;
-    }
+    if (!preferredDeviceId || !ownerBindingRequired || ownerBindingCompleted) return;
     let cancelled = false;
     const tick = async () => {
       try {
         const status = await getOwnerBindingStatus(preferredDeviceId);
-        if (cancelled) {
-          return;
-        }
+        if (cancelled) return;
         if (status.enrolled) {
           setOwnerBindingCompleted(true);
           setOwnerBindingRequired(false);
-          setScanState(`主人面部档案已绑定完成，设备 ${status.device_id} 已可进行本地识别。`);
-          setSuccess("主人面部档案同步完成，首次绑定已完成。");
+          setScanState(`主人绑定完成，设备 ${status.device_id} 已可用于本地识别。`);
+          setSuccess("主人脸部绑定完成。");
         }
-      } catch (_err) {
-        return;
-      }
+      } catch {}
     };
-    tick();
-    const timer = window.setInterval(tick, 3200);
-    return () => {
-      cancelled = true;
-      window.clearInterval(timer);
-    };
+    void tick();
+    const timer = window.setInterval(() => void tick(), 3200);
+    return () => { cancelled = true; window.clearInterval(timer); };
   }, [preferredDeviceId, ownerBindingRequired, ownerBindingCompleted]);
 
-  useEffect(() => {
-    if (psychometricCompleted && preferredDeviceId && !ownerBindingCompleted) {
-      setOwnerBindingRequired(true);
-      if (!scanState) {
-        setScanState(`人格测评已完成，下一步请在设备 ${preferredDeviceId} 上完成主人扫脸绑定。`);
-      }
-    }
-  }, [preferredDeviceId, psychometricCompleted, ownerBindingCompleted, scanState]);
-
-  const canFinish = identityReady && psychometricCompleted && (!ownerBindingRequired || ownerBindingCompleted);
-  const scorePreview = useMemo(() => scoreItems(assessmentState.scores), [assessmentState.scores]);
-  const confidencePreview = useMemo(
-    () => confidenceItems(assessmentState.dimension_confidence),
-    [assessmentState.dimension_confidence]
-  );
-  const desktopVoiceReady = Boolean(desktopVoiceStatus.ready);
-  const canUseRobotVoice = identityReady && assessmentState.device_online && !psychometricCompleted;
-  const canUseDesktopVoice = identityReady && desktopVoiceReady && !psychometricCompleted;
-  const robotVoiceLabel = assessmentState.voice_session_active
-    ? "停止机器人语音测评"
-    : assessmentState.device_online
-      ? "启用机器人语音测评（可选）"
-      : "机器人未在线，先用文本或电脑麦克风";
-  const aiStatusTone = activationRuntime.ai_ready
-    ? "border-emerald-400/20 bg-emerald-500/10 text-emerald-200"
-    : "border-amber-400/20 bg-amber-500/10 text-amber-200";
-  const aiStatusLabel = activationRuntime.ai_ready ? "AI 推理在线" : "AI 推理未就绪";
-  const desktopVoiceLabel = desktopVoiceReady ? "电脑麦克风可用" : "电脑麦克风未就绪";
-  const identitySourceLabel =
-    identityState.inference_source === "ai"
-      ? "AI 草稿"
-      : identityState.inference_source === "confirmed"
-        ? "已确认"
-        : "保守草稿";
-  const identitySourceTone =
-    identityState.inference_source === "ai"
-      ? "border-emerald-400/20 bg-emerald-500/10 text-emerald-200"
-      : identityState.inference_source === "confirmed"
-        ? "border-cyan-400/20 bg-cyan-500/10 text-cyan-200"
-        : "border-amber-400/20 bg-amber-500/10 text-amber-200";
-  const assessmentQuestionSourceLabel =
-    assessmentState.question_source === "ai" ? "AI 编排问题" : "题库保底问题";
-  const assessmentScoringSourceLabel =
-    assessmentState.scoring_source === "ai"
-      ? "AI 评分中"
-      : assessmentState.scoring_source === "heuristic"
-        ? "规则保底评分"
-        : "等待作答";
-  const assessmentModeMessage =
-    assessmentState.mode_hint === "robot_voice_active"
-      ? "设备在线，当前由机器人本地播报、录音与转写。"
-      : assessmentState.mode_hint === "robot_voice_ready"
-        ? "设备在线，但首次激活仍建议优先用文本或电脑麦克风完成测评。"
-        : "设备离线只会影响机器人语音链路，不影响文本测评继续完成；电脑麦克风可在本机语音运行时就绪后直接使用。";
-
   const handleInferIdentity = async () => {
-    if (!introTranscript.trim()) {
-      setError("先让这个人做一句自我介绍，再生成身份草稿。");
-      return;
-    }
-    setBusy(true);
-    setError("");
-    setSuccess("");
+    if (!introTranscript.trim()) return setError("先输入一句自然自我介绍。");
+    setBusy(true); setError(""); setSuccess("");
     try {
-      const inferred = await inferActivationIdentity({
-        transcript: introTranscript,
-        observed_name: observedName,
-        surface: "desktop",
-        context: { source: "native_activation_gate" },
-      });
-      setIdentityState(inferred);
-      if (!observedName.trim() && inferred.preferred_name) {
-        setObservedName(inferred.preferred_name);
-      }
-      setSuccess(
-        inferred.inference_source === "ai"
-          ? "AI 身份草稿已生成，确认后会进入详细人格测评。"
-          : "AI 当前未完成推理，已自动回退到本地保守草稿，请人工确认后继续。"
-      );
-    } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
-    } finally {
-      setBusy(false);
-    }
+      const result = await inferActivationIdentity({ transcript: introTranscript.trim(), observed_name: observedName.trim(), surface: "desktop", context: { entrypoint: "activation_gate" } });
+      setIdentity(result);
+      if (!result.ok) return setError(result.inference_detail || "AI 身份草稿暂不可用。");
+      setSuccess("AI 身份草稿已生成，请确认后保存。");
+    } catch (err) { setError(fail(err)); } finally { setBusy(false); }
   };
 
   const handleCompleteIdentity = async () => {
-    if (!identityState.preferred_name.trim()) {
-      setError("请先确认这个人的称呼。");
-      return;
-    }
-    setBusy(true);
-    setError("");
-    setSuccess("");
+    if (!identity.preferred_name.trim() || !identity.identity_summary.trim()) return setError("请先补全称呼和身份摘要。");
+    setBusy(true); setError(""); setSuccess("");
     try {
-      await completeActivation({
-        preferred_name: identityState.preferred_name,
-        role_label: identityState.role_label || "owner",
-        relation_to_robot: identityState.relation_to_robot || "primary_user",
-        pronouns: identityState.pronouns || "",
-        identity_summary: identityState.identity_summary || "",
-        onboarding_notes: identityState.onboarding_notes || "",
-        voice_intro_summary: identityState.voice_intro_summary || introTranscript.trim(),
-        profile: {
-          source: "native_activation_gate",
-          intro_transcript: introTranscript.trim(),
-        },
-        activation_version: "v3-native-assessment",
-      });
+      await completeActivation({ preferred_name: identity.preferred_name.trim(), role_label: identity.role_label, relation_to_robot: identity.relation_to_robot, pronouns: identity.pronouns, identity_summary: identity.identity_summary.trim(), onboarding_notes: identity.onboarding_notes.trim(), voice_intro_summary: identity.voice_intro_summary.trim(), profile: { identity_source: identity.inference_source, raw_json: identity.raw_json }, activation_version: "activation-ai-only-v2" });
       setIdentityReady(true);
-      const started = await startAssessment({ surface: "desktop", voice_mode: "text", reset: true });
-      setAssessmentState(started);
-      setSuccess("身份确认完成。现在开始 8 维人格测评，会一直聊到四组指标足够稳定。");
-    } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
-    } finally {
-      setBusy(false);
-    }
+      setSuccess("身份确认已保存。");
+      await loadState();
+    } catch (err) { setError(fail(err)); } finally { setBusy(false); }
   };
 
-  const handleRestartAssessment = async () => {
-    setBusy(true);
-    setError("");
-    setSuccess("");
+  const handleStartAssessment = async (reset = false) => {
+    setBusy(true); setError(""); setSuccess("");
     try {
-      const started = await startAssessment({ surface: "desktop", voice_mode: "text", reset: true });
-      setAssessmentState(started);
-      setPsychometricCompleted(false);
-      setAnswerDraft("");
-      setSuccess("测评已重开，会重新收集八维信号。");
-    } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
-    } finally {
-      setBusy(false);
-    }
+      const result = await startAssessment({ surface: "desktop", voice_mode: "text", reset, device_id: preferredDeviceId || undefined });
+      setAssessment(result);
+      result.blocking_reason ? setError(result.blocking_reason) : setSuccess(reset ? "正式测评已重置。" : "正式测评已开始。");
+    } catch (err) { setError(fail(err)); } finally { setBusy(false); }
   };
 
-  const submitAssessmentAnswer = async (rawAnswer: string, voiceMode: "text" | "robot" | "desktop" = "text") => {
-    const normalizedAnswer = String(rawAnswer || "").trim();
-    if (!normalizedAnswer) {
-      setError("先输入这一轮回答。");
-      return;
-    }
-    setBusy(true);
-    setError("");
-    setSuccess("");
+  const handleSubmitTurn = async () => {
+    if (!answerDraft.trim()) return setError("请先输入这一轮回答。");
+    setBusy(true); setError(""); setSuccess("");
     try {
-      const nextState = await submitAssessmentTurn({
-        answer: normalizedAnswer,
-        transcript: normalizedAnswer,
-        surface: "desktop",
-        voice_mode: voiceMode === "desktop" ? "text" : voiceMode,
-      });
-      setAssessmentState(nextState);
+      const result = await submitAssessmentTurn({ answer: answerDraft.trim(), transcript: answerDraft.trim(), surface: "desktop", device_id: preferredDeviceId || undefined, voice_mode: assessment.voice_session_active ? "robot" : "text" });
+      setAssessment(result);
       setAnswerDraft("");
-      if (nextState.just_completed || nextState.status === "completed") {
-        setPsychometricCompleted(true);
-        setSuccess("测评完成，八维分值和类型已经写入长期记忆。下一步请完成主人扫脸绑定。");
+      if (result.blocking_reason) setError(result.blocking_reason);
+      else if (result.just_completed) { setPsychometricCompleted(true); setSuccess("AI 测评结果已稳定。"); }
+      else setSuccess("这一轮回答已计入正式测评。");
+    } catch (err) { setError(fail(err)); } finally { setBusy(false); }
+  };
+
+  const handleDesktopVoiceToggle = async () => {
+    if (!desktopVoiceStatus.ready) return setError(desktopVoiceStatus.primary_error || desktopVoiceStatus.fallback_error || "电脑麦克风不可用。");
+    setDesktopVoiceBusy(true); setError(""); setSuccess("");
+    try {
+      if (!desktopVoiceRecording) {
+        recorderRef.current = await createDesktopVoiceRecorder();
+        setDesktopVoiceRecording(true);
+        setSuccess("电脑麦克风录音已开始。");
       } else {
-        setSuccess("已记录这轮回答，继续下一题。");
+        const blob = await recorderRef.current!.stop();
+        recorderRef.current = null;
+        setDesktopVoiceRecording(false);
+        const transcript = await transcribeDesktopAudio(blob);
+        if (!transcript.text.trim()) throw new Error("没有识别到有效语音内容。");
+        setAnswerDraft(transcript.text.trim());
+        setSuccess("转写完成，已填入回答框。");
       }
-    } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
-    } finally {
-      setBusy(false);
-    }
+    } catch (err) { recorderRef.current = null; setDesktopVoiceRecording(false); setError(fail(err)); } finally { setDesktopVoiceBusy(false); }
   };
 
-  const handleSubmitAnswer = async () =>
-    submitAssessmentAnswer(answerDraft, assessmentState.voice_session_active ? "robot" : "text");
-
-  const handleDesktopVoiceAnswer = async () => {
-    if (!identityReady || psychometricCompleted) {
-      return;
-    }
-    if (!desktopVoiceReady) {
-      setError(desktopVoiceStatus.primary_error || "桌面语音运行时未启动，当前请先使用文本回答。");
-      return;
-    }
-    setError("");
-    if (desktopVoiceRecording && desktopVoiceRecorderRef.current) {
-      setDesktopVoiceBusy(true);
-      try {
-        const blob = await desktopVoiceRecorderRef.current.stop();
-        desktopVoiceRecorderRef.current = null;
-        setDesktopVoiceRecording(false);
-        const result = await transcribeDesktopAudio(blob, "activation_assessment");
-        const transcript = String(result.transcript || "").trim();
-        if (!transcript) {
-          setError("没有识别到有效语音，请重试");
-          return;
-        }
-        setAnswerDraft(transcript);
-        await submitAssessmentAnswer(transcript, "desktop");
-      } catch (err) {
-        setError(err instanceof Error ? err.message : String(err));
-        setDesktopVoiceRecording(false);
-        desktopVoiceRecorderRef.current = null;
-      } finally {
-        setDesktopVoiceBusy(false);
-      }
-      return;
-    }
-    setDesktopVoiceBusy(true);
+  const handleRobotVoiceToggle = async () => {
+    if (!preferredDeviceId || !runtime.robot_voice_ready) return;
+    setVoiceBusy(true); setError(""); setSuccess("");
     try {
-      desktopVoiceRecorderRef.current = await createDesktopVoiceRecorder();
-      setDesktopVoiceRecording(true);
-      setSuccess("电脑端本地录音已开始，说完后再按一次按钮结束并提交");
-    } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
-      desktopVoiceRecorderRef.current = null;
-      setDesktopVoiceRecording(false);
-    } finally {
-      setDesktopVoiceBusy(false);
-    }
+      if (assessment.voice_session_active) {
+        await stopAssessmentVoice(preferredDeviceId);
+        setAssessment((prev) => ({ ...prev, voice_session_active: false, voice_mode: "text" }));
+        setSuccess("机器人语音测评已停止。");
+      } else {
+        await startAssessmentVoice(preferredDeviceId);
+        setAssessment((prev) => ({ ...prev, voice_session_active: true, voice_mode: "robot", device_online: true }));
+        setSuccess("机器人语音测评已启动。");
+      }
+    } catch (err) { setError(fail(err)); } finally { setVoiceBusy(false); }
   };
 
-  const handleForceFinish = async () => {
-    setBusy(true);
-    setError("");
-    setSuccess("");
+  const handleFinishAssessment = async () => {
+    setBusy(true); setError(""); setSuccess("");
     try {
-      const done = await finishAssessment();
-      setAssessmentState(done);
+      const result = await finishAssessment();
+      setAssessment(result);
       setPsychometricCompleted(true);
-      setSuccess("测评已收束，当前结果已经落库。");
-    } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
-    } finally {
-      setBusy(false);
-    }
+      setSuccess("正式人格结果已写入长期记忆。");
+      await loadState();
+    } catch (err) { setError(fail(err)); } finally { setBusy(false); }
   };
 
-  const handleToggleVoice = async () => {
-    setVoiceBusy(true);
-    setError("");
-    setSuccess("");
+  const handleStartOwnerScan = async () => {
+    if (!preferredDeviceId) return setError("还没有可用设备。");
+    setBusy(true); setError(""); setSuccess("");
     try {
-      if (assessmentState.voice_session_active) {
-        await stopAssessmentVoice();
-        setAssessmentState((prev) => ({
-          ...prev,
-          voice_session_active: false,
-          voice_mode: "text",
-        }));
-        setSuccess("机器人语音测评已停止，回到文本模式。");
-      } else {
-        const result = await startAssessmentVoice();
-        if (result?.assessment) {
-          setAssessmentState(result.assessment);
-        } else {
-          setAssessmentState((prev) => ({
-            ...prev,
-            voice_session_active: Boolean(result?.device_online),
-            voice_mode: result?.device_online ? "robot" : "text",
-            device_online: Boolean(result?.device_online),
-          }));
-        }
-        if (result?.device_online) {
-          setSuccess("机器人语音测评已启动，问题会由开发板本地播报。");
-        } else {
-          setSuccess("设备当前离线，先使用文本模式继续。");
-        }
-      }
-    } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
-    } finally {
-      setVoiceBusy(false);
-    }
+      const result = await startOwnerEnrollment(preferredDeviceId);
+      setScanState(result.detail || `已向设备 ${preferredDeviceId} 发送主人扫描请求。`);
+      setSuccess("主人扫描流程已启动。");
+    } catch (err) { setError(fail(err)); } finally { setBusy(false); }
   };
 
-  const handleStartFaceScan = async () => {
-    if (!psychometricCompleted) {
-      setError("先完成测评，再启动扫脸建档。");
-      return;
-    }
-    setBusy(true);
-    setError("");
-    setSuccess("");
-    try {
-      const response = await startOwnerEnrollment(preferredDeviceId || undefined);
-      setOwnerBindingRequired(true);
-      setOwnerBindingCompleted(false);
-      setScanState(response?.detail || "已向机器人发送主人建档请求。");
-      setSuccess("扫脸建档请求已经发到开发板，完成采样后会自动同步绑定状态。");
-    } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
-    } finally {
-      setBusy(false);
-    }
+  const handleFinishActivation = async () => {
+    setFinishing(true); setError("");
+    try { await onActivated(); } catch (err) { setError(fail(err)); } finally { setFinishing(false); }
   };
 
-  const handleFinish = async () => {
-    if (!canFinish) {
-      setError(ownerBindingRequired ? "请先完成主人扫脸绑定，再结束首次激活。" : "请先完成身份确认和人格测评。");
-      return;
-    }
-    setFinishing(true);
-    setError("");
-    try {
-      await onActivated();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
-    } finally {
-      setFinishing(false);
-    }
-  };
-
-  if (booting) {
-    return (
-      <div className="w-screen h-screen bg-[#070b14] flex items-center justify-center text-slate-200">
-        <div className="flex items-center gap-3 text-sm font-bold">
-          <LoaderCircle className="animate-spin" size={18} />
-          正在加载首次激活与人格测评...
-        </div>
-      </div>
-    );
-  }
+  if (booting) return <div className="flex min-h-screen items-center justify-center bg-[#0a0a10] text-white"><div className="flex items-center gap-3 rounded-2xl border border-white/10 bg-white/5 px-6 py-4"><LoaderCircle className="h-5 w-5 animate-spin" />正在加载首次激活状态…</div></div>;
 
   return (
-    <div className="h-screen overflow-y-auto overflow-x-hidden bg-[#070b14] text-slate-100 px-8 py-7">
-      <div className="max-w-7xl mx-auto flex flex-col gap-6 pb-8">
-        <div className="rounded-[2rem] border border-white/10 bg-slate-950/60 backdrop-blur-2xl px-8 py-6 flex items-center justify-between gap-6">
-          <div className="flex items-center gap-4">
-            <div className="w-14 h-14 rounded-3xl bg-emerald-500/15 text-emerald-300 border border-emerald-500/20 flex items-center justify-center">
-              <ShieldCheck size={26} />
-            </div>
-            <div>
-              <h1 className="text-2xl font-black tracking-tight">首次激活</h1>
-              <p className="text-sm text-slate-400 font-semibold">
-                先确认这个人是谁，再通过多轮轻松对话拿到完整的 8 维人格信号，最后完成主人扫脸绑定。
-              </p>
+    <div className="h-screen overflow-y-auto overflow-x-hidden bg-[#0a0a10] px-10 py-9 text-white">
+      <div className="mx-auto flex max-w-[1240px] flex-col gap-8 pb-16">
+        <section className="rounded-[36px] border border-violet-500/40 bg-[#171521] px-10 py-8">
+          <div className="flex flex-col gap-6 lg:flex-row lg:items-center lg:justify-between">
+            <div className="flex items-start gap-5"><div className="flex h-18 w-18 items-center justify-center rounded-[24px] bg-emerald-500/15 text-emerald-300"><ShieldCheck className="h-8 w-8" /></div><div className="space-y-2"><h1 className="text-4xl font-black tracking-tight">首次激活</h1><p className="max-w-[760px] text-lg text-violet-100/85">先确认身份，再由同一条 OpenClaw / 生产 AI 链完成正式八功能测评，最后把精炼人格索引写入长期记忆。</p></div></div>
+            <button type="button" onClick={handleFinishActivation} disabled={!canFinish || finishing} className="inline-flex items-center justify-center gap-3 rounded-[20px] bg-white px-6 py-4 text-lg font-semibold text-[#171521] transition disabled:cursor-not-allowed disabled:bg-white/20 disabled:text-white/40">{finishing ? <LoaderCircle className="h-5 w-5 animate-spin" /> : <CheckCircle2 className="h-5 w-5" />}完成激活并进入桌面</button>
+          </div>
+        </section>
+
+        <section className={`rounded-[28px] border px-6 py-5 ${aiTone}`}>
+          <div className="flex flex-wrap items-center gap-3"><Brain className="h-5 w-5" /><span className="text-lg font-semibold">{runtime.ai_ready ? "AI 在线，可开始正式测评" : "AI 未就绪，正式测评已暂停"}</span><span className="rounded-full border border-current/20 px-3 py-1 text-sm">Gateway: {runtime.gateway_ready ? "ready" : "offline"}</span><span className="rounded-full border border-current/20 px-3 py-1 text-sm">Provider: {runtime.provider_network_ok ? "reachable" : "blocked"}</span></div>
+          <p className="mt-3 text-sm opacity-90">{runtime.blocking_reason || runtime.ai_detail || "AI 正常时，身份草稿与人格测评都会进入正式链路。"}</p>
+        </section>
+
+        {(error || success) && <section className="grid gap-3">{error && <div className="rounded-2xl border border-rose-400/30 bg-rose-500/10 px-5 py-4 text-rose-200">{error}</div>}{success && <div className="rounded-2xl border border-emerald-400/30 bg-emerald-500/10 px-5 py-4 text-emerald-200">{success}</div>}</section>}
+
+        <section className="grid gap-6 xl:grid-cols-[1.1fr_1.5fr_0.9fr]">
+          <div className="rounded-[32px] border border-violet-500/35 bg-[#181622] p-6">
+            <div className="mb-6 flex items-center gap-3"><UserRound className="h-5 w-5 text-fuchsia-300" /><h2 className="text-2xl font-black tracking-tight">1. 身份确认</h2></div>
+            <p className="mb-5 text-sm leading-7 text-violet-100/75">AI 在线时可以生成正式身份草稿；AI 不在线时，你仍可手动填写，但不会再展示伪造的本地草稿结果。</p>
+            <div className="space-y-4">
+              <textarea value={introTranscript} onChange={(e) => setIntroTranscript(e.target.value)} placeholder="先输入一句自然自我介绍，例如：我叫京亮，是这个机器人的主人。" className="min-h-[160px] w-full rounded-[26px] border border-violet-500/35 bg-[#1b1927] px-5 py-4 text-lg text-white outline-none placeholder:text-violet-100/45" />
+              <input value={observedName} onChange={(e) => setObservedName(e.target.value)} placeholder="如果你已经知道称呼，可以先补充在这里" className="w-full rounded-[20px] border border-violet-500/35 bg-[#1b1927] px-5 py-4 text-lg text-white outline-none placeholder:text-violet-100/45" />
+              <button type="button" onClick={handleInferIdentity} disabled={busy || !introTranscript.trim()} className="flex w-full items-center justify-center gap-3 rounded-[20px] bg-[#56207f] px-5 py-4 text-lg font-semibold text-fuchsia-200 transition hover:bg-[#6c29a0] disabled:cursor-not-allowed disabled:opacity-50">{busy ? <LoaderCircle className="h-5 w-5 animate-spin" /> : <Sparkles className="h-5 w-5" />}生成 AI 身份草稿</button>
+              <div className={`rounded-[24px] border px-5 py-4 text-sm leading-7 ${identity.ok && identity.inference_source === "ai" ? "border-emerald-400/25 bg-emerald-500/10 text-emerald-200" : "border-amber-400/25 bg-amber-500/10 text-amber-100"}`}><div className="mb-2 flex items-center justify-between"><span className="font-semibold">草稿状态</span><span>{identity.ok && identity.inference_source === "ai" ? `AI 草稿 · 可信度 ${Math.round(identity.confidence * 100)}%` : "AI 未就绪 / 草稿未生成"}</span></div><p>{identity.inference_detail || "只有 AI 真正返回结构化结果后，这里才会显示正式草稿。"}</p></div>
+              <div className="grid gap-4 md:grid-cols-2"><input value={identity.preferred_name} onChange={(e) => setIdentity((prev) => ({ ...prev, preferred_name: e.target.value }))} placeholder="称呼" className="rounded-[22px] border border-violet-500/35 bg-[#1b1927] px-5 py-4 text-lg text-white outline-none" /><select value={identity.role_label} onChange={(e) => setIdentity((prev) => ({ ...prev, role_label: e.target.value }))} className="rounded-[22px] border border-violet-500/35 bg-[#1b1927] px-5 py-4 text-lg text-white outline-none">{ROLE_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select></div>
+              <select value={identity.relation_to_robot} onChange={(e) => setIdentity((prev) => ({ ...prev, relation_to_robot: e.target.value }))} className="w-full rounded-[22px] border border-violet-500/35 bg-[#1b1927] px-5 py-4 text-lg text-white outline-none">{RELATION_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select>
+              <textarea value={identity.identity_summary} onChange={(e) => setIdentity((prev) => ({ ...prev, identity_summary: e.target.value }))} placeholder="身份摘要：这个人和机器人是什么关系，后续应该如何称呼和服务。" className="min-h-[150px] w-full rounded-[26px] border border-violet-500/35 bg-[#1b1927] px-5 py-4 text-lg text-white outline-none placeholder:text-violet-100/45" />
+              <textarea value={identity.onboarding_notes} onChange={(e) => setIdentity((prev) => ({ ...prev, onboarding_notes: e.target.value }))} placeholder="激活备注：还需要人工确认什么。" className="min-h-[120px] w-full rounded-[26px] border border-violet-500/35 bg-[#1b1927] px-5 py-4 text-lg text-white outline-none placeholder:text-violet-100/45" />
+              <button type="button" onClick={handleCompleteIdentity} disabled={busy} className="flex w-full items-center justify-center gap-3 rounded-[20px] bg-emerald-500/15 px-5 py-4 text-lg font-semibold text-emerald-200 transition hover:bg-emerald-500/20 disabled:cursor-not-allowed disabled:opacity-50"><CheckCircle2 className="h-5 w-5" />身份已确认</button>
             </div>
           </div>
-          <button
-            onClick={handleFinish}
-            disabled={!canFinish || busy || finishing}
-            className="px-5 py-3 rounded-2xl bg-white text-slate-950 font-black text-sm disabled:opacity-50 flex items-center gap-2"
-          >
-            {finishing ? <LoaderCircle className="animate-spin" size={16} /> : <CheckCircle2 size={16} />}
-            完成激活并进入桌面
-          </button>
-        </div>
 
-        {(error || success) && (
-          <div
-            className={`rounded-3xl px-5 py-4 text-sm font-semibold ${
-              error ? "bg-rose-500/12 border border-rose-400/20 text-rose-200" : "bg-emerald-500/12 border border-emerald-400/20 text-emerald-200"
-            }`}
-          >
-            {error || success}
+          <div className="rounded-[32px] border border-violet-500/35 bg-[#181622] p-6">
+            <div className="mb-6 flex items-center justify-between gap-3"><div className="flex items-center gap-3"><Brain className="h-5 w-5 text-violet-300" /><h2 className="text-2xl font-black tracking-tight">2. 八功能正式测评</h2></div><button type="button" onClick={() => void handleStartAssessment(true)} disabled={busy || !identityReady} className="rounded-full border border-violet-400/25 px-4 py-2 text-sm text-violet-100/85 transition hover:bg-white/5 disabled:cursor-not-allowed disabled:opacity-40">重新测评</button></div>
+            <div className={`mb-5 rounded-[24px] border px-5 py-4 ${aiTone}`}><div className="mb-3 flex flex-wrap items-center gap-3 text-sm"><span className="font-semibold">当前测评模式</span><span className="rounded-full border border-current/20 px-3 py-1">问题来源：{assessment.question_source}</span><span className="rounded-full border border-current/20 px-3 py-1">当前评分：{assessment.scoring_source}</span><span className="rounded-full border border-current/20 px-3 py-1">当前缺口：{assessment.question_pair || "待分配"}</span></div><p className="text-sm leading-7 opacity-90">{assessment.blocking_reason || (runtime.ai_ready ? "正式测评只会在真实 AI 评分的基础上继续推进。" : "AI 未就绪时，不会生成假题目，也不会累计假分数。")}</p></div>
+            <div className="mb-5 rounded-[24px] border border-violet-500/30 bg-[#1b1927] p-5"><div className="mb-3 flex items-center justify-between text-sm text-violet-100/80"><span>当前进度</span><span>{assessment.effective_turn_count}/{assessment.required_min_turns} 起步，最多 {assessment.max_turns} 轮</span></div><div className="h-3 rounded-full bg-white/5"><div className="h-3 rounded-full bg-gradient-to-r from-fuchsia-500 via-violet-500 to-emerald-400" style={{ width: `${progress}%` }} /></div><div className="mt-5 grid grid-cols-2 gap-3 lg:grid-cols-4">{functionCards.map(([key, value]) => <div key={key} className="rounded-[20px] border border-violet-500/30 bg-[#171521] px-4 py-4"><div className="text-sm font-semibold text-violet-200">{key}</div><div className="mt-2 text-3xl font-black">{Math.round(value * 100) / 100}</div><div className="mt-2 text-xs text-violet-100/60">{FUNCTION_LABELS[key] || key}</div></div>)}</div></div>
+            <div className="mb-5 rounded-[28px] bg-[#3b234b] px-6 py-6"><div className="mb-3 flex items-center gap-3 text-violet-100"><Brain className="h-5 w-5" /><span className="font-semibold">当前问题</span></div><div className="text-3xl font-black leading-tight">{assessment.latest_question || "AI 在线后，这里会出现正式下一题。"}</div><p className="mt-4 text-sm leading-7 text-violet-100/80">至少 12 轮有效回答后，只有八功能信号稳定才允许写入正式人格结果。</p></div>
+            <textarea value={answerDraft} onChange={(e) => setAnswerDraft(e.target.value)} placeholder="请用自然语言真实作答。越具体，越容易让 AI 得到稳定的八功能信号。" className="min-h-[170px] w-full rounded-[26px] border border-violet-500/35 bg-[#1b1927] px-5 py-4 text-lg text-white outline-none placeholder:text-violet-100/45" />
+            <div className="mt-5 flex flex-wrap gap-4">
+              <button type="button" onClick={handleSubmitTurn} disabled={busy || !identityReady || !answerDraft.trim() || !assessment.can_submit_text} className="inline-flex items-center gap-3 rounded-[20px] bg-white px-6 py-4 text-lg font-semibold text-[#171521] transition disabled:cursor-not-allowed disabled:bg-white/20 disabled:text-white/40"><ChevronRight className="h-5 w-5" />提交这一轮回答</button>
+              <button type="button" onClick={handleDesktopVoiceToggle} disabled={desktopVoiceBusy || !identityReady} className="inline-flex items-center gap-3 rounded-[20px] border border-amber-400/30 bg-amber-500/10 px-6 py-4 text-lg font-semibold text-amber-200 transition disabled:cursor-not-allowed disabled:opacity-40">{desktopVoiceBusy ? <LoaderCircle className="h-5 w-5 animate-spin" /> : desktopVoiceRecording ? <PauseCircle className="h-5 w-5" /> : <Mic className="h-5 w-5" />}{desktopVoiceRecording ? "停止电脑麦克风" : "电脑麦克风作答"}</button>
+              <button type="button" onClick={handleRobotVoiceToggle} disabled={voiceBusy || !identityReady || !runtime.robot_voice_ready} className="inline-flex items-center gap-3 rounded-[20px] border border-cyan-400/30 bg-cyan-500/10 px-6 py-4 text-lg font-semibold text-cyan-200 transition disabled:cursor-not-allowed disabled:opacity-40">{voiceBusy ? <LoaderCircle className="h-5 w-5 animate-spin" /> : assessment.voice_session_active ? <PauseCircle className="h-5 w-5" /> : <PlayCircle className="h-5 w-5" />}{assessment.voice_session_active ? "停止机器人语音测评" : "启用机器人语音测评"}</button>
+              <button type="button" onClick={handleFinishAssessment} disabled={busy || !assessment.assessment_ready} className="inline-flex items-center gap-3 rounded-[20px] border border-violet-400/30 bg-violet-500/10 px-6 py-4 text-lg font-semibold text-violet-100 transition disabled:cursor-not-allowed disabled:opacity-40"><Brain className="h-5 w-5" />写入正式人格结果</button>
+            </div>
+            <div className="mt-6 rounded-[24px] border border-violet-500/30 bg-[#171521] p-5"><div className="mb-3 text-sm font-semibold text-violet-200">正式结果预览</div><div className="grid gap-4 md:grid-cols-2"><div><div className="text-sm text-violet-100/65">主辅功能堆栈</div><div className="mt-2 text-xl font-black">{assessment.dominant_stack.join(" / ") || "等待 AI 结果"}</div></div><div><div className="text-sm text-violet-100/65">兼容映射类型</div><div className="mt-2 text-xl font-black">{assessment.mapped_type_code || "等待 AI 结果"}</div></div></div><p className="mt-4 text-sm leading-7 text-violet-100/75">{assessment.summary || "正式人格摘要会在 AI 真正测出稳定八功能结果后显示。"}</p></div>
           </div>
-        )}
 
-        <div className="rounded-[2rem] border border-cyan-400/15 bg-cyan-500/8 p-5">
-          <div className="flex flex-wrap items-center gap-3 text-sm font-black">
-            <span className="text-cyan-100">首次激活默认路径：</span>
-            <span className="rounded-full border border-white/10 bg-white/5 px-3 py-1.5 text-slate-100">1. 输入文字或自我介绍</span>
-            <span className="rounded-full border border-white/10 bg-white/5 px-3 py-1.5 text-slate-100">2. 电脑麦克风或文本继续测评</span>
-            <span className="rounded-full border border-white/10 bg-white/5 px-3 py-1.5 text-slate-100">3. 如设备在线，再补机器人语音与扫脸</span>
+          <div className="rounded-[32px] border border-violet-500/35 bg-[#181622] p-6">
+            <div className="mb-6 flex items-center gap-3"><Camera className="h-5 w-5 text-emerald-300" /><h2 className="text-2xl font-black tracking-tight">3. 结果与扫脸</h2></div>
+            <div className="space-y-5">
+              <div className="rounded-[24px] border border-violet-500/35 bg-[#1b1927] p-5"><div className="mb-2 text-sm font-semibold text-violet-200">正式人格结论</div><div className="mb-3 text-4xl font-black">{assessment.mapped_type_code || "待生成"}</div><p className="text-sm leading-7 text-violet-100/75">{assessment.summary || "AI 真实测完后，这里会展示八功能摘要和兼容类型说明。"}</p></div>
+              <div className="rounded-[24px] border border-violet-500/35 bg-[#1b1927] p-5"><div className="mb-3 flex items-center gap-3 text-violet-100"><Mic className="h-4 w-4" /><span className="font-semibold">语音链路状态</span></div><p className="text-sm leading-7 text-violet-100/70">电脑麦克风：{desktopVoiceStatus.ready ? "可用" : "未就绪"}。机器人语音：{runtime.robot_voice_ready ? "可用" : "设备离线或未绑定"}。</p><p className="mt-3 text-sm leading-7 text-violet-100/70">{desktopVoiceStatus.primary_error || desktopVoiceStatus.fallback_error || runtime.desktop_voice_detail}</p></div>
+              <button type="button" onClick={handleStartOwnerScan} disabled={busy || !psychometricCompleted || !preferredDeviceId || ownerBindingCompleted} className="inline-flex w-full items-center justify-center gap-3 rounded-[20px] bg-emerald-500/10 px-6 py-4 text-lg font-semibold text-emerald-200 transition hover:bg-emerald-500/15 disabled:cursor-not-allowed disabled:opacity-40"><ScanFace className="h-5 w-5" />启动主人扫描建档</button>
+              <div className="rounded-[24px] border border-violet-500/35 bg-[#1b1927] p-5 text-sm leading-7 text-violet-100/70">{scanState || "正式人格结果写入完成后，如有设备，可继续主人脸部绑定。"}</div>
+            </div>
           </div>
-          <p className="mt-3 text-xs leading-6 font-semibold text-cyan-100/90">
-            机器人语音和扫脸不是首次进入电脑端的前置条件。真正必须先完成的是身份确认和文本测评；机器人在线后，只是把语音播报、录音和主人绑定补齐。
-          </p>
-        </div>
-
-        <div className="grid grid-cols-4 gap-4">
-          <div className={`rounded-3xl border p-4 ${aiStatusTone}`}>
-            <div className="text-[11px] font-black uppercase tracking-[0.2em]">AI 身份草稿</div>
-            <div className="mt-2 text-base font-black">{aiStatusLabel}</div>
-            <p className="mt-2 text-xs leading-6 font-semibold opacity-90">
-              {activationRuntime.ai_ready
-                ? "现在会优先尝试 OpenClaw/AI 生成身份草稿和测评编排。"
-                : activationRuntime.ai_detail || "当前 AI 推理未连上，身份草稿会自动回退到本地保守结果。"}
-            </p>
-          </div>
-          <div className="rounded-3xl border border-emerald-400/20 bg-emerald-500/10 p-4 text-emerald-200">
-            <div className="text-[11px] font-black uppercase tracking-[0.2em]">文本测评</div>
-            <div className="mt-2 text-base font-black">始终可用</div>
-            <p className="mt-2 text-xs leading-6 font-semibold opacity-90">
-              就算机器人离线，也可以先用键盘完成 8 维测评，不会卡在第一步。
-            </p>
-          </div>
-          <div
-            className={`rounded-3xl border p-4 ${
-              desktopVoiceReady
-                ? "border-amber-400/20 bg-amber-500/10 text-amber-200"
-                : "border-slate-700 bg-slate-900/70 text-slate-300"
-            }`}
-          >
-            <div className="text-[11px] font-black uppercase tracking-[0.2em]">电脑麦克风</div>
-            <div className="mt-2 text-base font-black">{desktopVoiceLabel}</div>
-            <p className="mt-2 text-xs leading-6 font-semibold opacity-90">
-              {desktopVoiceReady
-                ? `本机转写引擎已就绪，当前提供者：${desktopVoiceStatus.active_provider || desktopVoiceStatus.provider_preference}。`
-                : desktopVoiceStatus.primary_error || "本机语音运行时未启动，先用文本作答即可。"}
-            </p>
-          </div>
-          <div
-            className={`rounded-3xl border p-4 ${
-              assessmentState.device_online
-                ? "border-cyan-400/20 bg-cyan-500/10 text-cyan-200"
-                : "border-slate-700 bg-slate-900/70 text-slate-300"
-            }`}
-          >
-            <div className="text-[11px] font-black uppercase tracking-[0.2em]">机器人语音与扫脸</div>
-            <div className="mt-2 text-base font-black">{assessmentState.device_online ? "设备在线" : "设备未在线"}</div>
-            <p className="mt-2 text-xs leading-6 font-semibold opacity-90">
-              {assessmentState.device_online
-                ? `当前设备 ${preferredDeviceId || activationRuntime.preferred_device_id || "已绑定"} 可用于机器人语音和主人扫脸。`
-                : "这部分只是硬件增强链路，离线时不会阻断首次激活。"}
-            </p>
-          </div>
-        </div>
-
-        <div className="grid grid-cols-12 gap-6">
-          <section className="col-span-4 rounded-[2rem] border border-white/10 bg-slate-950/45 p-6 flex flex-col gap-4">
-            <div className="flex items-center gap-3">
-              <UserRound size={18} className="text-indigo-300" />
-              <h2 className="text-lg font-black">1. 身份确认</h2>
-            </div>
-            <div className="rounded-3xl border border-white/10 bg-slate-900/60 p-4 space-y-3">
-              <p className="text-xs text-slate-300 font-semibold leading-6">
-                先输入一句自然自我介绍。系统会先尝试用 AI 生成身份草稿；如果 AI 当前不可用，会退回到本地保守规则，但会明确告诉你不是 AI 结果。
-              </p>
-              <div className="grid grid-cols-2 gap-3 text-[11px] font-semibold text-slate-400">
-                <div className="rounded-2xl border border-white/10 bg-slate-950/60 px-3 py-3">
-                  必填 1：一句自我介绍
-                </div>
-                <div className="rounded-2xl border border-white/10 bg-slate-950/60 px-3 py-3">
-                  选填 2：如果已知称呼，可提前补上
-                </div>
-              </div>
-            </div>
-            <textarea
-              value={introTranscript}
-              onChange={(e) => setIntroTranscript(e.target.value)}
-              placeholder="例如：我叫赵京亮，是这个机器人的主人，平时更喜欢安静、讲逻辑一点的交流。"
-              className="min-h-[132px] rounded-3xl bg-slate-900/70 border border-white/10 px-4 py-4 text-sm font-semibold text-slate-100 outline-none resize-none"
-            />
-            <input
-              value={observedName}
-              onChange={(e) => setObservedName(e.target.value)}
-              placeholder="补充称呼，例如：赵京亮 / 京亮 / 爸爸"
-              className="rounded-2xl bg-slate-900/70 border border-white/10 px-4 py-3 text-sm font-semibold text-slate-100 outline-none"
-            />
-            <button
-              onClick={handleInferIdentity}
-              disabled={busy}
-              className="rounded-2xl bg-indigo-500/15 border border-indigo-400/20 text-indigo-200 py-3 font-black text-sm flex items-center justify-center gap-2 disabled:opacity-50"
-            >
-              {busy ? <LoaderCircle className="animate-spin" size={16} /> : <Sparkles size={16} />}
-              {activationRuntime.ai_ready ? "生成 AI 身份草稿" : "尝试生成 AI 身份草稿"}
-            </button>
-            <div className={`rounded-3xl border px-4 py-4 space-y-3 ${identitySourceTone}`}>
-              <div className="flex items-center justify-between gap-3">
-                <span className="text-xs font-black uppercase tracking-[0.2em]">草稿状态</span>
-                <span className="text-xs font-black">
-                  {identitySourceLabel} · 可信度 {Math.round((identityState.confidence || 0) * 100)}%
-                </span>
-              </div>
-              <p className="text-xs font-semibold leading-6">
-                {identityState.inference_source === "ai"
-                  ? "这份身份草稿来自 AI 提取，但仍建议你人工确认后再保存。"
-                  : identityState.inference_source === "confirmed"
-                    ? "当前身份信息已经保存，你仍然可以在下面继续手动修正。"
-                    : "当前不是 AI 草稿，而是本地保守规则给出的兜底结果。请务必人工确认。"}
-              </p>
-              {identityState.inference_detail && (
-                <p className="text-[11px] font-semibold leading-6 opacity-90">{identityState.inference_detail}</p>
-              )}
-              {identityState.onboarding_notes && (
-                <p className="text-[11px] font-semibold leading-6 opacity-90">{identityState.onboarding_notes}</p>
-              )}
-            </div>
-            <div className="grid grid-cols-2 gap-3">
-              <label className="rounded-2xl bg-slate-900/70 border border-white/10 px-4 py-3 text-sm font-semibold text-slate-100">
-                <div className="mb-2 text-[10px] font-black uppercase tracking-[0.2em] text-slate-500">称呼</div>
-                <input
-                  value={identityState.preferred_name}
-                  onChange={(e) => setIdentityState((prev) => ({ ...prev, preferred_name: e.target.value }))}
-                  placeholder="例如：赵京亮"
-                  className="w-full bg-transparent outline-none"
-                />
-              </label>
-              <label className="rounded-2xl bg-slate-900/70 border border-white/10 px-4 py-3 text-sm font-semibold text-slate-100">
-                <div className="mb-2 text-[10px] font-black uppercase tracking-[0.2em] text-slate-500">身份角色</div>
-                <select
-                  value={identityState.role_label || "unknown"}
-                  onChange={(e) => setIdentityState((prev) => ({ ...prev, role_label: e.target.value }))}
-                  className="w-full bg-transparent outline-none"
-                >
-                  {ROLE_OPTIONS.map((item) => (
-                    <option key={item.value} value={item.value} className="bg-slate-950 text-slate-100">
-                      {item.label}
-                    </option>
-                  ))}
-                </select>
-              </label>
-            </div>
-            <label className="rounded-2xl bg-slate-900/70 border border-white/10 px-4 py-3 text-sm font-semibold text-slate-100">
-              <div className="mb-2 text-[10px] font-black uppercase tracking-[0.2em] text-slate-500">与机器人的关系</div>
-              <select
-                value={identityState.relation_to_robot || "unknown"}
-                onChange={(e) => setIdentityState((prev) => ({ ...prev, relation_to_robot: e.target.value }))}
-                className="w-full bg-transparent outline-none"
-              >
-                {RELATION_OPTIONS.map((item) => (
-                  <option key={item.value} value={item.value} className="bg-slate-950 text-slate-100">
-                    {item.label}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <textarea
-              value={identityState.identity_summary}
-              onChange={(e) => setIdentityState((prev) => ({ ...prev, identity_summary: e.target.value }))}
-              placeholder="一句话总结这个人是谁，以及机器人之后应该以什么身份对待他。"
-              className="min-h-[90px] rounded-3xl bg-slate-900/70 border border-white/10 px-4 py-4 text-sm font-semibold text-slate-100 outline-none resize-none"
-            />
-            <div className="rounded-3xl border border-white/10 bg-slate-900/60 p-4 text-xs leading-6 text-slate-400 font-semibold">
-              当前识别结果：
-              <span className="ml-2 text-slate-200">
-                {identityState.preferred_name || "未识别称呼"} / {HUMAN_ROLE_LABELS[identityState.role_label] || "待确认"} /{" "}
-                {HUMAN_RELATION_LABELS[identityState.relation_to_robot] || "待确认"}
-              </span>
-            </div>
-            <button
-              onClick={handleCompleteIdentity}
-              disabled={busy || identityReady}
-              className="rounded-2xl bg-emerald-500/15 border border-emerald-400/20 text-emerald-200 py-3 font-black text-sm flex items-center justify-center gap-2 disabled:opacity-50"
-            >
-              <CheckCircle2 size={16} />
-              {identityReady ? "身份已确认" : "确认身份并进入测评"}
-            </button>
-          </section>
-
-          <section className="col-span-5 rounded-[2rem] border border-white/10 bg-slate-950/45 p-6 flex flex-col gap-4">
-            <div className="flex items-center justify-between gap-4">
-              <div className="flex items-center gap-3">
-                <Brain size={18} className="text-fuchsia-300" />
-                <h2 className="text-lg font-black">2. 8 维人格测评</h2>
-              </div>
-              <button
-                onClick={handleRestartAssessment}
-                disabled={!identityReady || busy}
-                className="text-xs font-black px-3 py-2 rounded-2xl border border-white/10 text-slate-300 disabled:opacity-40"
-              >
-                重开测评
-              </button>
-            </div>
-
-            <div className="rounded-3xl border border-cyan-400/15 bg-cyan-500/8 p-4 space-y-3">
-              <div className="flex items-center justify-between gap-3 text-xs font-black">
-                <span className="text-cyan-200">当前测评模式</span>
-                <span className="text-cyan-100">
-                  {assessmentState.device_online ? "设备在线" : "设备离线"} · 文本测评可用
-                </span>
-              </div>
-              <p className="text-xs leading-6 font-semibold text-cyan-100/90">{assessmentModeMessage}</p>
-              <div className="flex flex-wrap gap-2 text-[11px] font-bold">
-                <span className="rounded-full border border-white/10 bg-white/5 px-3 py-1.5 text-slate-200">
-                  问题来源：{assessmentQuestionSourceLabel}
-                </span>
-                <span className="rounded-full border border-white/10 bg-white/5 px-3 py-1.5 text-slate-200">
-                  当前评分：{assessmentScoringSourceLabel}
-                </span>
-                <span className="rounded-full border border-white/10 bg-white/5 px-3 py-1.5 text-slate-200">
-                  当前维度：{assessmentState.question_pair || "待分配"}
-                </span>
-              </div>
-            </div>
-
-            <div className="rounded-3xl border border-white/10 bg-slate-900/70 p-4 space-y-3">
-              <div className="flex items-center justify-between text-xs font-bold text-slate-400">
-                <span>当前进度</span>
-                <span>
-                  {assessmentState.effective_turn_count}/{assessmentState.required_min_turns} 起步，最多 {assessmentState.max_turns} 轮
-                </span>
-              </div>
-              <div className="h-2 rounded-full bg-slate-800 overflow-hidden">
-                <div
-                  className="h-full bg-gradient-to-r from-fuchsia-500 via-cyan-400 to-emerald-400 rounded-full"
-                  style={{
-                    width: `${Math.min(
-                      100,
-                      (assessmentState.effective_turn_count / Math.max(assessmentState.required_min_turns, 1)) * 100
-                    )}%`,
-                  }}
-                />
-              </div>
-              <div className="grid grid-cols-4 gap-3">
-                {confidencePreview.map(([label, value]) => (
-                  <div key={label} className="rounded-2xl bg-slate-950/70 border border-white/5 px-3 py-3">
-                    <div className="text-[11px] text-slate-400 font-bold">{label}</div>
-                    <div className="text-lg font-black text-slate-100 mt-1">{Math.round(Number(value) * 100)}%</div>
-                  </div>
-                ))}
-              </div>
-            </div>
-
-            <div className="rounded-3xl border border-fuchsia-400/20 bg-fuchsia-500/10 p-5">
-              <div className="flex items-center gap-2 text-sm font-black text-fuchsia-200 mb-2">
-                <Bot size={16} />
-                当前问题
-              </div>
-              <div className="text-base font-bold leading-7 text-white">
-                {identityReady
-                  ? assessmentState.latest_question || "点击“确认身份并进入测评”后会开始第一题。"
-                  : "先完成左侧身份确认。"}
-              </div>
-              <p className="mt-3 text-xs leading-6 font-semibold text-fuchsia-100/80">
-                这不是固定标准答案测试。至少认真回答 12 轮，系统才会开始形成稳定的人格特征判断；如果信号还不够，会继续追问到最多 28 轮。
-              </p>
-            </div>
-
-            <textarea
-              value={answerDraft}
-              onChange={(e) => setAnswerDraft(e.target.value)}
-              placeholder="请用自然语言真实作答。可以讲偏好、例子、习惯和原因，越具体越容易测出稳定人格特征。"
-              disabled={!identityReady || psychometricCompleted}
-              className="min-h-[132px] rounded-3xl bg-slate-900/70 border border-white/10 px-4 py-4 text-sm font-semibold text-slate-100 outline-none resize-none disabled:opacity-50"
-            />
-
-            <div className="flex items-center gap-3 flex-wrap">
-              <button
-                onClick={handleSubmitAnswer}
-                disabled={!identityReady || busy || psychometricCompleted}
-                className="rounded-2xl bg-white text-slate-950 px-5 py-3 text-sm font-black flex items-center gap-2 disabled:opacity-50"
-              >
-                {busy ? <LoaderCircle className="animate-spin" size={16} /> : <ChevronRight size={16} />}
-                提交这一轮回答
-              </button>
-              <button
-                onClick={handleDesktopVoiceAnswer}
-                disabled={!canUseDesktopVoice || desktopVoiceBusy || busy || psychometricCompleted}
-                className="rounded-2xl border border-amber-400/25 bg-amber-500/10 text-amber-200 px-5 py-3 text-sm font-black flex items-center gap-2 disabled:opacity-50"
-              >
-                {desktopVoiceBusy ? (
-                  <LoaderCircle className="animate-spin" size={16} />
-                ) : desktopVoiceRecording ? (
-                  <PauseCircle size={16} />
-                ) : (
-                  <Mic size={16} />
-                )}
-                {desktopVoiceRecording
-                  ? "结束电脑麦克风回答"
-                  : desktopVoiceReady
-                    ? "用电脑麦克风回答（推荐）"
-                    : "电脑麦克风未就绪"}
-              </button>
-              <button
-                onClick={handleToggleVoice}
-                disabled={!canUseRobotVoice || voiceBusy || psychometricCompleted}
-                className="rounded-2xl border border-cyan-400/25 bg-cyan-500/10 text-cyan-200 px-5 py-3 text-sm font-black flex items-center gap-2 disabled:opacity-50"
-              >
-                {voiceBusy ? (
-                  <LoaderCircle className="animate-spin" size={16} />
-                ) : assessmentState.voice_session_active ? (
-                  <PauseCircle size={16} />
-                ) : (
-                  <PlayCircle size={16} />
-                )}
-                {robotVoiceLabel}
-              </button>
-              <button
-                onClick={handleForceFinish}
-                disabled={!identityReady || busy || psychometricCompleted}
-                className="rounded-2xl border border-white/10 text-slate-300 px-5 py-3 text-sm font-black flex items-center gap-2 disabled:opacity-50"
-              >
-                <Brain size={16} />
-                以当前结果收束
-              </button>
-            </div>
-
-            <div className="grid grid-cols-4 gap-3">
-              {scorePreview.map(([label, value]) => (
-                <div key={label} className="rounded-2xl bg-slate-900/70 border border-white/10 px-3 py-3">
-                  <div className="text-[11px] text-slate-400 font-bold">{label}</div>
-                  <div className="text-lg font-black text-slate-100 mt-1">{Number(value).toFixed(1)}</div>
-                </div>
-              ))}
-            </div>
-            <div className="rounded-3xl border border-white/10 bg-slate-900/60 p-4 text-xs leading-6 text-slate-400 font-semibold">
-              判定逻辑说明：每一轮回答会先尝试走 AI 编排与 AI 评分；如果当前模型不可用，系统会降级到题库问题和保守规则评分，保证测评可以继续，但页面会明确标出不是 AI 结果。
-            </div>
-          </section>
-
-          <section className="col-span-3 rounded-[2rem] border border-white/10 bg-slate-950/45 p-6 flex flex-col gap-4">
-            <div className="flex items-center gap-3">
-              <Camera size={18} className="text-emerald-300" />
-              <h2 className="text-lg font-black">3. 结果与扫脸</h2>
-            </div>
-
-            <div className="rounded-3xl bg-slate-900/70 border border-white/10 p-4 space-y-3">
-              <div className="flex items-center justify-between">
-                <span className="text-xs font-bold text-slate-400">测评类型</span>
-                <span className="text-xl font-black text-white">{assessmentState.type_code || "--"}</span>
-              </div>
-              <p className="text-sm leading-6 font-semibold text-slate-200">
-                {assessmentState.summary || "测评完成后，这里会出现类型摘要和后续陪伴建议。"}
-              </p>
-              <div className="text-xs text-slate-400 font-semibold">
-                最近信号：{assessmentState.evidence_summary.highlights.join(" / ") || "暂无"}
-              </div>
-            </div>
-
-            <div className="rounded-3xl bg-slate-900/70 border border-white/10 p-4 space-y-3">
-              <div className="flex items-center gap-2 text-sm font-black text-slate-100">
-                <Mic size={16} />
-                机器人语音状态
-              </div>
-              <p className="text-xs leading-6 font-semibold text-slate-400">
-                机器人语音只是“播报 + 录音 + 转写”的硬件链路；真正的人格测评核心仍然在后端文本/AI分析，不会因为设备离线就完全无法测。
-              </p>
-              <div className="text-sm font-bold text-slate-200">
-                {assessmentState.device_online
-                  ? assessmentState.voice_session_active
-                    ? "设备在线，机器人语音模式已开启"
-                    : "设备在线，但当前仍可直接用文本模式继续"
-                  : "设备离线，当前自动退回文本测评"}
-              </div>
-              <div className="text-xs leading-6 font-semibold text-slate-400">
-                最近转写：{assessmentState.latest_transcript || "暂无"}
-              </div>
-              <div className="text-xs leading-6 font-semibold text-slate-400">
-                主人绑定：{ownerBindingCompleted ? "已完成" : ownerBindingRequired ? "待完成" : "未要求"}
-                {preferredDeviceId ? ` · 设备 ${preferredDeviceId}` : ""}
-              </div>
-            </div>
-
-            <button
-              onClick={handleStartFaceScan}
-              disabled={busy || !psychometricCompleted || ownerBindingCompleted}
-              className="rounded-2xl bg-emerald-500/15 border border-emerald-400/20 text-emerald-200 py-3 font-black text-sm flex items-center justify-center gap-2 disabled:opacity-50"
-            >
-              {busy ? <LoaderCircle className="animate-spin" size={16} /> : <ScanFace size={16} />}
-              {ownerBindingCompleted ? "主人已完成扫脸绑定" : "启动主人扫脸建档"}
-            </button>
-
-            <div className="rounded-3xl border border-white/10 bg-slate-900/70 p-4 text-xs leading-6 text-slate-400 font-semibold">
-              {scanState || "扫脸只能在登录且完成人格测评后启动；有设备时，首次激活会要求完成主人绑定。"}
-            </div>
-          </section>
-        </div>
+        </section>
       </div>
     </div>
   );
-};
+}
+
+export default ActivationGate;

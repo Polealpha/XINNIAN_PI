@@ -2413,6 +2413,7 @@ const App: React.FC = () => {
                 voiceState={voiceState}
                 expressionLabel={expressionLabelForChat}
                 expressionConfidence={expressionConfidenceForChat}
+                audioEnabled={mediaState.audioEnabled}
               />
             </div>
           )}
@@ -2767,6 +2768,7 @@ const App: React.FC = () => {
                 voiceState={voiceState}
                 expressionLabel={expressionLabelForChat}
                 expressionConfidence={expressionConfidenceForChat}
+                audioEnabled={mediaState.audioEnabled}
               />
             </div>
           )}

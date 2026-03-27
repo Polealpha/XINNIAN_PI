@@ -1,6 +1,6 @@
 ﻿import React, { useEffect, useRef, useState } from "react";
 import { ChatAttachment, ChatMessage, EmotionType } from "../types";
-import { Send, Sparkles, User, Bot, Activity, Paperclip, X, Mic, Square, LoaderCircle } from "lucide-react";
+import { Send, Sparkles, User, Bot, Activity, Paperclip, X, Mic, Square, LoaderCircle, Volume2 } from "lucide-react";
 import { generateCareMessage, generateCareMessageStream } from "../services/llmService";
 import { uploadChatAttachment } from "../services/chatService";
 import { createDesktopVoiceRecorder, transcribeDesktopAudio } from "../services/desktopVoiceService";
@@ -14,6 +14,7 @@ interface ChatInterfaceProps {
   voiceState?: "idle" | "detecting" | "listening" | "thinking" | "speaking";
   expressionLabel?: string;
   expressionConfidence?: number;
+  audioEnabled?: boolean;
 }
 
 const DEFAULT_WELCOME: ChatMessage = {
@@ -26,6 +27,19 @@ const DEFAULT_WELCOME: ChatMessage = {
 };
 
 const hasRenderableText = (text: unknown): boolean => typeof text === "string" && text.trim().length > 0;
+
+const cleanSpeechText = (text: unknown): string => {
+  const raw = String(text || "").trim();
+  if (!raw) return "";
+  return raw
+    .replace(/```[\s\S]*?```/g, " ")
+    .replace(/`([^`]+)`/g, "$1")
+    .replace(/<[^>]+>/g, " ")
+    .replace(/\[([^\]]+)\]\(([^)]+)\)/g, "$1")
+    .replace(/https?:\/\/\S+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+};
 
 const hasRenderableContent = (msg: ChatMessage): boolean => {
   if (hasRenderableText(msg.text)) return true;
@@ -115,6 +129,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
   voiceState = "idle",
   expressionLabel = "unknown",
   expressionConfidence = 0,
+  audioEnabled = true,
 }) => {
   const compact = variant === "compact";
   const initialRenderable = initialMessages.filter((msg) => hasRenderableContent(msg));
@@ -136,9 +151,14 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
   const streamLastFlushMsRef = useRef(0);
   const historyHydratedRef = useRef(false);
   const voiceRecorderRef = useRef<{ stop: () => Promise<Blob> } | null>(null);
+  const speechSynthesisRef = useRef<SpeechSynthesis | null>(null);
+  const activeSpeechIdRef = useRef<string | null>(null);
+  const speechVoicesLoadedRef = useRef(false);
   const [voiceRecording, setVoiceRecording] = useState(false);
   const [voiceBusy, setVoiceBusy] = useState(false);
   const [voiceError, setVoiceError] = useState("");
+  const [speechSupported, setSpeechSupported] = useState(false);
+  const [speakingMessageId, setSpeakingMessageId] = useState<string | null>(null);
 
   useEffect(() => {
     const next = initialMessages.filter((msg) => hasRenderableContent(msg));
@@ -169,16 +189,94 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
   useEffect(() => {
     const rafId = window.requestAnimationFrame(() => scrollToBottom("auto"));
     const timer = window.setTimeout(() => scrollToBottom("auto"), 120);
+    const speech = typeof window !== "undefined" ? window.speechSynthesis : undefined;
+    speechSynthesisRef.current = speech || null;
+    setSpeechSupported(Boolean(speech));
     return () => {
       streamAbortRef.current?.abort();
       if (streamFlushTimerRef.current != null) {
         window.clearTimeout(streamFlushTimerRef.current);
       }
       streamPendingTextRef.current = "";
+      speechSynthesisRef.current?.cancel();
       window.cancelAnimationFrame(rafId);
       window.clearTimeout(timer);
     };
   }, []);
+
+  const stopSpeaking = () => {
+    speechSynthesisRef.current?.cancel();
+    activeSpeechIdRef.current = null;
+    setSpeakingMessageId(null);
+  };
+
+  const pickSpeechVoice = () => {
+    const synth = speechSynthesisRef.current;
+    if (!synth) return null;
+    const voices = synth.getVoices();
+    if (!voices.length) return null;
+    return (
+      voices.find((voice) => /zh[-_](CN|Hans)/i.test(voice.lang) || /chinese/i.test(voice.name)) ||
+      voices.find((voice) => /^zh/i.test(voice.lang)) ||
+      voices[0] ||
+      null
+    );
+  };
+
+  const speakReply = (messageId: string, text: string) => {
+    const synth = speechSynthesisRef.current;
+    const spokenText = cleanSpeechText(text);
+    if (!audioEnabled || !synth || !spokenText) return;
+
+    stopSpeaking();
+    const utterance = new SpeechSynthesisUtterance(spokenText);
+    const attachVoiceAndSpeak = () => {
+      const voice = pickSpeechVoice();
+      if (voice) {
+        utterance.voice = voice;
+        utterance.lang = voice.lang || "zh-CN";
+      } else {
+        utterance.lang = "zh-CN";
+      }
+      utterance.rate = 1.02;
+      utterance.pitch = 1.02;
+      utterance.volume = 1;
+      activeSpeechIdRef.current = messageId;
+      setSpeakingMessageId(messageId);
+      utterance.onend = () => {
+        if (activeSpeechIdRef.current === messageId) {
+          activeSpeechIdRef.current = null;
+          setSpeakingMessageId(null);
+        }
+      };
+      utterance.onerror = () => {
+        if (activeSpeechIdRef.current === messageId) {
+          activeSpeechIdRef.current = null;
+          setSpeakingMessageId(null);
+        }
+      };
+      synth.speak(utterance);
+    };
+
+    if (!speechVoicesLoadedRef.current && synth.getVoices().length === 0) {
+      const handleVoicesChanged = () => {
+        speechVoicesLoadedRef.current = true;
+        synth.removeEventListener("voiceschanged", handleVoicesChanged);
+        attachVoiceAndSpeak();
+      };
+      synth.addEventListener("voiceschanged", handleVoicesChanged);
+      window.setTimeout(() => {
+        synth.removeEventListener("voiceschanged", handleVoicesChanged);
+        if (!activeSpeechIdRef.current) {
+          attachVoiceAndSpeak();
+        }
+      }, 300);
+      return;
+    }
+
+    speechVoicesLoadedRef.current = true;
+    attachVoiceAndSpeak();
+  };
 
   const pickAttachments = () => {
     if (uploading) return;
@@ -298,6 +396,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
     setAttachmentError("");
     setVoiceError("");
     setIsTyping(true);
+    stopSpeaking();
     streamAbortRef.current?.abort();
     const abortCtrl = new AbortController();
     streamAbortRef.current = abortCtrl;
@@ -451,6 +550,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
         };
         if (onSendMessage) onSendMessage(botMsg);
       }
+      speakReply(botMsgId, responseText);
     } finally {
       if (streamFlushTimerRef.current != null) {
         window.clearTimeout(streamFlushTimerRef.current);
@@ -604,6 +704,24 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
               <span className="text-[9px] font-bold text-slate-600 px-2 mt-1">
                 {msg.timestamp.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
               </span>
+              {msg.sender !== "user" && hasRenderableText(msg.text) && speechSupported && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (speakingMessageId === msg.id) {
+                      stopSpeaking();
+                      return;
+                    }
+                    speakReply(msg.id, msg.text);
+                  }}
+                  className="px-2 py-1 mt-1 rounded-full border border-white/10 bg-slate-900/60 text-[9px] font-black uppercase tracking-wider text-slate-300 hover:text-white"
+                >
+                  <span className="inline-flex items-center gap-1">
+                    {speakingMessageId === msg.id ? <Square size={10} fill="currentColor" /> : <Volume2 size={10} />}
+                    {speakingMessageId === msg.id ? "停止朗读" : "朗读回答"}
+                  </span>
+                </button>
+              )}
             </div>
           </div>
         ))}
@@ -699,6 +817,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
         {attachmentError && <p className="text-[10px] font-bold text-rose-400 mt-2">{attachmentError}</p>}
         {voiceError && <p className="text-[10px] font-bold text-rose-400 mt-2">{voiceError}</p>}
         {voiceRecording && <p className="text-[10px] font-bold text-amber-300 mt-2">正在本地录音，再按一次麦克风即可结束并自动发送</p>}
+        {!audioEnabled && <p className="text-[10px] font-bold text-slate-500 mt-2">当前已关闭音频输出，回答不会自动朗读。</p>}
         {!compact && (
           <p className="text-[9px] text-center mt-3 text-slate-600 font-black uppercase tracking-tighter">
             机器人动作指令（语音/动作/表情）由本地引擎实时处理

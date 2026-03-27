@@ -2,131 +2,57 @@ from __future__ import annotations
 
 import json
 import math
-import random
 import re
 from typing import Dict, List, Optional, Tuple
 
 
-SCORE_KEYS = ("E", "I", "S", "N", "T", "F", "J", "P")
-PAIR_KEYS = ("EI", "SN", "TF", "JP")
-PAIR_TO_POLES = {
-    "EI": ("E", "I"),
-    "SN": ("S", "N"),
-    "TF": ("T", "F"),
-    "JP": ("J", "P"),
-}
+SCORE_KEYS = ("Se", "Si", "Ne", "Ni", "Te", "Ti", "Fe", "Fi")
+PAIR_KEYS = SCORE_KEYS
 
-QUESTION_BANK: List[Dict[str, object]] = [
+FUNCTION_BANK: List[Dict[str, object]] = [
     {
-        "id": "ei_recharge",
-        "pair": "EI",
-        "prompt": "如果刚经历一整天高强度沟通，你一般会怎么给自己回血？",
-        "dimension_targets": ["E", "I"],
-        "difficulty": 1,
-        "followup_rules": ["如果回答模糊，追问更偏独处恢复还是和熟人聊一聊恢复。"],
+        "id": "se_present_action",
+        "pair": "Se",
+        "prompt": "遇到新环境时，你会先直接上手试一试，还是先在脑子里想清楚再动？",
     },
     {
-        "id": "ei_meeting",
-        "pair": "EI",
-        "prompt": "在一个新环境里，你通常会先主动和人聊起来，还是先观察一会儿再进入状态？",
-        "dimension_targets": ["E", "I"],
-        "difficulty": 1,
-        "followup_rules": ["若回答两者都有，追问哪种更自然。"],
+        "id": "si_repeat_pattern",
+        "pair": "Si",
+        "prompt": "做熟悉的事情时，你更依赖自己已经验证过的习惯和步骤吗？",
     },
     {
-        "id": "ei_problem",
-        "pair": "EI",
-        "prompt": "遇到卡住的事情时，你更习惯边说边理清，还是先自己想透再开口？",
-        "dimension_targets": ["E", "I"],
-        "difficulty": 2,
-        "followup_rules": ["如果说看情况，追问大多数时候的第一反应。"],
+        "id": "ne_possibility_scan",
+        "pair": "Ne",
+        "prompt": "别人提一个想法时，你会自然联想到很多可能性和延伸路线吗？",
     },
     {
-        "id": "sn_learn",
-        "pair": "SN",
-        "prompt": "学一个新东西时，你更喜欢先看具体例子和步骤，还是先抓整体思路和可能性？",
-        "dimension_targets": ["S", "N"],
-        "difficulty": 1,
-        "followup_rules": ["如果回答都要，追问哪种更容易让自己进入状态。"],
+        "id": "ni_pattern_focus",
+        "pair": "Ni",
+        "prompt": "面对复杂信息时，你会先抓背后的主线和趋势，再决定怎么做吗？",
     },
     {
-        "id": "sn_change",
-        "pair": "SN",
-        "prompt": "当计划突然变化，你会先关注眼前要怎么落地，还是会先想到后面可能带来的连锁影响？",
-        "dimension_targets": ["S", "N"],
-        "difficulty": 2,
-        "followup_rules": ["若回答混合，追问第一时间更自然的反应。"],
+        "id": "te_external_structure",
+        "pair": "Te",
+        "prompt": "推进事情时，你会更想先定标准、排步骤、把结果落地吗？",
     },
     {
-        "id": "sn_decision",
-        "pair": "SN",
-        "prompt": "做选择时，你更信任已经验证过的经验，还是更看重新方向和潜力？",
-        "dimension_targets": ["S", "N"],
-        "difficulty": 1,
-        "followup_rules": ["必要时追问‘过去证明有效’和‘未来更有空间’哪个更打动你。"],
+        "id": "ti_internal_logic",
+        "pair": "Ti",
+        "prompt": "你会因为一件事逻辑说不通而一直想把它推演明白吗？",
     },
     {
-        "id": "tf_feedback",
-        "pair": "TF",
-        "prompt": "别人来找你拿建议时，你通常会先讲最合理的判断，还是先照顾对方的感受和接受度？",
-        "dimension_targets": ["T", "F"],
-        "difficulty": 1,
-        "followup_rules": ["如果都重要，追问先后顺序。"],
+        "id": "fe_social_attunement",
+        "pair": "Fe",
+        "prompt": "沟通时，你会下意识先看气氛和别人能不能舒服接住这句话吗？",
     },
     {
-        "id": "tf_conflict",
-        "pair": "TF",
-        "prompt": "出现分歧时，你更容易被‘逻辑站不住’触发，还是被‘关系被伤到’触发？",
-        "dimension_targets": ["T", "F"],
-        "difficulty": 2,
-        "followup_rules": ["若回答都在意，追问哪个更让你难受。"],
-    },
-    {
-        "id": "tf_standard",
-        "pair": "TF",
-        "prompt": "做决定时，你更依赖统一标准和原则，还是更看具体的人和情境？",
-        "dimension_targets": ["T", "F"],
-        "difficulty": 2,
-        "followup_rules": ["如果回答一半一半，追问平时更默认哪边。"],
-    },
-    {
-        "id": "jp_schedule",
-        "pair": "JP",
-        "prompt": "如果一周里有几件重要事，你更喜欢提前排好节奏，还是边走边调保持弹性？",
-        "dimension_targets": ["J", "P"],
-        "difficulty": 1,
-        "followup_rules": ["如果都可以，追问哪种更让你安心。"],
-    },
-    {
-        "id": "jp_deadline",
-        "pair": "JP",
-        "prompt": "面对截止日期，你通常会早早推进，还是常常最后阶段爆发效率？",
-        "dimension_targets": ["J", "P"],
-        "difficulty": 1,
-        "followup_rules": ["若回答因任务而异，追问大多数私事和日常事务的习惯。"],
-    },
-    {
-        "id": "jp_order",
-        "pair": "JP",
-        "prompt": "你会更喜欢很多事都先有个明确框架，还是保留开放选项到临近再定？",
-        "dimension_targets": ["J", "P"],
-        "difficulty": 2,
-        "followup_rules": ["如果回答两种都好，追问默认倾向。"],
+        "id": "fi_inner_values",
+        "pair": "Fi",
+        "prompt": "做决定时，你会很在意这件事是不是符合你自己真正认同的价值吗？",
     },
 ]
 
-PAIR_LEXICONS = {
-    "E": ["热闹", "聊天", "见人", "聚会", "一起", "当面", "说出来", "边聊边想", "分享", "社交"],
-    "I": ["独处", "安静", "自己", "一个人", "先想", "消化", "观察", "不想说", "冷静", "独立"],
-    "S": ["具体", "细节", "步骤", "经验", "实际", "眼前", "事实", "落地", "稳定", "验证"],
-    "N": ["可能", "趋势", "未来", "灵感", "概念", "抽象", "脑洞", "模式", "方向", "潜力"],
-    "T": ["逻辑", "理性", "客观", "标准", "分析", "效率", "结论", "对错", "判断", "数据"],
-    "F": ["感受", "关系", "共情", "体谅", "照顾", "舒服", "温柔", "在意", "情绪", "被理解"],
-    "J": ["计划", "提前", "安排", "清单", "可控", "按部就班", "准时", "明确", "框架", "确定"],
-    "P": ["随性", "灵活", "看情况", "即兴", "边走边看", "临时", "自由", "最后", "弹性", "开放"],
-}
-
-AMBIVALENT_PATTERNS = ("都", "都行", "看情况", "不一定", "一半一半")
+QUESTION_MAP = {str(item["id"]): item for item in FUNCTION_BANK}
 
 
 def empty_score_map() -> Dict[str, float]:
@@ -134,42 +60,42 @@ def empty_score_map() -> Dict[str, float]:
 
 
 def empty_pair_confidence() -> Dict[str, float]:
-    return {key: 0.0 for key in PAIR_KEYS}
-
-
-def build_question_map() -> Dict[str, Dict[str, object]]:
-    return {str(item["id"]): item for item in QUESTION_BANK}
-
-
-QUESTION_MAP = build_question_map()
+    return {key: 0.0 for key in SCORE_KEYS}
 
 
 def build_initial_session(now_ms: int) -> Dict[str, object]:
-    scores = empty_score_map()
-    asked_ids: List[str] = []
-    question = select_next_question(scores, asked_ids, {})
     return {
         "status": "active",
         "started_at_ms": int(now_ms),
         "updated_at_ms": int(now_ms),
         "turn_count": 0,
         "effective_turn_count": 0,
-        "scores": scores,
+        "scores": empty_score_map(),
+        "cognitive_scores": empty_score_map(),
         "dimension_confidence": empty_pair_confidence(),
-        "asked_question_ids": asked_ids,
+        "function_confidence": empty_pair_confidence(),
+        "asked_question_ids": [],
         "question_history": [],
         "transcript_history": [],
         "evidence_summary": [],
-        "last_question_id": str(question["id"]),
-        "latest_question": str(question["prompt"]),
+        "last_question_id": "",
+        "latest_question": "",
         "latest_transcript": "",
-        "question_pair": str(question.get("pair") or ""),
-        "question_source": "question_bank",
+        "question_pair": "",
+        "question_source": "ai_required",
         "scoring_source": "pending",
         "type_code": "",
+        "mapped_type_code": "",
+        "dominant_stack": [],
         "profile_preview": {},
         "voice_mode": "idle",
         "voice_session_active": False,
+        "assessment_ready": False,
+        "ai_required": True,
+        "blocking_reason": "",
+        "finish_reason": "",
+        "required_min_turns": 12,
+        "max_turns": 28,
     }
 
 
@@ -177,114 +103,20 @@ def normalize_scores(raw: Optional[Dict[str, object]]) -> Dict[str, float]:
     scores = empty_score_map()
     for key in SCORE_KEYS:
         try:
-            scores[key] = float((raw or {}).get(key, 0.0) or 0.0)
+            scores[key] = round(float((raw or {}).get(key, 0.0) or 0.0), 4)
         except Exception:
             scores[key] = 0.0
     return scores
 
 
 def normalize_confidence(raw: Optional[Dict[str, object]]) -> Dict[str, float]:
-    conf = empty_pair_confidence()
-    for key in PAIR_KEYS:
+    confidence = empty_pair_confidence()
+    for key in SCORE_KEYS:
         try:
-            conf[key] = max(0.0, min(1.0, float((raw or {}).get(key, 0.0) or 0.0)))
+            confidence[key] = max(0.0, min(1.0, float((raw or {}).get(key, 0.0) or 0.0)))
         except Exception:
-            conf[key] = 0.0
-    return conf
-
-
-def derive_type_code(scores: Dict[str, float]) -> str:
-    letters = []
-    for pair in PAIR_KEYS:
-        left, right = PAIR_TO_POLES[pair]
-        letters.append(left if float(scores.get(left, 0.0)) >= float(scores.get(right, 0.0)) else right)
-    return "".join(letters)
-
-
-def summarize_profile(scores: Dict[str, float]) -> Dict[str, object]:
-    type_code = derive_type_code(scores)
-    style_bits: List[str] = []
-    if type_code.startswith("I"):
-        style_bits.append("更适合给留白和缓冲，不要高密度追问")
-    else:
-        style_bits.append("可以接受更即时的互动和来回确认")
-    if type_code[1:2] == "N":
-        style_bits.append("解释时先给整体方向和意义感")
-    else:
-        style_bits.append("解释时先给具体步骤和确定落点")
-    if type_code[2:3] == "T":
-        style_bits.append("沟通优先给逻辑与结论")
-    else:
-        style_bits.append("沟通优先承接感受与关系氛围")
-    if type_code[3:4] == "J":
-        style_bits.append("提醒与任务尽量提前、明确")
-    else:
-        style_bits.append("提醒与任务保留弹性空间")
-    return {
-        "type_code": type_code,
-        "summary": "；".join(style_bits[:3]) + "。",
-        "response_style": "先贴合这个人的节奏，再给结论和一个最小下一步。",
-        "care_style": "保持轻松、稳定、低压的陪伴口吻，不一次问太多。",
-    }
-
-
-def pair_margin(scores: Dict[str, float], pair: str) -> float:
-    left, right = PAIR_TO_POLES[pair]
-    return float(scores.get(left, 0.0)) - float(scores.get(right, 0.0))
-
-
-def compute_dimension_confidence(
-    scores: Dict[str, float],
-    pair_evidence_counts: Optional[Dict[str, object]],
-    effective_turn_count: int,
-) -> Dict[str, float]:
-    output: Dict[str, float] = {}
-    evidence_counts = pair_evidence_counts or {}
-    for pair in PAIR_KEYS:
-        left, right = PAIR_TO_POLES[pair]
-        left_score = abs(float(scores.get(left, 0.0)))
-        right_score = abs(float(scores.get(right, 0.0)))
-        total = left_score + right_score
-        evidence = max(0, int(evidence_counts.get(pair, 0) or 0))
-        margin = abs(pair_margin(scores, pair))
-        base = 0.22 + min(0.32, evidence * 0.08)
-        turn_bonus = min(0.22, max(0, effective_turn_count - 2) * 0.015)
-        margin_bonus = 0.0 if total <= 0 else min(0.28, (margin / max(1.0, total)) * 0.28)
-        saturation = min(0.16, total * 0.018)
-        output[pair] = max(0.0, min(0.96, base + turn_bonus + margin_bonus + saturation))
-    return output
-
-
-def should_finish(session: Dict[str, object]) -> Tuple[bool, str]:
-    effective_turn_count = int(session.get("effective_turn_count", 0) or 0)
-    if effective_turn_count >= 28:
-        return True, "hard_cap"
-    if effective_turn_count < 12:
-        return False, "min_turns"
-    confidence = normalize_confidence(session.get("dimension_confidence"))
-    if all(confidence.get(pair, 0.0) >= 0.78 for pair in PAIR_KEYS):
-        return True, "confidence_met"
-    return False, "need_more_signal"
-
-
-def select_next_pair(scores: Dict[str, float], asked_ids: List[str], confidence: Dict[str, float]) -> str:
-    available_pairs = {str(item["pair"]) for item in QUESTION_BANK if str(item["id"]) not in set(asked_ids)}
-    if not available_pairs:
-        return min(PAIR_KEYS, key=lambda item: confidence.get(item, 0.0))
-    return min(available_pairs, key=lambda item: (confidence.get(item, 0.0), abs(pair_margin(scores, item))))
-
-
-def select_next_question(scores: Dict[str, float], asked_ids: List[str], confidence: Dict[str, float]) -> Dict[str, object]:
-    available = [item for item in QUESTION_BANK if str(item["id"]) not in set(asked_ids)]
-    if not available:
-        asked_ids.clear()
-        available = list(QUESTION_BANK)
-    pair = select_next_pair(scores, asked_ids, confidence)
-    pair_candidates = [item for item in available if str(item["pair"]) == pair]
-    if not pair_candidates:
-        pair_candidates = available
-    pair_candidates = sorted(pair_candidates, key=lambda item: int(item.get("difficulty", 1) or 1))
-    return pair_candidates[0]
+            confidence[key] = 0.0
+    return confidence
 
 
 def parse_json_dict(text: str) -> Dict[str, object]:
@@ -307,52 +139,148 @@ def parse_json_dict(text: str) -> Dict[str, object]:
     return {}
 
 
-def score_answer_heuristic(question: Dict[str, object], answer: str) -> Dict[str, object]:
-    clean = re.sub(r"\s+", " ", str(answer or "").strip())
-    lower = clean.lower()
-    pair = str(question.get("pair") or "EI")
-    left, right = PAIR_TO_POLES[pair]
-    left_hits = sum(lower.count(token.lower()) for token in PAIR_LEXICONS[left])
-    right_hits = sum(lower.count(token.lower()) for token in PAIR_LEXICONS[right])
-    ambivalent = any(token in clean for token in AMBIVALENT_PATTERNS)
-    if clean and not left_hits and not right_hits:
-        if pair == "EI":
-            right_hits = 1 if any(token in clean for token in ("自己", "安静", "缓一缓", "冷静")) else 0
-            left_hits = 1 if any(token in clean for token in ("聊聊", "人多", "出去", "说出来")) else 0
-        elif pair == "SN":
-            left_hits = 1 if any(token in clean for token in ("步骤", "细节", "先做")) else 0
-            right_hits = 1 if any(token in clean for token in ("方向", "意义", "可能性")) else 0
-        elif pair == "TF":
-            left_hits = 1 if any(token in clean for token in ("理性", "结论", "对错")) else 0
-            right_hits = 1 if any(token in clean for token in ("感受", "关系", "照顾")) else 0
-        elif pair == "JP":
-            left_hits = 1 if any(token in clean for token in ("提前", "计划", "安排")) else 0
-            right_hits = 1 if any(token in clean for token in ("随缘", "灵活", "临时")) else 0
-
-    deltas = empty_score_map()
-    if clean:
-        if left_hits == right_hits == 0:
-            deltas[left] += 0.35
-            deltas[right] += 0.35
-        else:
-            weight = 1.2 if not ambivalent else 0.7
-            deltas[left] += round(left_hits * weight, 2)
-            deltas[right] += round(right_hits * weight, 2)
-            if left_hits > right_hits:
-                deltas[left] += 0.35
-            elif right_hits > left_hits:
-                deltas[right] += 0.35
-    evidence = []
-    if clean:
-        lead = left if float(deltas[left]) >= float(deltas[right]) else right
-        evidence.append(f"{pair}:{lead}:{clean[:48]}")
+def _score_totals(scores: Dict[str, float]) -> Dict[str, float]:
+    sensing = float(scores.get("Se", 0.0)) + float(scores.get("Si", 0.0))
+    intuition = float(scores.get("Ne", 0.0)) + float(scores.get("Ni", 0.0))
+    thinking = float(scores.get("Te", 0.0)) + float(scores.get("Ti", 0.0))
+    feeling = float(scores.get("Fe", 0.0)) + float(scores.get("Fi", 0.0))
+    extraverted = float(scores.get("Se", 0.0)) + float(scores.get("Ne", 0.0)) + float(scores.get("Te", 0.0)) + float(scores.get("Fe", 0.0))
+    introverted = float(scores.get("Si", 0.0)) + float(scores.get("Ni", 0.0)) + float(scores.get("Ti", 0.0)) + float(scores.get("Fi", 0.0))
+    judging = float(scores.get("Te", 0.0)) + float(scores.get("Ti", 0.0)) + float(scores.get("Fe", 0.0)) + float(scores.get("Fi", 0.0))
+    perceiving = float(scores.get("Se", 0.0)) + float(scores.get("Si", 0.0)) + float(scores.get("Ne", 0.0)) + float(scores.get("Ni", 0.0))
     return {
-        "scores_delta": deltas,
-        "pair": pair,
-        "evidence_tags": evidence,
-        "effective": bool(clean),
-        "reasoning": "heuristic-fallback",
+        "S": sensing,
+        "N": intuition,
+        "T": thinking,
+        "F": feeling,
+        "E": extraverted,
+        "I": introverted,
+        "J": judging,
+        "P": perceiving,
     }
+
+
+def dominant_stack(scores: Dict[str, float], count: int = 4) -> List[str]:
+    ranked = sorted(SCORE_KEYS, key=lambda key: (float(scores.get(key, 0.0)), key), reverse=True)
+    return ranked[:count]
+
+
+def derive_type_code(scores: Dict[str, float]) -> str:
+    totals = _score_totals(scores)
+    letters = [
+        "E" if totals["E"] >= totals["I"] else "I",
+        "N" if totals["N"] >= totals["S"] else "S",
+        "T" if totals["T"] >= totals["F"] else "F",
+        "J" if totals["J"] >= totals["P"] else "P",
+    ]
+    return "".join(letters)
+
+
+def summarize_profile(scores: Dict[str, float]) -> Dict[str, object]:
+    stack = dominant_stack(scores)
+    mapped_type = derive_type_code(scores)
+    dominant = stack[0] if stack else ""
+    auxiliary = stack[1] if len(stack) > 1 else ""
+    dominant_labels = {
+        "Ni": "更擅长先抓主线、趋势和长期含义",
+        "Ne": "更容易从一个点发散出多条可能路线",
+        "Si": "更依赖亲身验证过的经验、节奏和稳定感",
+        "Se": "更容易直接感知当下并迅速进入行动",
+        "Ti": "更在意逻辑是否严密、自洽和说得通",
+        "Te": "更重视标准、效率、步骤和结果落地",
+        "Fi": "更在意是否符合自己真实认同的价值",
+        "Fe": "更关注关系气氛和对方是否能被好好接住",
+    }
+    auxiliary_labels = {
+        "Ni": "解释时先给主线，再落到执行。",
+        "Ne": "适合保留一点探索空间，不要一上来就封死选项。",
+        "Si": "先给稳定参照和可复用做法，会更容易进入状态。",
+        "Se": "多用具体例子和直接反馈，比抽象空谈更有效。",
+        "Ti": "结论后面最好补一层逻辑依据。",
+        "Te": "给到明确步骤、时点和可执行动作会更顺手。",
+        "Fi": "先确认个人感受和边界，再谈建议更容易被接受。",
+        "Fe": "先接住情绪和关系氛围，再推进问题更合适。",
+    }
+    summary_parts = []
+    if dominant:
+        summary_parts.append(f"主导功能偏 {dominant}，{dominant_labels.get(dominant, '')}".strip("，"))
+    if auxiliary:
+        summary_parts.append(auxiliary_labels.get(auxiliary, f"辅助功能偏 {auxiliary}。"))
+    summary_parts.append(f"兼容映射类型为 {mapped_type}。")
+    return {
+        "mapped_type_code": mapped_type,
+        "type_code": mapped_type,
+        "dominant_stack": stack,
+        "summary": " ".join(part for part in summary_parts if part).strip(),
+        "response_style": "先给主线判断，再补最小可执行步骤；避免一次灌太多信息。",
+        "care_style": "先承接情绪，再给一个轻量建议；最多追问一个关键问题。",
+    }
+
+
+def compute_dimension_confidence(
+    scores: Dict[str, float],
+    pair_evidence_counts: Optional[Dict[str, object]],
+    effective_turn_count: int,
+) -> Dict[str, float]:
+    evidence_counts = pair_evidence_counts or {}
+    confidence = empty_pair_confidence()
+    peak = max(max(abs(float(scores.get(key, 0.0))) for key in SCORE_KEYS), 1.0)
+    for key in SCORE_KEYS:
+        evidence = max(0, int(evidence_counts.get(key, 0) or 0))
+        score_strength = abs(float(scores.get(key, 0.0))) / peak
+        evidence_term = min(0.55, evidence * 0.12)
+        turn_term = min(0.18, max(0, effective_turn_count - 2) * 0.012)
+        confidence[key] = max(0.0, min(0.98, 0.08 + evidence_term + turn_term + score_strength * 0.25))
+    return confidence
+
+
+def select_next_pair(scores: Dict[str, float], asked_ids: List[str], confidence: Dict[str, float]) -> str:
+    asked = set(asked_ids)
+    available = [item for item in FUNCTION_BANK if str(item["id"]) not in asked]
+    if not available:
+        return min(SCORE_KEYS, key=lambda key: (float(confidence.get(key, 0.0)), -abs(float(scores.get(key, 0.0)))))
+    return min(
+        [str(item["pair"]) for item in available],
+        key=lambda key: (float(confidence.get(key, 0.0)), -abs(float(scores.get(key, 0.0)))),
+    )
+
+
+def select_next_question(scores: Dict[str, float], asked_ids: List[str], confidence: Dict[str, float]) -> Dict[str, object]:
+    target = select_next_pair(scores, asked_ids, confidence)
+    for item in FUNCTION_BANK:
+        if str(item["pair"]) == target and str(item["id"]) not in set(asked_ids):
+            return item
+    for item in FUNCTION_BANK:
+        if str(item["pair"]) == target:
+            return item
+    return FUNCTION_BANK[0]
+
+
+def score_answer_heuristic(question: Dict[str, object], answer: str) -> Dict[str, object]:
+    return {
+        "scores_delta": empty_score_map(),
+        "function_confidence_delta": empty_pair_confidence(),
+        "pair": str(question.get("pair") or ""),
+        "target_function": str(question.get("pair") or ""),
+        "evidence_tags": [],
+        "effective": False,
+        "reasoning": "heuristic_disabled",
+        "next_gap": str(question.get("pair") or ""),
+    }
+
+
+def should_finish(session: Dict[str, object]) -> Tuple[bool, str]:
+    effective_turn_count = int(session.get("effective_turn_count", 0) or 0)
+    max_turns = int(session.get("max_turns", 28) or 28)
+    min_turns = int(session.get("required_min_turns", 12) or 12)
+    confidence = normalize_confidence(session.get("function_confidence") or session.get("dimension_confidence"))
+    if effective_turn_count < min_turns:
+        return False, "min_turns"
+    if min(confidence.values() or [0.0]) >= 0.72:
+        return True, "function_confidence_met"
+    if effective_turn_count >= max_turns:
+        return False, "insufficient_signal_at_cap"
+    return False, "need_more_signal"
 
 
 def merge_scoring(
@@ -362,44 +290,67 @@ def merge_scoring(
     scoring: Dict[str, object],
     now_ms: int,
 ) -> Dict[str, object]:
-    scores = normalize_scores(session.get("scores"))
-    delta_scores = normalize_scores(scoring.get("scores_delta"))
+    scores = normalize_scores(session.get("scores") or session.get("cognitive_scores"))
+    delta_scores = normalize_scores(scoring.get("scores_delta") or scoring.get("cognitive_scores"))
     for key in SCORE_KEYS:
-        scores[key] = round(scores[key] + float(delta_scores.get(key, 0.0)), 3)
-    pair_counts = dict(session.get("pair_evidence_counts") or {})
-    pair = str(scoring.get("pair") or question.get("pair") or "EI")
-    if scoring.get("effective"):
-        pair_counts[pair] = int(pair_counts.get(pair, 0) or 0) + 1
+        scores[key] = round(scores[key] + float(delta_scores.get(key, 0.0)), 4)
+
+    evidence_counts = dict(session.get("pair_evidence_counts") or {})
+    target_function = str(scoring.get("target_function") or scoring.get("pair") or question.get("pair") or "")
+    if scoring.get("effective") and target_function in SCORE_KEYS:
+        evidence_counts[target_function] = int(evidence_counts.get(target_function, 0) or 0) + 1
+
+    function_confidence = compute_dimension_confidence(
+        scores,
+        evidence_counts,
+        int(session.get("effective_turn_count", 0) or 0) + (1 if scoring.get("effective") else 0),
+    )
+    previous_confidence = normalize_confidence(session.get("function_confidence") or session.get("dimension_confidence"))
+    manual_confidence = normalize_confidence(scoring.get("function_confidence_delta"))
+    for key in SCORE_KEYS:
+        if float(manual_confidence.get(key, 0.0)) > 0:
+            function_confidence[key] = min(
+                0.98,
+                max(function_confidence[key], float(previous_confidence.get(key, 0.0)) + float(manual_confidence[key])),
+            )
+        else:
+            function_confidence[key] = max(function_confidence[key], float(previous_confidence.get(key, 0.0)))
+
     evidence_summary = [str(item) for item in session.get("evidence_summary") or [] if str(item).strip()]
     for item in scoring.get("evidence_tags") or []:
         text = str(item).strip()
         if text and text not in evidence_summary:
             evidence_summary.append(text)
-    confidence = compute_dimension_confidence(scores, pair_counts, int(session.get("effective_turn_count", 0) or 0) + (1 if scoring.get("effective") else 0))
+
     asked_ids = [str(item) for item in session.get("asked_question_ids") or [] if str(item).strip()]
     question_id = str(question.get("id") or "")
     if question_id and question_id not in asked_ids:
         asked_ids.append(question_id)
+
     question_history = [dict(item) for item in session.get("question_history") or [] if isinstance(item, dict)]
     question_history.append(
         {
             "question_id": question_id,
             "question": str(question.get("prompt") or ""),
             "answer": str(answer or "").strip(),
-            "pair": pair,
+            "target_function": target_function,
             "timestamp_ms": int(now_ms),
         }
     )
     transcript_history = [dict(item) for item in session.get("transcript_history") or [] if isinstance(item, dict)]
-    transcript_history.append(
+    transcript_history.append({"role": "user", "text": str(answer or "").strip(), "timestamp_ms": int(now_ms)})
+
+    preview = summarize_profile(scores)
+    done, reason = should_finish(
         {
-            "role": "user",
-            "text": str(answer or "").strip(),
-            "timestamp_ms": int(now_ms),
+            **session,
+            "scores": scores,
+            "function_confidence": function_confidence,
+            "effective_turn_count": int(session.get("effective_turn_count", 0) or 0) + (1 if scoring.get("effective") else 0),
+            "required_min_turns": int(session.get("required_min_turns", 12) or 12),
+            "max_turns": int(session.get("max_turns", 28) or 28),
         }
     )
-    type_code = derive_type_code(scores)
-    preview = summarize_profile(scores)
     merged = dict(session)
     merged.update(
         {
@@ -407,103 +358,136 @@ def merge_scoring(
             "turn_count": int(session.get("turn_count", 0) or 0) + 1,
             "effective_turn_count": int(session.get("effective_turn_count", 0) or 0) + (1 if scoring.get("effective") else 0),
             "scores": scores,
-            "dimension_confidence": confidence,
-            "pair_evidence_counts": pair_counts,
+            "cognitive_scores": scores,
+            "dimension_confidence": function_confidence,
+            "function_confidence": function_confidence,
+            "pair_evidence_counts": evidence_counts,
             "asked_question_ids": asked_ids,
-            "question_history": question_history[-32:],
-            "transcript_history": transcript_history[-32:],
+            "question_history": question_history[-40:],
+            "transcript_history": transcript_history[-40:],
             "evidence_summary": evidence_summary[-24:],
             "latest_transcript": str(answer or "").strip(),
-            "type_code": type_code,
+            "type_code": str(preview.get("mapped_type_code") or ""),
+            "mapped_type_code": str(preview.get("mapped_type_code") or ""),
+            "dominant_stack": list(preview.get("dominant_stack") or []),
             "profile_preview": preview,
+            "assessment_ready": done and reason == "function_confidence_met",
+            "finish_reason": reason,
+            "blocking_reason": "",
         }
     )
-    done, reason = should_finish(merged)
-    merged["finish_reason"] = reason
-    if done:
-        merged["status"] = "completed"
-        merged["completed_at_ms"] = int(now_ms)
-        merged["latest_question"] = ""
-        merged["last_question_id"] = ""
-        merged["final_result"] = build_final_profile(merged)
-    else:
-        next_question = select_next_question(scores, asked_ids, confidence)
-        merged["latest_question"] = str(next_question["prompt"])
-        merged["last_question_id"] = str(next_question["id"])
-        merged["question_pair"] = str(next_question.get("pair") or "")
-        merged["question_source"] = "question_bank"
     return merged
 
 
 def build_final_profile(session: Dict[str, object]) -> Dict[str, object]:
-    scores = normalize_scores(session.get("scores"))
-    confidence = normalize_confidence(session.get("dimension_confidence"))
+    scores = normalize_scores(session.get("scores") or session.get("cognitive_scores"))
+    function_confidence = normalize_confidence(session.get("function_confidence") or session.get("dimension_confidence"))
     preview = summarize_profile(scores)
     evidence_items = [str(item) for item in session.get("evidence_summary") or [] if str(item).strip()]
-    evidence_summary = {
-        "highlights": evidence_items[:8],
-        "notes": preview.get("summary", ""),
-    }
+    completion_reason = str(session.get("finish_reason") or "")
+    ready, computed_reason = should_finish(session)
+    min_turns = int(session.get("required_min_turns", 12) or 12)
+    effective_turn_count = int(session.get("effective_turn_count", 0) or 0)
+    assessment_ready = bool(session.get("assessment_ready")) or ready
+    if not completion_reason:
+        completion_reason = computed_reason
+    if not assessment_ready and completion_reason == "function_confidence_met" and effective_turn_count >= min_turns:
+        assessment_ready = True
     return {
-        "scores": {key: round(float(scores.get(key, 0.0)), 2) for key in SCORE_KEYS},
-        "type_code": str(preview.get("type_code") or derive_type_code(scores)),
-        "dimension_confidence": {key: round(float(confidence.get(key, 0.0)), 3) for key in PAIR_KEYS},
-        "evidence_summary": evidence_summary,
+        "cognitive_scores": {key: round(float(scores.get(key, 0.0)), 3) for key in SCORE_KEYS},
+        "scores": {key: round(float(scores.get(key, 0.0)), 3) for key in SCORE_KEYS},
+        "function_confidence": {key: round(float(function_confidence.get(key, 0.0)), 3) for key in SCORE_KEYS},
+        "dimension_confidence": {key: round(float(function_confidence.get(key, 0.0)), 3) for key in SCORE_KEYS},
+        "dominant_stack": list(preview.get("dominant_stack") or []),
+        "mapped_type_code": str(preview.get("mapped_type_code") or derive_type_code(scores)),
+        "type_code": str(preview.get("mapped_type_code") or derive_type_code(scores)),
+        "evidence_summary": {
+            "highlights": evidence_items[:8],
+            "notes": str(preview.get("summary") or ""),
+        },
         "conversation_count": int(session.get("effective_turn_count", 0) or 0),
         "completed_at_ms": int(session.get("completed_at_ms", 0) or 0),
         "response_style": str(preview.get("response_style") or ""),
         "care_style": str(preview.get("care_style") or ""),
         "summary": str(preview.get("summary") or ""),
-        "inference_version": "assessment-v1",
+        "completion_reason": completion_reason,
+        "assessment_ready": bool(assessment_ready and completion_reason != "insufficient_signal_at_cap"),
+        "ai_required": True,
+        "inference_version": "assessment-v2-jung8",
     }
 
 
 def build_memory_summary(profile: Dict[str, object], preferred_name: str = "") -> str:
-    scores = profile.get("scores") or {}
-    parts = [
-        f"{preferred_name or '该用户'} 的人格测评已完成",
-        f"类型 {str(profile.get('type_code') or '')}",
-        "八维分值 "
-        + "/".join(f"{key}:{round(float(scores.get(key, 0.0) or 0.0), 1)}" for key in SCORE_KEYS),
-        f"建议：{str(profile.get('summary') or '').strip()}",
-    ]
-    return "；".join(part for part in parts if part).strip("；") + "。"
+    scores = normalize_scores(profile.get("cognitive_scores") or profile.get("scores"))
+    confidence = normalize_confidence(profile.get("function_confidence") or profile.get("dimension_confidence"))
+    stack = [str(item) for item in profile.get("dominant_stack") or [] if str(item).strip()]
+    person = preferred_name or "该用户"
+    machine_line = " | ".join(
+        [
+            f"mapped_type={str(profile.get('mapped_type_code') or profile.get('type_code') or '').strip()}",
+            "functions=" + ",".join(f"{key}:{scores[key]:.2f}" for key in SCORE_KEYS),
+            "confidence=" + ",".join(f"{key}:{confidence[key]:.2f}" for key in SCORE_KEYS),
+            "stack=" + ",".join(stack),
+        ]
+    )
+    ai_line = (
+        f"{person} 的互动风格摘要：主导功能偏 {stack[0] if stack else 'unknown'}，"
+        f"兼容类型 {str(profile.get('mapped_type_code') or '').strip()}；"
+        f"后续陪伴时先给主线和一条可执行建议，再根据情绪承接程度继续追问。"
+    )
+    return f"[psychometric_index]\n{machine_line}\n[companion_hint]\n{ai_line}"
 
 
 def extract_scoring_from_model(raw: str) -> Dict[str, object]:
     parsed = parse_json_dict(raw)
     if not parsed:
         return {}
-    scores_delta = normalize_scores(parsed.get("scores_delta"))
+    score_payload = parsed.get("cognitive_scores")
+    if not isinstance(score_payload, dict):
+        score_payload = parsed.get("scores_delta")
+    confidence_payload = parsed.get("function_confidence")
+    if not isinstance(confidence_payload, dict):
+        confidence_payload = parsed.get("function_confidence_delta")
+    target_function = str(parsed.get("target_function") or parsed.get("pair") or "").strip()
+    if target_function not in SCORE_KEYS:
+        target_function = ""
+    evidence_tags = []
+    for item in parsed.get("evidence_summary") or parsed.get("evidence_tags") or []:
+        text = str(item).strip()
+        if text:
+            evidence_tags.append(text)
     return {
-        "scores_delta": scores_delta,
-        "pair": str(parsed.get("pair") or "").strip() or "",
-        "evidence_tags": [str(item).strip() for item in parsed.get("evidence_tags") or [] if str(item).strip()],
+        "scores_delta": normalize_scores(score_payload),
+        "function_confidence_delta": normalize_confidence(confidence_payload),
+        "pair": target_function,
+        "target_function": target_function,
+        "evidence_tags": evidence_tags[:4],
         "effective": bool(parsed.get("effective", True)),
         "reasoning": str(parsed.get("reasoning") or "").strip(),
+        "next_gap": str(parsed.get("next_gap") or "").strip(),
     }
 
 
 def extract_next_question_from_model(raw: str) -> Dict[str, object]:
     parsed = parse_json_dict(raw)
     question = str(parsed.get("question") or "").strip()
-    pair = str(parsed.get("pair") or "").strip()
-    if question:
-        return {
-            "id": str(parsed.get("question_id") or f"model-{abs(hash(question)) % 100000}"),
-            "pair": pair if pair in PAIR_KEYS else "EI",
-            "prompt": question,
-            "dimension_targets": list(PAIR_TO_POLES.get(pair if pair in PAIR_KEYS else "EI", ("E", "I"))),
-            "difficulty": 2,
-            "followup_rules": [],
-        }
-    return {}
+    target_function = str(parsed.get("target_function") or parsed.get("pair") or "").strip()
+    if target_function not in SCORE_KEYS or not question:
+        return {}
+    return {
+        "id": str(parsed.get("question_id") or f"model-{target_function.lower()}-{abs(hash(question)) % 100000}"),
+        "pair": target_function,
+        "prompt": question,
+    }
 
 
 def extract_termination_from_model(raw: str) -> Dict[str, object]:
     parsed = parse_json_dict(raw)
+    missing_function = str(parsed.get("missing_function") or parsed.get("missing_pair") or "").strip()
+    if missing_function not in SCORE_KEYS:
+        missing_function = ""
     return {
         "should_finish": bool(parsed.get("should_finish", False)),
-        "reason": str(parsed.get("reason") or "").strip(),
-        "missing_pair": str(parsed.get("missing_pair") or "").strip(),
+        "reason": str(parsed.get("reason") or parsed.get("completion_reason") or "").strip(),
+        "missing_pair": missing_function,
     }
