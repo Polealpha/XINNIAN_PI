@@ -117,7 +117,8 @@ Section "Uninstall"
   Delete "$DESKTOP\__PRODUCT_NAME__.lnk"
   Delete "$SMPROGRAMS\__PRODUCT_NAME__\__PRODUCT_NAME__.lnk"
   RMDir "$SMPROGRAMS\__PRODUCT_NAME__"
-  RMDir /r "$INSTDIR"
+  Delete /REBOOTOK "$INSTDIR\Uninstall EmoResonance.exe"
+  RMDir /r /REBOOTOK "$INSTDIR"
   DeleteRegKey HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\EmoResonance"
 SectionEnd
 '@

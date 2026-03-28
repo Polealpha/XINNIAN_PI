@@ -1,9 +1,10 @@
 ﻿import React, { useEffect, useRef, useState } from "react";
 import { ChatAttachment, ChatMessage, EmotionType } from "../types";
 import { Send, Sparkles, User, Bot, Activity, Paperclip, X, Mic, Square, LoaderCircle, Volume2 } from "lucide-react";
-import { generateCareMessage, generateCareMessageStream } from "../services/llmService";
+import { generateAssistantMessage, generateAssistantMessageStream } from "../services/llmService";
 import { uploadChatAttachment } from "../services/chatService";
 import { createDesktopVoiceRecorder, transcribeDesktopAudio } from "../services/desktopVoiceService";
+import { AssistantRuntimeStatus, getAssistantRuntimeStatus } from "../services/assistantService";
 
 interface ChatInterfaceProps {
   currentEmotion: EmotionType;
@@ -159,6 +160,8 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
   const [voiceError, setVoiceError] = useState("");
   const [speechSupported, setSpeechSupported] = useState(false);
   const [speakingMessageId, setSpeakingMessageId] = useState<string | null>(null);
+  const [assistantRuntime, setAssistantRuntime] = useState<AssistantRuntimeStatus | null>(null);
+  const [assistantRuntimeError, setAssistantRuntimeError] = useState("");
 
   useEffect(() => {
     const next = initialMessages.filter((msg) => hasRenderableContent(msg));
@@ -203,6 +206,39 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
       window.clearTimeout(timer);
     };
   }, []);
+
+  useEffect(() => {
+    let active = true;
+    const refreshRuntime = async () => {
+      try {
+        const runtime = await getAssistantRuntimeStatus();
+        if (!active) return;
+        setAssistantRuntime(runtime);
+        setAssistantRuntimeError("");
+      } catch (err) {
+        if (!active) return;
+        setAssistantRuntime(null);
+        setAssistantRuntimeError(err instanceof Error ? err.message : String(err));
+      }
+    };
+
+    void refreshRuntime();
+    const timer = window.setInterval(() => {
+      void refreshRuntime();
+    }, 15000);
+
+    return () => {
+      active = false;
+      window.clearInterval(timer);
+    };
+  }, []);
+
+  const assistantReady = Boolean(
+    assistantRuntime?.gateway_ready && assistantRuntime?.provider_network_ok
+  );
+  const assistantDetail = assistantRuntimeError
+    ? assistantRuntimeError
+    : assistantRuntime?.provider_network_detail || assistantRuntime?.gateway_error || "";
 
   const stopSpeaking = () => {
     speechSynthesisRef.current?.cancel();
@@ -416,6 +452,21 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
       return;
     }
 
+    if (assistantRuntime && !assistantReady) {
+      const botMsg: ChatMessage = {
+        id: `bot-${Date.now()}`,
+        sender: "bot",
+        text: `OpenClaw 当前未连接，暂时不能给出真实 AI 回答。${assistantDetail ? ` 原因：${assistantDetail}` : ""}`,
+        timestamp: new Date(),
+        contentType: "text",
+        attachments: [],
+      };
+      setMessages((prev) => [...prev, botMsg]);
+      if (onSendMessage) onSendMessage(botMsg);
+      setIsTyping(false);
+      return;
+    }
+
     const botMsgId = `bot-${Date.now()}`;
     const botTimestamp = new Date();
     const upsertBotMessage = (text: string) => {
@@ -474,7 +525,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
 
       let responseText = "";
       if (hasImage) {
-        responseText = await generateCareMessage(
+        responseText = await generateAssistantMessage(
           currentEmotion,
           trimmed || messageToHistoryText(userMsg),
           history,
@@ -485,7 +536,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
           llmAttachments
         );
       } else {
-        responseText = await generateCareMessageStream(
+        responseText = await generateAssistantMessageStream(
           currentEmotion,
           trimmed || messageToHistoryText(userMsg),
           history,
@@ -526,7 +577,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
       }
 
       if (!responseText.trim()) {
-        responseText = await generateCareMessage(
+        responseText = await generateAssistantMessage(
           currentEmotion,
           trimmed || messageToHistoryText(userMsg),
           history,
@@ -627,9 +678,16 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
             <div>
               <h3 className="text-lg font-black text-white tracking-tight">关怀助手</h3>
               <div className="flex items-center gap-2">
-                <span className="w-2 h-2 bg-green-400 rounded-full animate-pulse"></span>
-                <span className="text-[10px] font-bold text-indigo-300 uppercase tracking-tighter">音频与视频帧已同步</span>
+                <span className={`w-2 h-2 rounded-full ${assistantReady ? "bg-green-400 animate-pulse" : "bg-rose-400"}`}></span>
+                <span className={`text-[10px] font-bold uppercase tracking-tighter ${assistantReady ? "text-indigo-300" : "text-rose-300"}`}>
+                  {assistantReady ? "OpenClaw 已连接" : "OpenClaw 未就绪"}
+                </span>
               </div>
+              {!assistantReady && (
+                <p className="mt-1 text-[10px] font-semibold text-slate-400">
+                  {assistantDetail || "当前回答会被阻塞，等待本地 OpenClaw 恢复后再试。"}
+                </p>
+              )}
             </div>
           </div>
           <div className="hidden sm:flex items-center gap-2 px-3 py-1 bg-white/5 rounded-full border border-white/10">

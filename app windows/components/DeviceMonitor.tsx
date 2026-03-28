@@ -628,71 +628,29 @@ export const DeviceMonitor: React.FC<DeviceMonitorProps> = ({
 
         <div className="bg-[#0c1222]/50 backdrop-blur-3xl rounded-[2rem] border border-white/[0.05] p-6 shadow-xl">
           <h3 className="text-[9px] font-black text-slate-500 uppercase tracking-widest mb-4 flex items-center gap-2">
-            <Laptop size={12} className="text-cyan-400" /> 笔记本摄像头云台测试
+            <Camera size={12} className="text-cyan-400" /> 树莓派摄像头链路
           </h3>
           <div className="space-y-3">
-            <div className="relative rounded-2xl overflow-hidden border border-white/10 bg-black aspect-video">
-              {desktopCamEnabled ? (
-                <>
-                  <video ref={desktopVideoRef} className="w-full h-full object-cover" muted playsInline />
-                  {desktopTrackBox && desktopVideoRef.current?.videoWidth ? (
-                    <div
-                      className="absolute border-2 border-cyan-300"
-                      style={{
-                        left: `${(desktopTrackBox.x / (desktopVideoRef.current?.videoWidth || 1)) * 100}%`,
-                        top: `${(desktopTrackBox.y / (desktopVideoRef.current?.videoHeight || 1)) * 100}%`,
-                        width: `${(desktopTrackBox.width / (desktopVideoRef.current?.videoWidth || 1)) * 100}%`,
-                        height: `${(desktopTrackBox.height / (desktopVideoRef.current?.videoHeight || 1)) * 100}%`,
-                      }}
-                    />
-                  ) : null}
-                </>
-              ) : (
-                <div className="w-full h-full flex items-center justify-center text-xs text-slate-500">
-                  未启动桌面摄像头测试
+            <div className="rounded-2xl border border-white/10 bg-black/30 p-4">
+              <div className="grid grid-cols-2 gap-2 text-[10px]">
+                <div className="rounded-xl bg-white/[0.03] border border-white/[0.05] px-3 py-2 text-slate-300">
+                  视频链路:{" "}
+                  <span className={`font-mono ${streamEnabled && videoEnabled ? "text-cyan-300" : "text-slate-500"}`}>
+                    {streamEnabled && videoEnabled ? "树莓派代理流" : "关闭"}
+                  </span>
                 </div>
-              )}
-            </div>
-            <div className="grid grid-cols-2 gap-2 text-[10px]">
-              <div className="rounded-xl bg-white/[0.03] border border-white/[0.05] px-3 py-2 text-slate-300">
-                状态: <span className="font-mono text-cyan-300">{desktopTrackStatus}</span>
+                <div className="rounded-xl bg-white/[0.03] border border-white/[0.05] px-3 py-2 text-slate-300">
+                  摄像头状态:{" "}
+                  <span className={`font-mono ${cameraReady === false ? "text-rose-300" : "text-cyan-300"}`}>
+                    {cameraReady === false ? "未就绪" : "已就绪"}
+                  </span>
+                </div>
               </div>
-              <div className="rounded-xl bg-white/[0.03] border border-white/[0.05] px-3 py-2 text-slate-300">
-                命令: <span className="font-mono text-cyan-300">{desktopTrackTurns.pan.toFixed(2)} / {desktopTrackTurns.tilt.toFixed(2)}</span>
-              </div>
+              <p className="mt-3 text-[10px] text-slate-400 leading-5">
+                这里现在只看树莓派摄像头和云台链路，不再提供笔记本摄像头代跑测试。视频窗口、追踪框和云台状态都以树莓派回传为准。
+              </p>
+              {streamError ? <p className="mt-2 text-[10px] text-rose-400">{streamError}</p> : null}
             </div>
-            {desktopCamError ? <p className="text-[10px] text-rose-400">{desktopCamError}</p> : null}
-            <div className="flex gap-2">
-              <button
-                onClick={desktopCamEnabled ? stopDesktopTracking : startDesktopTracking}
-                className={`flex-1 px-3 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest border transition-all ${
-                  desktopCamEnabled
-                    ? "bg-rose-500/10 border-rose-400/30 text-rose-300 hover:bg-rose-500/20"
-                    : "bg-cyan-500/10 border-cyan-400/30 text-cyan-300 hover:bg-cyan-500/20"
-                }`}
-              >
-                {desktopCamEnabled ? "停止跟踪" : "启动桌面摄像头跟踪"}
-              </button>
-              <button
-                onClick={async () => {
-                  if (!deviceIp) return;
-                  try {
-                    await sendDevicePanTiltLocal(`${deviceIp}:8090`, { pan: 0, tilt: 0 });
-                    setDesktopTrackTurns({ pan: 0, tilt: 0 });
-                    desktopLastPanTiltRef.current = { pan: 0, tilt: 0 };
-                  } catch (error) {
-                    setDesktopCamError(error instanceof Error ? error.message : "recenter_failed");
-                  }
-                }}
-                className="px-3 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest border bg-white/[0.04] border-white/10 text-slate-300 hover:bg-white/[0.08]"
-              >
-                <Crosshair size={12} className="inline mr-1" />
-                回中
-              </button>
-            </div>
-            <p className="text-[10px] text-slate-500 leading-5">
-              没接树莓派摄像头时，可以先用笔记本摄像头做人脸跟踪测试。它只在你手动打开后才会向机器人发送云台指令。
-            </p>
           </div>
         </div>
 

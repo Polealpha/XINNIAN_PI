@@ -131,6 +131,25 @@ const fetchWithTimeout = async (url: string, init: RequestInit, timeoutMs = REQU
   }
 };
 
+const buildHttpError = async (response: Response, method: string, path: string) => {
+  let detail = "";
+  try {
+    const text = await response.text();
+    if (text) {
+      try {
+        const parsed = JSON.parse(text);
+        detail = String(parsed?.detail || parsed?.message || text).trim();
+      } catch {
+        detail = text.trim();
+      }
+    }
+  } catch {
+    detail = "";
+  }
+  const suffix = detail ? `: ${detail}` : "";
+  return new Error(`${method} ${path} failed: ${response.status}${suffix}`);
+};
+
 export const apiGet = async (path: string, withAuth = true, retried = false, timeoutMs?: number) => {
   const base = resolveBaseForPath(path);
   const response = await fetchWithTimeout(`${base}${path}`, {
@@ -142,7 +161,7 @@ export const apiGet = async (path: string, withAuth = true, retried = false, tim
     return apiGet(path, withAuth, true, timeoutMs);
   }
   if (!response.ok) {
-    throw new Error(`GET ${path} failed: ${response.status}`);
+    throw await buildHttpError(response, "GET", path);
   }
   return response.json();
 };
@@ -159,7 +178,7 @@ export const apiPost = async (path: string, body: unknown, withAuth = true, retr
     return apiPost(path, body, withAuth, true, timeoutMs);
   }
   if (!response.ok) {
-    throw new Error(`POST ${path} failed: ${response.status}`);
+    throw await buildHttpError(response, "POST", path);
   }
   return response.json();
 };
@@ -176,7 +195,7 @@ export const apiPostForm = async (path: string, body: FormData, withAuth = true,
     return apiPostForm(path, body, withAuth, true, timeoutMs);
   }
   if (!response.ok) {
-    throw new Error(`POST ${path} failed: ${response.status}`);
+    throw await buildHttpError(response, "POST", path);
   }
   return response.json();
 };

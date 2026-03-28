@@ -3,7 +3,7 @@ import { Mail, Lock, ArrowRight, Github, UserPlus, User } from "lucide-react";
 import { login, register, LoginResult } from "../services/authService";
 
 interface LoginProps {
-  onLogin: (result: LoginResult) => void;
+  onLogin: (result: LoginResult) => Promise<void> | void;
   onGuest: () => void;
 }
 
@@ -43,7 +43,7 @@ export const Login: React.FC<LoginProps> = ({ onLogin, onGuest }) => {
         await register(email, password);
       }
       const result = await login(email, password);
-      onLogin(result);
+      await onLogin(result);
     } catch (err: any) {
       console.error(err);
       if (isRegister && String(err?.message || "").includes("409")) {

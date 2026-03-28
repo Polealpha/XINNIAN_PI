@@ -1658,21 +1658,29 @@ const App: React.FC = () => {
     [careDeliveryStrategy, isGuest]
   );
 
-  const handleLogin = useCallback(
-    (result: LoginResult) => {
-      setIsGuest(false);
-      setIsAuthenticated(true);
-      setAuthChecked(true);
-      localStorage.removeItem("guest_mode");
-      const gateRequired = Boolean(result.activation_required || result.assessment_required);
-      localStorage.setItem("activation_required", gateRequired ? "true" : "false");
-      localStorage.setItem("activation_path", result.activation_path || "/activate");
-      setActivationRequired(gateRequired);
-      setActivationPath(result.activation_path || "/activate");
-      setActiveTab(Tab.DASHBOARD);
-    },
-    []
-  );
+  const handleLogin = useCallback(async (result: LoginResult) => {
+    setIsGuest(false);
+    setIsAuthenticated(true);
+    setAuthChecked(true);
+    localStorage.removeItem("guest_mode");
+
+    let gateRequired = Boolean(result.activation_required || result.assessment_required);
+    let nextActivationPath = result.activation_path || "/activate";
+
+    try {
+      const activation = await getActivationState();
+      gateRequired = Boolean(activation.activation_required || activation.assessment_required);
+      nextActivationPath = gateRequired ? "/activate" : nextActivationPath;
+    } catch (err) {
+      console.warn("activation state refresh after login failed:", err);
+    }
+
+    localStorage.setItem("activation_required", gateRequired ? "true" : "false");
+    localStorage.setItem("activation_path", nextActivationPath);
+    setActivationRequired(gateRequired);
+    setActivationPath(nextActivationPath);
+    setActiveTab(Tab.DASHBOARD);
+  }, []);
 
   const handleGuest = useCallback(() => {
     localStorage.setItem("guest_mode", "true");

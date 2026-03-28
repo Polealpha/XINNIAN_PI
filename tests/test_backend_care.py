@@ -38,7 +38,12 @@ def test_llm_care_uses_project_prompt_and_returns_ai_source(tmp_path, monkeypatc
     monkeypatch.setattr(
         main.assistant_service,
         "runtime_status",
-        lambda: {"gateway_ready": True, "gateway_error": ""},
+        lambda: {
+            "gateway_ready": True,
+            "gateway_error": "",
+            "provider_network_ok": True,
+            "provider_network_detail": "",
+        },
     )
 
     async def fake_send_message(conn, user_id, text, surface, session_key=None, metadata=None, **kwargs):
@@ -85,7 +90,12 @@ def test_llm_care_returns_project_fallback_when_openclaw_not_ready(tmp_path, mon
     monkeypatch.setattr(
         main.assistant_service,
         "runtime_status",
-        lambda: {"gateway_ready": False, "gateway_error": "OpenClaw state dir not found; set OPENCLAW_STATE_DIR"},
+        lambda: {
+            "gateway_ready": False,
+            "gateway_error": "OpenClaw state dir not found; set OPENCLAW_STATE_DIR",
+            "provider_network_ok": False,
+            "provider_network_detail": "",
+        },
     )
 
     with TestClient(main.app) as client:
@@ -104,6 +114,43 @@ def test_llm_care_returns_project_fallback_when_openclaw_not_ready(tmp_path, mon
         assert payload["ai_ready"] is False
         assert "OPENCLAW_STATE_DIR" in payload["detail"]
         assert "低落" in payload["text"] or "先别急" in payload["text"]
+
+
+def test_llm_care_returns_fallback_when_provider_network_unavailable(tmp_path, monkeypatch):
+    db_path = tmp_path / "auth.db"
+    workspace_dir = tmp_path / "workspace"
+    monkeypatch.setattr(db, "DB_PATH", str(db_path))
+    monkeypatch.setattr(main.assistant_service, "store", AssistantWorkspaceStore(str(workspace_dir)))
+    db.init_db()
+    token = _seed_user(db_path, "care-provider@example.com")
+    headers = {"Authorization": f"Bearer {token}"}
+
+    monkeypatch.setattr(
+        main.assistant_service,
+        "runtime_status",
+        lambda: {
+            "gateway_ready": True,
+            "gateway_error": "",
+            "provider_network_ok": False,
+            "provider_network_detail": "proxy unavailable",
+        },
+    )
+
+    with TestClient(main.app) as client:
+        response = client.post(
+            "/api/llm/care",
+            headers=headers,
+            json={
+                "current_emotion": "stress",
+                "context": "我现在脑子很乱。",
+                "history": [],
+            },
+        )
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["source"] == "fallback"
+        assert payload["ai_ready"] is False
+        assert payload["detail"] == "proxy unavailable"
 
 
 def test_assistant_send_uses_same_openclaw_chain_for_proactive_care(tmp_path, monkeypatch):

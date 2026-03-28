@@ -17,6 +17,8 @@ export interface AssistantRuntimeStatus {
   ok: boolean;
   gateway_ready: boolean;
   gateway_error: string;
+  provider_network_ok: boolean;
+  provider_network_detail: string;
   state_dir: string;
   workspace_dir: string;
   desktop_tools: string[];

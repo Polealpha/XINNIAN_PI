@@ -4977,10 +4977,19 @@ def _build_care_context(payload: CareRequest) -> Dict[str, object]:
 
 def _normalize_care_runtime(runtime: Dict[str, object]) -> Dict[str, object]:
     gateway_ready = bool(runtime.get("gateway_ready"))
+    provider_network_ok = bool(runtime.get("provider_network_ok"))
     gateway_error = str(runtime.get("gateway_error") or "").strip()
-    detail = gateway_error if gateway_error else ("OpenClaw ready" if gateway_ready else "OpenClaw unavailable")
+    provider_network_detail = str(runtime.get("provider_network_detail") or "").strip()
+    if gateway_error:
+        detail = gateway_error
+    elif gateway_ready and not provider_network_ok:
+        detail = provider_network_detail or "OpenClaw provider network unavailable"
+    else:
+        detail = "OpenClaw ready" if gateway_ready else "OpenClaw unavailable"
     return {
-        "ai_ready": gateway_ready,
+        "gateway_ready": gateway_ready,
+        "provider_network_ok": provider_network_ok,
+        "ai_ready": bool(gateway_ready and provider_network_ok),
         "ai_detail": detail,
     }
 

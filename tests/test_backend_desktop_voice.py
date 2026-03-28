@@ -85,6 +85,8 @@ def test_desktop_voice_status_and_transcribe_route(tmp_path, monkeypatch):
         lambda: {
             "gateway_ready": True,
             "gateway_error": "",
+            "provider_network_ok": True,
+            "provider_network_detail": "",
             "state_dir": "C:\\Users\\jingk\\.openclaw",
             "workspace_dir": "E:\\Desktop\\chonggou\\assistant_data\\openclaw_workspace",
             "robot_bridge_ready": True,
