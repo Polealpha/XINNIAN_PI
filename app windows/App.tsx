@@ -450,7 +450,7 @@ const defaultDeviceSettings = (): DeviceSettings => ({
   mode: "normal",
   care_delivery_strategy: "policy",
   assistant: {
-    mode: (localStorage.getItem("assistant_mode") as AssistantMode) || "product",
+    mode: (localStorage.getItem("assistant_mode") as AssistantMode) || "agent",
     native_control_enabled: localStorage.getItem("assistant_native_control") !== "false",
   },
   media: {

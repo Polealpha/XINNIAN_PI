@@ -420,8 +420,13 @@ const ensureOpenClawState = (stateDir) => {
   fs.mkdirSync(stateDir, { recursive: true });
   fs.mkdirSync(path.join(stateDir, "identity"), { recursive: true });
   fs.mkdirSync(path.join(stateDir, "logs"), { recursive: true });
-  const authAgentDir = path.join(stateDir, "agents", "default", "agent");
-  fs.mkdirSync(authAgentDir, { recursive: true });
+  const authAgentDirs = [
+    path.join(stateDir, "agents", "default", "agent"),
+    path.join(stateDir, "agents", "main", "agent"),
+  ];
+  for (const authAgentDir of authAgentDirs) {
+    fs.mkdirSync(authAgentDir, { recursive: true });
+  }
   const copyIfMissing = (src, dest) => {
     if (!fs.existsSync(dest) && fs.existsSync(src)) {
       fs.copyFileSync(src, dest);
@@ -460,6 +465,7 @@ const ensureOpenClawState = (stateDir) => {
       ...((cfg.models.providers || {})[providerConfig.providerId] || {}),
       api: "openai-completions",
       baseUrl: providerConfig.baseUrl,
+      apiKey: providerConfig.apiKey || ((cfg.models.providers || {})[providerConfig.providerId] || {}).apiKey || "",
       models: [
         {
           id: providerConfig.modelId,
@@ -480,22 +486,30 @@ const ensureOpenClawState = (stateDir) => {
   delete cfg.agents.defaults.cliBackends;
   fs.writeFileSync(targetConfig, JSON.stringify(cfg, null, 2), "utf8");
   if (providerConfig.apiKey) {
-    const authStorePath = path.join(authAgentDir, "auth-profiles.json");
-    const authStore = readJsonIfExists(authStorePath) || { version: 1, profiles: {} };
-    authStore.version = 1;
-    authStore.profiles = {
-      ...(authStore.profiles || {}),
-      [providerConfig.profileId]: {
-        type: "api_key",
-        provider: providerConfig.providerId,
-        key: providerConfig.apiKey,
-      },
-    };
-    authStore.lastGood = {
-      ...(authStore.lastGood || {}),
-      [providerConfig.providerId]: providerConfig.profileId,
-    };
-    fs.writeFileSync(authStorePath, JSON.stringify(authStore, null, 2), "utf8");
+    for (const authAgentDir of authAgentDirs) {
+      const authStorePath = path.join(authAgentDir, "auth-profiles.json");
+      const authStore = readJsonIfExists(authStorePath) || { version: 1, profiles: {} };
+      authStore.version = 1;
+      authStore.profiles = {
+        ...(authStore.profiles || {}),
+        [providerConfig.profileId]: {
+          type: "api_key",
+          provider: providerConfig.providerId,
+          key: providerConfig.apiKey,
+        },
+      };
+      authStore.order = {
+        ...(authStore.order || {}),
+        [providerConfig.providerId]: [
+          providerConfig.profileId,
+        ],
+      };
+      authStore.lastGood = {
+        ...(authStore.lastGood || {}),
+        [providerConfig.providerId]: providerConfig.profileId,
+      };
+      fs.writeFileSync(authStorePath, JSON.stringify(authStore, null, 2), "utf8");
+    }
   }
 };
 

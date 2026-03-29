@@ -23,6 +23,7 @@ function Test-OpenClawRuntimeReady([string]$RuntimeRoot) {
         (Join-Path $RuntimeRoot "dist\entry.js"),
         (Join-Path $RuntimeRoot "dist\index.js"),
         (Join-Path $RuntimeRoot "node_modules"),
+        (Join-Path $RuntimeRoot "node_modules\yaml\dist\doc\directives.js"),
         (Join-Path $RuntimeRoot "node_modules\chalk\package.json"),
         (Join-Path $RuntimeRoot "node_modules\tslog\package.json"),
         (Join-Path $RuntimeRoot "node_modules\@anthropic-ai\sdk\package.json"),
@@ -52,6 +53,23 @@ function Copy-Tree([string]$SourceDir, [string]$TargetDir) {
     & robocopy.exe $SourceDir $TargetDir /MIR /R:1 /W:1 /NFL /NDL /NP /NJH /NJS | Out-Null
     if ($LASTEXITCODE -ge 8) {
         throw "robocopy failed with exit code $LASTEXITCODE from $SourceDir to $TargetDir"
+    }
+}
+
+function Copy-MaterializedRuntime([string]$SourceDir, [string]$TargetDir) {
+    New-Item -ItemType Directory -Force -Path $TargetDir | Out-Null
+    & robocopy.exe $SourceDir $TargetDir /MIR /R:1 /W:1 /NFL /NDL /NP /NJH /NJS | Out-Null
+    if ($LASTEXITCODE -ge 8) {
+        $required = @(
+            (Join-Path $TargetDir "openclaw.mjs"),
+            (Join-Path $TargetDir "node_modules\yaml\dist\doc\directives.js"),
+            (Join-Path $TargetDir "node_modules\chalk\package.json")
+        )
+        $missing = @($required | Where-Object { -not (Test-Path $_) })
+        if ($missing.Count -gt 0) {
+            throw "robocopy materialization failed with exit code $LASTEXITCODE. Missing: $($missing -join ', ')"
+        }
+        Write-Warning "robocopy returned exit $LASTEXITCODE while materializing OpenClaw runtime, but required files are present. Continuing."
     }
 }
 
@@ -151,7 +169,7 @@ function Prune-OpenClawRuntime([string]$RuntimeRoot) {
         }
 
     Get-ChildItem -Path $RuntimeRoot -Directory -Recurse -Force -ErrorAction SilentlyContinue |
-        Where-Object { $_.Name -in @("docs", "doc", "examples", "example", "test", "tests") } |
+        Where-Object { $_.Name -in @("docs", "examples", "example", "test", "tests") } |
         Sort-Object FullName -Descending |
         ForEach-Object {
             Invoke-CmdChecked "rmdir /s /q `"$($_.FullName)`""
@@ -165,6 +183,20 @@ function Prune-OpenClawRuntime([string]$RuntimeRoot) {
             Invoke-CmdChecked "rmdir /s /q `"$typescriptPath`""
         }
     }
+}
+
+function Materialize-OpenClawRuntime([string]$RuntimeRoot) {
+    $materializedRoot = "{0}-materialized-{1}" -f $RuntimeRoot, ([System.Guid]::NewGuid().ToString("N"))
+    Copy-MaterializedRuntime -SourceDir $RuntimeRoot -TargetDir $materializedRoot
+
+    $staleRoot = "{0}-stale-{1}" -f $RuntimeRoot, (Get-Date -Format "yyyyMMddHHmmss")
+    if (Test-Path $staleRoot) {
+        Invoke-CmdChecked "rmdir /s /q `"$staleRoot`""
+    }
+
+    Move-Item -Force $RuntimeRoot $staleRoot
+    Move-Item -Force $materializedRoot $RuntimeRoot
+    Start-Process -FilePath "cmd.exe" -ArgumentList "/c", "rmdir /s /q `"$staleRoot`"" -WindowStyle Hidden | Out-Null
 }
 
 function Get-OpenClawRuntimeVersion([string]$SourceDir, [string]$TargetDir) {
@@ -272,6 +304,7 @@ if (Test-Path $sourcePath) {
 
 Materialize-HoistedNodeModules $targetPath
 Prune-OpenClawRuntime $targetPath
+Materialize-OpenClawRuntime $targetPath
 
 if (-not (Test-OpenClawRuntimeReady $targetPath)) {
     throw "OpenClaw runtime is incomplete after deploy: $targetPath"

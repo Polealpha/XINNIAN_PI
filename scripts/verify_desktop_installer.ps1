@@ -15,7 +15,7 @@ if (-not $setup) {
 # silent install fail immediately with exit code 2.
 Get-Process | Where-Object { $_.ProcessName -like "EmoResonance Setup*" } | Stop-Process -Force -ErrorAction SilentlyContinue
 
-$probeRoot = Join-Path ([System.IO.Path]::GetTempPath()) ("emoresonance-install-probe-" + [System.Guid]::NewGuid().ToString("N"))
+$probeRoot = Join-Path $env:SystemDrive ("emo-probe-" + [System.Guid]::NewGuid().ToString("N").Substring(0, 12))
 New-Item -ItemType Directory -Path $probeRoot | Out-Null
 
 try {
