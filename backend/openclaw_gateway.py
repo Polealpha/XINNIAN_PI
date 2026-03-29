@@ -248,6 +248,8 @@ class OpenClawGatewayClient:
     @staticmethod
     def _normalize_agent_session_key(session_key: str) -> str:
         raw = str(session_key or "").strip() or "session"
+        if re.fullmatch(r"[A-Za-z0-9._:-]+", raw):
+            return raw
         cleaned = re.sub(r"[^A-Za-z0-9._-]+", "-", raw).strip("-") or "session"
         digest = hashlib.sha1(raw.encode("utf-8")).hexdigest()[:10]
         return f"{cleaned[:48]}-{digest}"

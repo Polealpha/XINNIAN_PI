@@ -250,12 +250,28 @@ export function ActivationGate({ onActivated }: ActivationGateProps) {
     setError("");
     setSuccess("");
     try {
-      const result = await submitAssessmentTurn({
-        answer,
-        transcript: answer,
-        surface: "desktop",
-        voice_mode: "text",
-      });
+      let result;
+      try {
+        result = await submitAssessmentTurn({
+          answer,
+          transcript: answer,
+          surface: "desktop",
+          voice_mode: "text",
+        });
+      } catch (err) {
+        const normalized = normalizeUiError(err);
+        if (!normalized.includes("Assessment session not started")) {
+          throw err;
+        }
+        const restarted = await startAssessment({ surface: "desktop", voice_mode: "text", reset: false });
+        setAssessment({ ...emptyAssessment(), ...restarted });
+        result = await submitAssessmentTurn({
+          answer,
+          transcript: answer,
+          surface: "desktop",
+          voice_mode: "text",
+        });
+      }
       setAssessment({ ...emptyAssessment(), ...result });
       setAnswerDraft("");
       if (result.blocking_reason) {

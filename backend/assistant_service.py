@@ -32,6 +32,7 @@ from .settings import (
     OPENCLAW_CLIENT_ID,
     OPENCLAW_CLIENT_MODE,
     OPENCLAW_CODEX_HOME,
+    OPENCLAW_DESKTOP_SHARED_SESSION_KEY,
     OPENCLAW_GATEWAY_ORIGIN,
     OPENCLAW_REPO_PATH,
     OPENCLAW_GATEWAY_URL,
@@ -60,6 +61,9 @@ def build_session_key(
     if explicit and str(explicit).strip():
         return str(explicit).strip()
     normalized = normalize_surface(surface)
+    shared_desktop_session = str(OPENCLAW_DESKTOP_SHARED_SESSION_KEY or "").strip()
+    if normalized == "desktop" and shared_desktop_session:
+        return shared_desktop_session
     if normalized == "wecom":
         return f"wecom:{str(sender_id or user_id).strip()}"
     if normalized == "robot":
@@ -368,6 +372,131 @@ class AssistantService:
             ],
             "robot_bridge_ready": True,
         }
+
+    def list_wechat_mirror_messages(self, session_key: str, limit: int = 200) -> List[Dict[str, object]]:
+        try:
+            state_dir = discover_openclaw_state_dir(OPENCLAW_STATE_DIR, self.workspace_dir)
+            transcript_path = self._resolve_openclaw_session_file(state_dir, session_key)
+            if transcript_path is None or not transcript_path.exists():
+                return []
+            items: List[Dict[str, object]] = []
+            active_wechat_turn = False
+            with transcript_path.open("r", encoding="utf-8", errors="ignore") as fh:
+                for raw_line in fh:
+                    line = str(raw_line or "").strip()
+                    if not line:
+                        continue
+                    try:
+                        payload = json.loads(line)
+                    except Exception:
+                        continue
+                    if str(payload.get("type") or "") != "message":
+                        continue
+                    message = payload.get("message") if isinstance(payload.get("message"), dict) else {}
+                    role = str(message.get("role") or "").strip().lower()
+                    content = message.get("content") if isinstance(message.get("content"), list) else []
+                    timestamp_ms = self._resolve_transcript_timestamp_ms(payload, message)
+                    if role == "user":
+                        text = self._extract_wechat_user_text(content)
+                        active_wechat_turn = bool(text)
+                        if text:
+                            items.append(
+                                {
+                                    "sender": "user",
+                                    "text": text,
+                                    "timestamp_ms": timestamp_ms,
+                                }
+                            )
+                        continue
+                    if role != "assistant" or not active_wechat_turn:
+                        continue
+                    text = self._extract_transcript_text(content)
+                    if not text:
+                        continue
+                    items.append(
+                        {
+                            "sender": "assistant",
+                            "text": text,
+                            "timestamp_ms": timestamp_ms,
+                        }
+                    )
+            if len(items) > limit:
+                items = items[-limit:]
+            return items
+        except Exception:
+            return []
+
+    def _resolve_openclaw_session_file(self, state_dir: Path, session_key: str) -> Optional[Path]:
+        raw_key = str(session_key or "").strip()
+        if not raw_key:
+            return None
+        agent_id = "main"
+        if raw_key.startswith("agent:"):
+            parts = raw_key.split(":")
+            if len(parts) >= 2 and parts[1].strip():
+                agent_id = parts[1].strip()
+        sessions_path = state_dir / "agents" / agent_id / "sessions" / "sessions.json"
+        if not sessions_path.exists():
+            return None
+        try:
+            payload = json.loads(sessions_path.read_text(encoding="utf-8", errors="ignore"))
+        except Exception:
+            return None
+        if not isinstance(payload, dict):
+            return None
+        entry = payload.get(raw_key)
+        if not isinstance(entry, dict):
+            return None
+        session_file = str(entry.get("sessionFile") or "").strip()
+        if session_file:
+            return Path(session_file).expanduser().resolve()
+        session_id = str(entry.get("sessionId") or "").strip()
+        if not session_id:
+            return None
+        return (sessions_path.parent / f"{session_id}.jsonl").resolve()
+
+    @staticmethod
+    def _resolve_transcript_timestamp_ms(payload: Dict[str, object], message: Dict[str, object]) -> int:
+        try:
+            nested = message.get("timestamp")
+            if nested is not None:
+                return int(nested)
+        except Exception:
+            pass
+        stamp = str(payload.get("timestamp") or "").strip()
+        if stamp:
+            try:
+                return int(datetime.fromisoformat(stamp.replace("Z", "+00:00")).timestamp() * 1000)
+            except Exception:
+                pass
+        return _now_ms()
+
+    @staticmethod
+    def _extract_transcript_text(content: List[object]) -> str:
+        texts: List[str] = []
+        for part in content:
+            if not isinstance(part, dict):
+                continue
+            if str(part.get("type") or "") != "text":
+                continue
+            text = str(part.get("text") or "").strip()
+            if text:
+                texts.append(text)
+        return "\n\n".join(texts).strip()
+
+    def _extract_wechat_user_text(self, content: List[object]) -> str:
+        raw = self._extract_transcript_text(content)
+        if not raw:
+            return ""
+        if "openclaw-weixin:" not in raw:
+            return ""
+        stripped = re.sub(
+            r"^Conversation info \(untrusted metadata\):\s*```json.*?```\s*",
+            "",
+            raw,
+            flags=re.DOTALL,
+        ).strip()
+        return stripped
 
     def _probe_provider_network(self) -> Tuple[bool, str]:
         proxy_url = resolve_openclaw_proxy_url()

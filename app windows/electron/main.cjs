@@ -92,7 +92,19 @@ const resolveOpenClawRepo = (runtimeRoot) => {
   if (process.env.OPENCLAW_REPO_PATH) {
     return process.env.OPENCLAW_REPO_PATH;
   }
-  return path.resolve(runtimeRoot, "..", "openclaw");
+  const candidates = [
+    path.resolve(runtimeRoot, "..", "openclaw"),
+    path.join(runtimeRoot, ".openclaw-latest", "node_modules", "openclaw"),
+    path.join(runtimeRoot, "app windows", "vendor", "openclaw-runtime"),
+  ];
+  for (const candidate of candidates) {
+    try {
+      if (fs.existsSync(path.join(candidate, "openclaw.mjs"))) {
+        return candidate;
+      }
+    } catch {}
+  }
+  return candidates[0];
 };
 
 const resolveOpenClawWorkspace = (runtimeRoot) => {
@@ -215,6 +227,131 @@ const buildOpenClawProviderEnv = () => {
   };
 };
 
+const parseLatestActivationProfile = (workspaceDir) => {
+  const usersRoot = path.join(workspaceDir, "assistant_data", "users");
+  if (!fs.existsSync(usersRoot)) {
+    return null;
+  }
+  let latest = null;
+  for (const entry of fs.readdirSync(usersRoot, { withFileTypes: true })) {
+    if (!entry.isDirectory()) continue;
+    const userId = String(entry.name || "").trim();
+    if (!/^\d+$/.test(userId)) continue;
+    const memoryPath = path.join(usersRoot, userId, "memory.md");
+    if (!fs.existsSync(memoryPath)) continue;
+    let text = "";
+    try {
+      text = fs.readFileSync(memoryPath, "utf8");
+    } catch {
+      continue;
+    }
+    if (!text.trim()) continue;
+    const chunks = text
+      .split(/^##\s/m)
+      .map((chunk) => chunk.trim())
+      .filter(Boolean);
+    for (const chunk of chunks) {
+      const normalized = `## ${chunk}`;
+      if (!normalized.includes("activation_profile")) continue;
+      const match = normalized.match(
+        /称呼：([^；\n]+)；角色：([^；\n]+)；关系：([^；\n]+)；摘要：([^\n]+)/
+      );
+      if (!match) continue;
+      let mtimeMs = 0;
+      try {
+        mtimeMs = fs.statSync(memoryPath).mtimeMs;
+      } catch {}
+      const candidate = {
+        userId,
+        preferredName: match[1].trim(),
+        roleLabel: match[2].trim(),
+        relationToRobot: match[3].trim(),
+        identitySummary: match[4].trim(),
+        memoryPath,
+        mtimeMs,
+      };
+      if (!latest || candidate.mtimeMs >= latest.mtimeMs) {
+        latest = candidate;
+      }
+    }
+  }
+  return latest;
+};
+
+const writeIfChanged = (targetPath, content) => {
+  const next = String(content || "");
+  try {
+    if (fs.existsSync(targetPath)) {
+      const current = fs.readFileSync(targetPath, "utf8");
+      if (current === next) {
+        return;
+      }
+    }
+  } catch {}
+  fs.writeFileSync(targetPath, next, "utf8");
+};
+
+const syncOpenClawWorkspaceProfile = (workspaceDir, runtimeRoot) => {
+  const profile = parseLatestActivationProfile(workspaceDir);
+  const repoSummary = `- Canonical project root: ${runtimeRoot}
+- Canonical workspace memory: ${path.join(workspaceDir, "assistant_data", "users")}
+- Do not assume USER.md/IDENTITY.md are placeholders; they are synced from current product data when available.
+`;
+  if (!profile) {
+    const fallbackIdentity = `# IDENTITY.md
+
+- Status: pending_activation
+- Preferred Name: 待激活后确认
+- Role: owner
+- Relation To Robot: primary_user
+- Summary: 当前尚未同步到已确认的激活身份资料。
+
+## Repo Sync
+${repoSummary}`;
+    writeIfChanged(path.join(workspaceDir, "IDENTITY.md"), fallbackIdentity);
+    return;
+  }
+  const userDoc = `# USER.md
+
+- Preferred Name: ${profile.preferredName}
+- User ID: ${profile.userId}
+- Role: ${profile.roleLabel}
+- Relation To Robot: ${profile.relationToRobot}
+- Timezone: Asia/Shanghai
+- Product: 共感智能机器人
+- Identity Summary: ${profile.identitySummary}
+- Canonical Memory File: ${profile.memoryPath}
+
+## Repo Sync
+${repoSummary}`;
+  const identityDoc = `# IDENTITY.md
+
+- Preferred Name: ${profile.preferredName}
+- Role: ${profile.roleLabel}
+- Relation To Robot: ${profile.relationToRobot}
+- Summary: ${profile.identitySummary}
+- Source User ID: ${profile.userId}
+- Source Memory File: ${profile.memoryPath}
+
+## Notes
+- This file is derived from the latest activation profile stored inside the project workspace.
+- If USER.md or IDENTITY.md conflicts with per-user memory, trust the latest activation_profile entry in assistant_data/users/<user_id>/memory.md.
+`;
+  const memoryMirror = `# MEMORY.md
+
+最新已同步的身份记忆来自用户 ${profile.userId}。
+
+- 称呼：${profile.preferredName}
+- 角色：${profile.roleLabel}
+- 关系：${profile.relationToRobot}
+- 摘要：${profile.identitySummary}
+- 记忆源文件：${profile.memoryPath}
+`;
+  writeIfChanged(path.join(workspaceDir, "USER.md"), userDoc);
+  writeIfChanged(path.join(workspaceDir, "IDENTITY.md"), identityDoc);
+  writeIfChanged(path.join(workspaceDir, "MEMORY.md"), memoryMirror);
+};
+
 const ensureOpenClawWorkspace = (workspaceDir) => {
   fs.mkdirSync(workspaceDir, { recursive: true });
   fs.mkdirSync(path.join(workspaceDir, "memory"), { recursive: true });
@@ -230,6 +367,7 @@ const ensureOpenClawWorkspace = (workspaceDir) => {
       fs.writeFileSync(target, content, "utf8");
     }
   }
+  syncOpenClawWorkspaceProfile(workspaceDir, path.resolve(workspaceDir, "..", ".."));
 };
 
 const ensureOpenClawCodexHome = (runtimeRoot, workspaceDir, openClawRepo) => {
@@ -260,6 +398,9 @@ const ensureOpenClawCodexHome = (runtimeRoot, workspaceDir, openClawRepo) => {
     'personality = "pragmatic"',
     "",
     `[projects.'${escapeTomlPath(workspaceDir)}']`,
+    'trust_level = "trusted"',
+    "",
+    `[projects.'${escapeTomlPath(runtimeRoot)}']`,
     'trust_level = "trusted"',
     "",
     `[projects.'${escapeTomlPath(openClawRepo)}']`,
@@ -465,6 +606,7 @@ const startLocalBackend = () => {
         OPENCLAW_STATE_DIR: stateDir,
         OPENCLAW_GATEWAY_URL: `ws://127.0.0.1:${LOCAL_OPENCLAW_GATEWAY_PORT}`,
         OPENCLAW_GATEWAY_ORIGIN: `http://127.0.0.1:${LOCAL_OPENCLAW_GATEWAY_PORT}`,
+        OPENCLAW_DESKTOP_SHARED_SESSION_KEY: "agent:main:main",
         OPENCLAW_CODEX_HOME: process.env.OPENCLAW_CODEX_HOME || codexHome,
         CODEX_HOME: process.env.CODEX_HOME || codexHome,
         TMP: path.join(codexHome, "tmp"),
@@ -534,6 +676,7 @@ const startLocalOpenClawGateway = () => {
         ...process.env,
         ...buildOpenClawProxyEnv(),
         ...buildOpenClawProviderEnv(),
+        OPENCLAW_WORKSPACE_DIR: process.env.OPENCLAW_WORKSPACE_DIR || workspaceDir,
         OPENCLAW_STATE_DIR: process.env.OPENCLAW_STATE_DIR || stateDir,
         OPENCLAW_CODEX_HOME: process.env.OPENCLAW_CODEX_HOME || codexHome,
         CODEX_HOME: process.env.CODEX_HOME || codexHome,

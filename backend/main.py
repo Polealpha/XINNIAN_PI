@@ -1931,6 +1931,53 @@ def _insert_chat_message(conn: Connection, user_id: int, payload: ChatMessageReq
     return int(cur.lastrowid)
 
 
+def _sync_wechat_transcript_history(
+    conn: Connection,
+    user_id: int,
+    session_key: str,
+    surface: str = "desktop",
+) -> None:
+    transcript_items = assistant_service.list_wechat_mirror_messages(session_key, limit=200)
+    if not transcript_items:
+        return
+    existing_rows = _list_chat_messages(conn, user_id, 400, session_key=session_key)
+    seen = {
+        (
+            str(row.get("sender") or ""),
+            str(row.get("text") or ""),
+            int(row.get("timestamp_ms") or 0),
+        )
+        for row in existing_rows
+    }
+    inserted = False
+    for item in transcript_items:
+        sender = str(item.get("sender") or "").strip()
+        text = str(item.get("text") or "").strip()
+        timestamp_ms = int(item.get("timestamp_ms") or 0)
+        if not sender or not text or timestamp_ms <= 0:
+            continue
+        key = (sender, text, timestamp_ms)
+        if key in seen:
+            continue
+        _insert_chat_message(
+            conn,
+            user_id,
+            ChatMessageRequest(
+                sender=sender,
+                text=text,
+                content_type="text",
+                attachments=[],
+                timestamp_ms=timestamp_ms,
+                surface=surface,
+                session_key=session_key,
+            ),
+        )
+        seen.add(key)
+        inserted = True
+    if inserted:
+        conn.commit()
+
+
 def _chat_response_from_row(row: Dict[str, object]) -> ChatMessageResponse:
     return ChatMessageResponse(
         id=int(row["id"]),
@@ -3182,6 +3229,11 @@ async def activation_assessment_start(
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Identity activation must complete first")
     ai_snapshot = _activation_ai_runtime_snapshot()
     session_id, existing = _load_assessment_session(conn, int(user["id"]), active_only=True)
+    if (not existing or session_id is None) and not payload.reset:
+        latest_session_id, latest_payload = _load_assessment_session(conn, int(user["id"]), active_only=False)
+        latest_status = str(latest_payload.get("status") or "").strip()
+        if latest_payload and latest_session_id is not None and latest_status != "completed":
+            session_id, existing = latest_session_id, latest_payload
     if not bool(ai_snapshot["ai_ready"]):
         blocked_payload = dict(existing or build_initial_session(int(time.time() * 1000)))
         blocked_payload["status"] = "blocked"
@@ -3220,6 +3272,11 @@ async def activation_assessment_start(
             existing["current_focus"] = str(model_question.get("focus") or model_question.get("pair") or "")
             existing["question_source"] = "ai"
             _save_assessment_session(conn, int(user["id"]), existing, session_id=int(session_id))
+    elif existing and session_id is not None and str(existing.get("status") or "").strip() == "blocked" and bool(ai_snapshot["ai_ready"]):
+        existing["status"] = "active"
+        existing["blocking_reason"] = ""
+        existing["voice_mode"] = str(payload.voice_mode or existing.get("voice_mode") or "text").strip() or "text"
+        _save_assessment_session(conn, int(user["id"]), existing, session_id=int(session_id))
     device_online, _selected = _assessment_device_online(conn, int(user["id"]), payload.device_id)
     return _assessment_response(existing, device_online=device_online, exists=True)
 
@@ -3261,6 +3318,33 @@ async def activation_assessment_turn(
 ) -> ActivationAssessmentTurnResponse:
     user = _parse_access_token_for_local_activation(credentials, conn, request)
     session_id, session_payload = _load_assessment_session(conn, int(user["id"]), active_only=True)
+    if not session_payload or session_id is None:
+        latest_session_id, latest_payload = _load_assessment_session(conn, int(user["id"]), active_only=False)
+        latest_status = str(latest_payload.get("status") or "").strip()
+        if latest_payload and latest_session_id is not None and latest_status != "completed":
+            ai_snapshot = _activation_ai_runtime_snapshot()
+            if not bool(ai_snapshot["ai_ready"]):
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail=str(ai_snapshot["blocking_reason"] or "Assessment session not started"),
+                )
+            latest_payload["status"] = "active"
+            latest_payload["blocking_reason"] = ""
+            latest_payload["voice_mode"] = (
+                str(payload.voice_mode or latest_payload.get("voice_mode") or "text").strip() or "text"
+            )
+            if not str(latest_payload.get("latest_question") or "").strip():
+                activation = _get_activation_profile(conn, int(user["id"]))
+                model_question = await _assessment_pick_model_question(int(user["id"]), activation, latest_payload)
+                if not model_question:
+                    raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Assessment session not started")
+                latest_payload["last_question_id"] = str(model_question.get("id") or "")
+                latest_payload["latest_question"] = str(model_question.get("prompt") or "")
+                latest_payload["question_pair"] = str(model_question.get("pair") or "")
+                latest_payload["current_focus"] = str(model_question.get("focus") or model_question.get("pair") or "")
+                latest_payload["question_source"] = "ai"
+            _save_assessment_session(conn, int(user["id"]), latest_payload, session_id=int(latest_session_id))
+            session_id, session_payload = latest_session_id, latest_payload
     if not session_payload or session_id is None:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Assessment session not started")
     if str(session_payload.get("status") or "") == "completed":
@@ -4515,6 +4599,7 @@ def chat_history(
     user = _parse_access_token(credentials, conn)
     resolved_surface = normalize_surface(surface)
     resolved_session_key = session_key or build_session_key(resolved_surface, int(user["id"]))
+    _sync_wechat_transcript_history(conn, int(user["id"]), resolved_session_key, surface=resolved_surface)
     rows = _list_chat_messages(conn, int(user["id"]), limit, session_key=resolved_session_key)
     return [_chat_response_from_row(row) for row in rows]
 

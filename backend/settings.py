@@ -20,7 +20,24 @@ ALLOWED_ORIGINS = _env("AUTH_CORS_ORIGINS", "*")
 
 _BACKEND_DIR = Path(__file__).resolve().parent
 _REPO_ROOT = _BACKEND_DIR.parent
-_DEFAULT_OPENCLAW_REPO = _REPO_ROOT.parent / "openclaw"
+
+
+def _resolve_default_openclaw_repo() -> Path:
+    candidates = [
+        _REPO_ROOT.parent / "openclaw",
+        _REPO_ROOT / ".openclaw-latest" / "node_modules" / "openclaw",
+        _REPO_ROOT / "app windows" / "vendor" / "openclaw-runtime",
+    ]
+    for candidate in candidates:
+        try:
+            if (candidate / "openclaw.mjs").exists():
+                return candidate
+        except Exception:
+            continue
+    return candidates[0]
+
+
+_DEFAULT_OPENCLAW_REPO = _resolve_default_openclaw_repo()
 _DEFAULT_OPENCLAW_WORKSPACE = _REPO_ROOT / "assistant_data" / "openclaw_workspace"
 _DEFAULT_OPENCLAW_STATE = _REPO_ROOT / "assistant_data" / "openclaw_state"
 _LOCAL_RUNTIME_ROOT = Path(
@@ -44,6 +61,7 @@ OPENCLAW_PROXY_URL = _env("OPENCLAW_PROXY_URL", "")
 OPENCLAW_TIMEOUT_MS = int(_env("OPENCLAW_TIMEOUT_MS", "600000"))
 OPENCLAW_CLIENT_ID = _env("OPENCLAW_CLIENT_ID", "gateway-client")
 OPENCLAW_CLIENT_MODE = _env("OPENCLAW_CLIENT_MODE", "backend")
+OPENCLAW_DESKTOP_SHARED_SESSION_KEY = _env("OPENCLAW_DESKTOP_SHARED_SESSION_KEY", "")
 ASSISTANT_BRIDGE_TOKEN = _env("ASSISTANT_BRIDGE_TOKEN", "change-this-bridge-token")
 ASSISTANT_BRIDGE_USER_ID = int(_env("ASSISTANT_BRIDGE_USER_ID", "1"))
 DESKTOP_APP_ALLOWLIST_JSON = _env(
