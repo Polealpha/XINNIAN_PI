@@ -183,7 +183,7 @@ const ensureOpenClawCodexHome = (runtimeRoot, workspaceDir, openClawRepo) => {
   const escapeTomlPath = (value) => String(value || "").replace(/\\/g, "\\\\");
   const config = [
     'model = "gpt-5.4"',
-    'model_reasoning_effort = "high"',
+    'model_reasoning_effort = "low"',
     'personality = "pragmatic"',
     "",
     `[projects.'${escapeTomlPath(workspaceDir)}']`,

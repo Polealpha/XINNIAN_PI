@@ -48,19 +48,41 @@ const hasRenderableContent = (msg: ChatMessage): boolean => {
 };
 
 const mergeChatMessages = (local: ChatMessage[], incoming: ChatMessage[]): ChatMessage[] => {
-  const byId = new Map<string, ChatMessage>();
-  for (const msg of local) byId.set(msg.id, msg);
+  const merged = [...local];
   for (const msg of incoming) {
-    const prev = byId.get(msg.id);
-    if (!prev) {
-      byId.set(msg.id, msg);
+    const existingIndex = merged.findIndex((item) => item.id === msg.id);
+    if (existingIndex >= 0) {
+      const prev = merged[existingIndex];
+      const prevText = String(prev.text || "");
+      const nextText = String(msg.text || "");
+      merged[existingIndex] = nextText.length >= prevText.length ? msg : prev;
       continue;
     }
-    const prevText = String(prev.text || "");
-    const nextText = String(msg.text || "");
-    byId.set(msg.id, nextText.length >= prevText.length ? msg : prev);
+
+    const msgText = String(msg.text || "").trim();
+    const msgAttachKey = JSON.stringify(msg.attachments || []);
+    const msgTs = msg.timestamp.getTime();
+    const dupIndex = merged.findIndex((item) => {
+      const itemText = String(item.text || "").trim();
+      const itemAttachKey = JSON.stringify(item.attachments || []);
+      return (
+        item.sender === msg.sender &&
+        itemText === msgText &&
+        itemAttachKey === msgAttachKey &&
+        Math.abs(item.timestamp.getTime() - msgTs) <= 4000
+      );
+    });
+    if (dupIndex >= 0) {
+      const prev = merged[dupIndex];
+      const prevText = String(prev.text || "");
+      const nextText = String(msg.text || "");
+      merged[dupIndex] = nextText.length >= prevText.length ? msg : prev;
+      continue;
+    }
+
+    merged.push(msg);
   }
-  return Array.from(byId.values()).sort((a, b) => a.timestamp.getTime() - b.timestamp.getTime());
+  return merged.sort((a, b) => a.timestamp.getTime() - b.timestamp.getTime());
 };
 
 const messageToHistoryText = (m: ChatMessage): string => {

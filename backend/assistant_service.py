@@ -164,6 +164,17 @@ class AssistantService:
                     )
                     reply = await self.gateway.send_message(resolved_session_key, message)
                 reply = self._sanitize_gateway_reply(reply)
+                if not tool_results and not str(reply or "").strip():
+                    reply = await self.gateway.send_message(
+                        f"{resolved_session_key}:rewrite:{_now_ms()}",
+                        self._compose_retry_message(
+                            text,
+                            normalized_surface,
+                            assistant_mode,
+                            native_control_enabled,
+                        ),
+                    )
+                    reply = self._sanitize_gateway_reply(reply)
                 if exact_reply_target and reply != exact_reply_target:
                     reply = await self.gateway.send_message(
                         f"{resolved_session_key}:exact-retry:{_now_ms()}",
@@ -433,6 +444,15 @@ class AssistantService:
             lines.append(f"Metadata: {json.dumps(metadata, ensure_ascii=False)}")
         if care_channel != "proactive_care":
             lines.append(str(text or "").strip())
+        if self._contains_high_risk_distress(text):
+            lines.extend(
+                [
+                    "Important safety rule: the user's latest message contains clear high-risk distress wording.",
+                    "Do not reply with a bare list of URLs, source links, or hotline pages.",
+                    "First acknowledge the pain, then ask one short safety-check question, then give one small concrete next step.",
+                    "If you mention support resources, mention them naturally in one sentence only after the emotional response.",
+                ]
+            )
         return "\n".join(lines).strip()
 
     def _compose_proactive_care_block(self, text: str, metadata: Optional[Dict[str, object]]) -> List[str]:
@@ -477,9 +497,36 @@ class AssistantService:
             "This is a normal end-user chat request, not a heartbeat check.",
             "Do not reply HEARTBEAT_OK.",
             "Answer the user's request directly in concise Chinese.",
+            "Do not output a bare list of links or source URLs.",
             str(text or "").strip(),
         ]
+        if self._contains_high_risk_distress(text):
+            lines.extend(
+                [
+                    "The user is expressing high-risk distress.",
+                    "Respond first with emotional acknowledgement and one short safety-check question.",
+                    "Do not dump hotline websites or source links as the main reply.",
+                ]
+            )
         return "\n".join(lines).strip()
+
+    def _contains_high_risk_distress(self, text: str) -> bool:
+        raw = str(text or "").strip().lower()
+        if not raw:
+            return False
+        markers = [
+            "想死",
+            "不想活",
+            "活不下去",
+            "结束生命",
+            "自杀",
+            "轻生",
+            "不如死了",
+            "i want to die",
+            "kill myself",
+            "suicide",
+        ]
+        return any(marker in raw for marker in markers)
 
     def _resolve_assistant_mode(self, metadata: Optional[Dict[str, object]]) -> str:
         raw = ""
@@ -499,6 +546,8 @@ class AssistantService:
         raw = str(reply or "").strip()
         if not raw:
             return raw
+        if self._looks_like_link_dump(raw):
+            return ""
         lines = [line.strip() for line in raw.splitlines() if line.strip()]
         if not lines:
             return raw
@@ -541,6 +590,20 @@ class AssistantService:
             if re.fullmatch(r"[A-Z0-9_ -]{4,80}", last):
                 return last.strip()
         return "\n".join(lines).strip()
+
+    def _looks_like_link_dump(self, reply: str) -> bool:
+        raw = str(reply or "").strip()
+        if not raw:
+            return False
+        compact = re.sub(r"\s+", " ", raw)
+        url_count = len(re.findall(r"https?://\S+", compact))
+        non_url = re.sub(r"https?://\S+", "", compact)
+        non_url = non_url.replace("来源:", "").replace("来源：", "").strip(" ，,。：:;；<>[]()")
+        if url_count >= 2 and len(non_url) < 24:
+            return True
+        if compact.startswith("来源:") or compact.startswith("来源："):
+            return url_count >= 1 and len(non_url) < 48
+        return False
 
     def _extract_exact_reply_target(self, text: str) -> str:
         raw = str(text or "").strip()
