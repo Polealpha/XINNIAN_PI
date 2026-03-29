@@ -8,7 +8,7 @@
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
-    "prepare:python-runtime": "python ../scripts/prepare_desktop_python_runtime.py --target \"vendor/python-site-packages\" --requirements ../backend/requirements.txt",
+    "prepare:python-runtime": "python ../scripts/prepare_desktop_python_runtime.py --target \"vendor/python-site-packages\" --python-home-target \"vendor/python-runtime\" --requirements ../backend/requirements.txt",
     "prepare:openclaw-runtime": "powershell -NoLogo -NoProfile -ExecutionPolicy Bypass -File ../scripts/prepare_desktop_openclaw_runtime.ps1 -Source ../../openclaw -Target ./vendor/openclaw-runtime",
     "prepare:desktop-runtime": "npm run prepare:python-runtime && npm run prepare:openclaw-runtime",
     "build:installer": "powershell -NoLogo -NoProfile -ExecutionPolicy Bypass -File ../scripts/build_desktop_installer.ps1 -AppDir ./release/win-unpacked -OutputFile \"./release/EmoResonance Setup 0.0.1.exe\"",
@@ -50,7 +50,7 @@
     ],
     "extraResources": [
       {
-        "from": "C:/Python314",
+        "from": "vendor/python-runtime",
         "to": "bridge-runtime/python",
         "filter": [
           "**/*",

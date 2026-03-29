@@ -261,8 +261,13 @@ class OpenClawGatewayClient:
     ) -> str:
         repo_root = Path(str(self.config.repo_path or "")).expanduser().resolve()
         launcher = repo_root / "scripts" / "run-node.mjs"
-        if not launcher.exists():
-            raise OpenClawGatewayError(f"OpenClaw launcher not found: {launcher}")
+        if launcher.exists():
+            launcher_args = ["node", str(launcher)]
+        else:
+            launcher = repo_root / "openclaw.mjs"
+            if not launcher.exists():
+                raise OpenClawGatewayError(f"OpenClaw launcher not found: {launcher}")
+            launcher_args = ["node", str(launcher)]
         env = {
             **os.environ,
             "OPENCLAW_STATE_DIR": str(runtime["state_dir"]),
@@ -279,8 +284,7 @@ class OpenClawGatewayClient:
         if os.name == "nt":
             stdout, stderr, payload_text, returncode = await self._run_windows_command(
                 [
-                    "node",
-                    str(launcher),
+                    *launcher_args,
                     "agent",
                     "--session-id",
                     session_key,
@@ -296,8 +300,7 @@ class OpenClawGatewayClient:
             )
         else:
             process = await asyncio.create_subprocess_exec(
-                "node",
-                str(launcher),
+                *launcher_args,
                 "agent",
                 "--session-id",
                 session_key,
@@ -324,7 +327,10 @@ class OpenClawGatewayClient:
             "returned no text payload",
         )
         agent_failed = returncode != 0 or not stdout.strip()
-        if agent_failed or any(marker in stderr.lower() for marker in [m.lower() for m in direct_cli_markers]):
+        direct_cli_available = self._direct_cli_fallback_available(runtime)
+        if direct_cli_available and (
+            agent_failed or any(marker in stderr.lower() for marker in [m.lower() for m in direct_cli_markers])
+        ):
             return await self._send_message_via_direct_cli(runtime, text, timeout_ms)
         if returncode != 0:
             raise OpenClawGatewayError(
@@ -338,6 +344,23 @@ class OpenClawGatewayClient:
             raise OpenClawGatewayError("OpenClaw agent command produced no output")
         raise OpenClawGatewayError("OpenClaw agent command returned no text payload")
 
+    def _direct_cli_fallback_available(self, runtime: Dict[str, str]) -> bool:
+        try:
+            defaults = self._load_agent_defaults(runtime)
+        except Exception:
+            return False
+        cli_backends = defaults.get("cliBackends") or {}
+        backend = cli_backends.get("codex-cli") if isinstance(cli_backends, dict) else None
+        if not isinstance(backend, dict):
+            return False
+        primary_model = str((defaults.get("model") or {}).get("primary") or "").strip()
+        return primary_model.lower().startswith("codex-cli/")
+
+    def _load_agent_defaults(self, runtime: Dict[str, str]) -> Dict[str, object]:
+        openclaw_json = self._read_json(Path(str(runtime["state_dir"])) / "openclaw.json")
+        defaults = ((openclaw_json.get("agents") or {}).get("defaults") or {}) if isinstance(openclaw_json, dict) else {}
+        return defaults if isinstance(defaults, dict) else {}
+
     async def _send_message_via_direct_cli(
         self,
         runtime: Dict[str, str],
@@ -345,8 +368,7 @@ class OpenClawGatewayClient:
         timeout_ms: int,
     ) -> str:
         repo_root = Path(str(self.config.repo_path or "")).expanduser().resolve()
-        openclaw_json = self._read_json(Path(str(runtime["state_dir"])) / "openclaw.json")
-        defaults = ((openclaw_json.get("agents") or {}).get("defaults") or {}) if isinstance(openclaw_json, dict) else {}
+        defaults = self._load_agent_defaults(runtime)
         cli_backends = (defaults.get("cliBackends") or {}) if isinstance(defaults, dict) else {}
         backend = cli_backends.get("codex-cli") if isinstance(cli_backends, dict) else None
         if not isinstance(backend, dict):
@@ -493,7 +515,8 @@ class OpenClawGatewayClient:
 
     def _build_codex_home_config(self) -> str:
         return (
-            'model = "gpt-5.4"\n'
+            'model = "glm-5"\n'
+            'model_reasoning_effort = "low"\n'
             'personality = "pragmatic"\n\n'
         )
 

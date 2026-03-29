@@ -38,8 +38,7 @@ from .assessment_engine import (
     empty_pair_confidence,
     empty_score_map,
     extract_next_question_from_model,
-    extract_scoring_from_model,
-    extract_termination_from_model,
+    extract_turn_analysis_from_model,
     merge_scoring,
     normalize_confidence,
     normalize_scores,
@@ -50,8 +49,7 @@ from .assessment_engine import (
 from .assessment_prompts import (
     ASSESSMENT_CONDUCTOR_PROMPT,
     ASSESSMENT_MEMORY_WRITER_PROMPT,
-    ASSESSMENT_SCORER_PROMPT,
-    ASSESSMENT_TERMINATOR_PROMPT,
+    ASSESSMENT_TURN_PROMPT,
 )
 from .personality_prompts import PERSONALITY_EXTRACTION_PROMPT, PERSONALITY_SYSTEM_PROMPT
 from .assistant_service import AssistantService, build_session_key, normalize_surface
@@ -1112,13 +1110,13 @@ async def _assessment_apply_turn(
         "prompt": str(session_payload.get("latest_question") or "").strip(),
     }
     try:
-        scoring = await _assessment_score_model(int(user_id), question, session_payload, answer_text)
-        if not scoring:
-            raise RuntimeError("assessment_scoring_empty")
+        analysis = await _assessment_analyze_turn_model(int(user_id), question, session_payload, answer_text)
+        if not analysis:
+            raise RuntimeError("assessment_turn_analysis_empty")
         scoring_source = "ai"
     except Exception as exc:
         session_payload["status"] = "blocked"
-        session_payload["blocking_reason"] = f"AI 评分未完成：{exc}"
+        session_payload["blocking_reason"] = f"AI 这一轮分析未完成：{exc}"
         session_payload["assessment_ready"] = False
         _save_assessment_session(conn, int(user_id), session_payload, session_id=int(session_id))
         device_online, _selected = _assessment_device_online(conn, int(user_id), device_id)
@@ -1129,34 +1127,31 @@ async def _assessment_apply_turn(
             just_completed=False,
         )
 
+    scoring = {
+        "effective": bool(analysis.get("effective", True)),
+        "profile_updates": dict(analysis.get("profile_updates") or {}),
+        "evidence_summary": list(analysis.get("evidence_summary") or []),
+        "reasoning": str(analysis.get("reasoning") or "").strip(),
+        "next_focus": str(analysis.get("missing_area") or "").strip(),
+        "stable_enough": bool(analysis.get("should_finish", False)),
+        "confidence": float(analysis.get("confidence") or 0.0),
+        "summary_hint": str((analysis.get("profile_updates") or {}).get("summary") or "").strip(),
+    }
     merged = merge_scoring(session_payload, question, answer_text, scoring, int(time.time() * 1000))
     merged["voice_mode"] = str(voice_mode or "text").strip() or "text"
     merged["scoring_source"] = scoring_source
     merged["question_pair"] = str(question.get("pair") or merged.get("question_pair") or "")
     merged["status"] = "active"
     merged["blocking_reason"] = ""
+    should_finish = bool(analysis.get("should_finish"))
+    finish_reason = str(analysis.get("finish_reason") or "need_more_signal").strip() or "need_more_signal"
+    missing_area = str(analysis.get("missing_area") or "").strip()
+    next_question = dict(analysis.get("next_question") or {})
 
-    try:
-        terminator = await _assessment_terminate_model(int(user_id), merged)
-        if not terminator:
-            raise RuntimeError("assessment_terminator_empty")
-    except Exception as exc:
-        merged["status"] = "blocked"
-        merged["blocking_reason"] = f"AI 终止判定未完成：{exc}"
-        merged["assessment_ready"] = False
-        _save_assessment_session(conn, int(user_id), merged, session_id=int(session_id))
-        device_online, _selected = _assessment_device_online(conn, int(user_id), device_id)
-        response = _assessment_response(merged, device_online=device_online, exists=True)
-        return merged, ActivationAssessmentTurnResponse(
-            **response.model_dump(),
-            question_changed=False,
-            just_completed=False,
-        )
-
-    if terminator.get("should_finish") and merged.get("status") != "completed":
+    if should_finish and merged.get("status") != "completed":
         merged["completed_at_ms"] = int(time.time() * 1000)
-        merged["finish_reason"] = str(terminator.get("reason") or "model_finish")
-        merged["confidence"] = max(float(merged.get("confidence") or 0.0), float(terminator.get("confidence") or 0.0))
+        merged["finish_reason"] = finish_reason or "model_finish"
+        merged["confidence"] = max(float(merged.get("confidence") or 0.0), float(analysis.get("confidence") or 0.0))
         merged["final_result"] = build_final_profile(merged)
         if bool((merged.get("final_result") or {}).get("assessment_ready")):
             merged["status"] = "completed"
@@ -1167,19 +1162,16 @@ async def _assessment_apply_turn(
             merged["status"] = "blocked"
             merged["blocking_reason"] = "AI 认为当前信息还不够稳定，正式建档继续等待更多回答。"
     elif merged.get("status") != "completed":
-        try:
-            suggested = await _assessment_pick_model_question(int(user_id), _get_activation_profile(conn, int(user_id)), merged)
-            if not suggested:
-                raise RuntimeError("assessment_question_empty")
-            merged["latest_question"] = str(suggested.get("prompt") or merged.get("latest_question") or "")
-            merged["last_question_id"] = str(suggested.get("id") or merged.get("last_question_id") or "")
-            merged["question_pair"] = str(suggested.get("pair") or merged.get("question_pair") or "")
-            merged["current_focus"] = str(suggested.get("focus") or suggested.get("pair") or terminator.get("missing_area") or merged.get("current_focus") or "")
-            merged["question_source"] = "ai"
-        except Exception as exc:
+        if not next_question:
             merged["status"] = "blocked"
-            merged["blocking_reason"] = f"AI 下一题生成未完成：{exc}"
+            merged["blocking_reason"] = "AI 下一题生成未完成：缺少下一题内容"
             merged["assessment_ready"] = False
+        else:
+            merged["latest_question"] = str(next_question.get("prompt") or merged.get("latest_question") or "")
+            merged["last_question_id"] = str(next_question.get("id") or merged.get("last_question_id") or "")
+            merged["question_pair"] = str(next_question.get("pair") or merged.get("question_pair") or "")
+            merged["current_focus"] = str(next_question.get("focus") or next_question.get("pair") or missing_area or merged.get("current_focus") or "")
+            merged["question_source"] = "ai"
 
     _append_assessment_turn_event(
         conn,
@@ -1369,38 +1361,62 @@ async def _assessment_pick_model_question(
     activation_profile: Dict[str, object],
     session_payload: Dict[str, object],
 ) -> Dict[str, object]:
+    compact_session = {
+        "conversation_count": int(session_payload.get("conversation_count") or 0),
+        "effective_turn_count": int(session_payload.get("effective_turn_count") or 0),
+        "current_focus": str(session_payload.get("current_focus") or "").strip(),
+        "profile_preview": dict(session_payload.get("profile_preview") or {}),
+        "dialogue_turns": [
+            {
+                "role": str(item.get("role") or "").strip(),
+                "text": str(item.get("text") or "").strip(),
+            }
+            for item in (session_payload.get("dialogue_turns") or [])[-6:]
+            if isinstance(item, dict) and str(item.get("text") or "").strip()
+        ],
+    }
+    compact_identity = {
+        "preferred_name": str(activation_profile.get("preferred_name") or "").strip(),
+        "identity_summary": str(activation_profile.get("identity_summary") or "").strip(),
+        "voice_intro_summary": str(activation_profile.get("voice_intro_summary") or "").strip(),
+    }
     prompt = (
         f"{ASSESSMENT_CONDUCTOR_PROMPT}\n\n"
-        f"输入数据：{json.dumps({'user_id': user_id, 'identity': activation_profile, 'session': session_payload}, ensure_ascii=False)}"
+        f"输入数据：{json.dumps({'user_id': user_id, 'identity': compact_identity, 'session': compact_session}, ensure_ascii=False)}"
     )
     session_key = f"activation:{int(user_id)}:assessment:conductor:{int(time.time() * 1000)}"
     raw = await assistant_service.gateway.send_message(session_key, prompt)
     return extract_next_question_from_model(raw)
 
 
-async def _assessment_score_model(
+async def _assessment_analyze_turn_model(
     user_id: int,
     question: Dict[str, object],
     session_payload: Dict[str, object],
     answer: str,
 ) -> Dict[str, object]:
+    compact_session = {
+        "conversation_count": int(session_payload.get("conversation_count") or 0),
+        "effective_turn_count": int(session_payload.get("effective_turn_count") or 0),
+        "required_min_turns": int(session_payload.get("required_min_turns") or 4),
+        "current_focus": str(session_payload.get("current_focus") or session_payload.get("question_pair") or "").strip(),
+        "profile_preview": dict(session_payload.get("profile_preview") or {}),
+        "dialogue_turns": [
+            {
+                "role": str(item.get("role") or "").strip(),
+                "text": str(item.get("text") or "").strip(),
+            }
+            for item in (session_payload.get("dialogue_turns") or [])[-6:]
+            if isinstance(item, dict) and str(item.get("text") or "").strip()
+        ],
+    }
     prompt = (
-        f"{ASSESSMENT_SCORER_PROMPT}\n\n"
-        f"输入数据：{json.dumps({'question': question, 'session': session_payload, 'answer': answer}, ensure_ascii=False)}"
+        f"{ASSESSMENT_TURN_PROMPT}\n\n"
+        f"输入数据：{json.dumps({'question': question, 'session': compact_session, 'answer': answer}, ensure_ascii=False)}"
     )
-    session_key = f"activation:{int(user_id)}:assessment:scorer:{int(time.time() * 1000)}"
+    session_key = f"activation:{int(user_id)}:assessment:turn:{int(time.time() * 1000)}"
     raw = await assistant_service.gateway.send_message(session_key, prompt)
-    return extract_scoring_from_model(raw)
-
-
-async def _assessment_terminate_model(user_id: int, session_payload: Dict[str, object]) -> Dict[str, object]:
-    prompt = (
-        f"{ASSESSMENT_TERMINATOR_PROMPT}\n\n"
-        f"输入数据：{json.dumps(session_payload, ensure_ascii=False)}"
-    )
-    session_key = f"activation:{int(user_id)}:assessment:terminator:{int(time.time() * 1000)}"
-    raw = await assistant_service.gateway.send_message(session_key, prompt)
-    return extract_termination_from_model(raw)
+    return extract_turn_analysis_from_model(raw)
 
 
 async def _assessment_memory_writer_model(user_id: int, final_profile: Dict[str, object], session_payload: Dict[str, object]) -> Dict[str, object]:

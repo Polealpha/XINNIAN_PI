@@ -234,6 +234,29 @@ def extract_termination_from_model(text: str) -> Dict[str, object]:
     }
 
 
+def extract_turn_analysis_from_model(text: str) -> Dict[str, object]:
+    parsed = parse_json_dict(text)
+    updates_raw = parsed.get("profile_updates") if isinstance(parsed.get("profile_updates"), dict) else parsed
+    next_question_raw = parsed.get("next_question") if isinstance(parsed.get("next_question"), dict) else {}
+    try:
+        confidence = max(0.0, min(1.0, float(parsed.get("confidence", 0.0) or 0.0)))
+    except Exception:
+        confidence = 0.0
+    return {
+        "effective": bool(parsed.get("effective", True)),
+        "profile_updates": _normalize_profile_updates(updates_raw if isinstance(updates_raw, dict) else {}),
+        "evidence_summary": _listify(parsed.get("evidence_summary") or parsed.get("evidence")),
+        "reasoning": str(parsed.get("reasoning") or "").strip(),
+        "confidence": confidence,
+        "should_finish": bool(parsed.get("should_finish", False)),
+        "finish_reason": str(parsed.get("finish_reason") or parsed.get("reason") or "").strip() or "need_more_signal",
+        "missing_area": str(parsed.get("missing_area") or parsed.get("next_focus") or "").strip(),
+        "next_question": extract_next_question_from_model(json.dumps(next_question_raw, ensure_ascii=False))
+        if isinstance(next_question_raw, dict)
+        else {},
+    }
+
+
 def select_next_question(scores: Dict[str, float], asked_ids: List[str], confidence: Dict[str, float]) -> Dict[str, object]:
     del scores, asked_ids, confidence
     return {}

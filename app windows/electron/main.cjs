@@ -16,6 +16,15 @@ let backendProc = null;
 let openClawGatewayProc = null;
 const LOCAL_BACKEND_URL = "http://127.0.0.1:8000";
 const LOCAL_OPENCLAW_GATEWAY_PORT = 18890;
+const LOCAL_OPENCLAW_PROVIDER = {
+  providerId: "zai",
+  profileId: "zai:default",
+  endpoint: "coding-cn",
+  baseUrl: "https://open.bigmodel.cn/api/coding/paas/v4/",
+  modelId: "glm-5",
+  modelRef: "zai/glm-5",
+  thinkingDefault: "low",
+};
 const deviceSyncManager = new DeviceSyncManager({
   onStatus: (payload) => {
     for (const win of BrowserWindow.getAllWindows()) {
@@ -143,6 +152,69 @@ const buildOpenClawProxyEnv = () => {
   };
 };
 
+const resolveAppDataRoot = () => {
+  try {
+    if (app?.getPath) {
+      const userData = app.getPath("userData");
+      if (userData) {
+        fs.mkdirSync(userData, { recursive: true });
+        return userData;
+      }
+    }
+  } catch {}
+  const fallback = path.join(
+    process.env.APPDATA || path.join(os.homedir(), "AppData", "Roaming"),
+    "emoresonance---dual-robot-companion"
+  );
+  fs.mkdirSync(fallback, { recursive: true });
+  return fallback;
+};
+
+const resolveOpenClawProviderConfigPath = () => path.join(resolveAppDataRoot(), "openclaw-provider.json");
+
+const readJsonIfExists = (pathname) => {
+  try {
+    if (!fs.existsSync(pathname)) {
+      return null;
+    }
+    return JSON.parse(fs.readFileSync(pathname, "utf8"));
+  } catch {
+    return null;
+  }
+};
+
+const loadOpenClawProviderConfig = () => {
+  const fileConfig = readJsonIfExists(resolveOpenClawProviderConfigPath()) || {};
+  const modelId = String(fileConfig.modelId || LOCAL_OPENCLAW_PROVIDER.modelId).trim() || LOCAL_OPENCLAW_PROVIDER.modelId;
+  const apiKey = String(
+    process.env.ZAI_API_KEY ||
+      process.env.Z_AI_API_KEY ||
+      fileConfig.apiKey ||
+      ""
+  ).trim();
+  return {
+    providerId: LOCAL_OPENCLAW_PROVIDER.providerId,
+    profileId: LOCAL_OPENCLAW_PROVIDER.profileId,
+    endpoint: String(fileConfig.endpoint || LOCAL_OPENCLAW_PROVIDER.endpoint).trim() || LOCAL_OPENCLAW_PROVIDER.endpoint,
+    baseUrl: String(fileConfig.baseUrl || LOCAL_OPENCLAW_PROVIDER.baseUrl).trim() || LOCAL_OPENCLAW_PROVIDER.baseUrl,
+    modelId,
+    modelRef: `zai/${modelId}`,
+    thinkingDefault: String(fileConfig.thinkingDefault || LOCAL_OPENCLAW_PROVIDER.thinkingDefault).trim() || LOCAL_OPENCLAW_PROVIDER.thinkingDefault,
+    apiKey,
+  };
+};
+
+const buildOpenClawProviderEnv = () => {
+  const providerConfig = loadOpenClawProviderConfig();
+  if (!providerConfig.apiKey) {
+    return {};
+  }
+  return {
+    ZAI_API_KEY: providerConfig.apiKey,
+    Z_AI_API_KEY: providerConfig.apiKey,
+  };
+};
+
 const ensureOpenClawWorkspace = (workspaceDir) => {
   fs.mkdirSync(workspaceDir, { recursive: true });
   fs.mkdirSync(path.join(workspaceDir, "memory"), { recursive: true });
@@ -181,9 +253,10 @@ const ensureOpenClawCodexHome = (runtimeRoot, workspaceDir, openClawRepo) => {
     } catch {}
   }
   const escapeTomlPath = (value) => String(value || "").replace(/\\/g, "\\\\");
+  const providerConfig = loadOpenClawProviderConfig();
   const config = [
-    'model = "gpt-5.4"',
-    'model_reasoning_effort = "low"',
+    `model = "${providerConfig.modelId}"`,
+    `model_reasoning_effort = "${providerConfig.thinkingDefault}"`,
     'personality = "pragmatic"',
     "",
     `[projects.'${escapeTomlPath(workspaceDir)}']`,
@@ -202,9 +275,12 @@ const ensureOpenClawCodexHome = (runtimeRoot, workspaceDir, openClawRepo) => {
 
 const ensureOpenClawState = (stateDir) => {
   const sourceState = path.join(os.homedir(), ".openclaw");
+  const providerConfig = loadOpenClawProviderConfig();
   fs.mkdirSync(stateDir, { recursive: true });
   fs.mkdirSync(path.join(stateDir, "identity"), { recursive: true });
   fs.mkdirSync(path.join(stateDir, "logs"), { recursive: true });
+  const authAgentDir = path.join(stateDir, "agents", "default", "agent");
+  fs.mkdirSync(authAgentDir, { recursive: true });
   const copyIfMissing = (src, dest) => {
     if (!fs.existsSync(dest) && fs.existsSync(src)) {
       fs.copyFileSync(src, dest);
@@ -216,19 +292,69 @@ const ensureOpenClawState = (stateDir) => {
     path.join(stateDir, "identity", "device-auth.json")
   );
   const targetConfig = path.join(stateDir, "openclaw.json");
-  if (!fs.existsSync(targetConfig) && fs.existsSync(path.join(sourceState, "openclaw.json"))) {
-    const cfg = JSON.parse(fs.readFileSync(path.join(sourceState, "openclaw.json"), "utf8"));
-    cfg.gateway = cfg.gateway || {};
-    cfg.gateway.mode = "local";
-    cfg.gateway.port = LOCAL_OPENCLAW_GATEWAY_PORT;
-    cfg.gateway.auth = cfg.gateway.auth || {};
-    cfg.gateway.auth.mode = "token";
-    cfg.gateway.auth.token = "chonggou-openclaw-bridge";
-    cfg.agents = cfg.agents || {};
-    cfg.agents.defaults = cfg.agents.defaults || {};
-    cfg.agents.defaults.model = cfg.agents.defaults.model || {};
-    cfg.agents.defaults.model.primary = "codex-cli/gpt-5.4";
-    fs.writeFileSync(targetConfig, JSON.stringify(cfg, null, 2), "utf8");
+  const sourceConfigPath = path.join(sourceState, "openclaw.json");
+  const cfg = readJsonIfExists(targetConfig) || readJsonIfExists(sourceConfigPath) || {};
+  cfg.gateway = cfg.gateway || {};
+  cfg.gateway.mode = "local";
+  cfg.gateway.port = LOCAL_OPENCLAW_GATEWAY_PORT;
+  cfg.gateway.auth = cfg.gateway.auth || {};
+  cfg.gateway.auth.mode = "token";
+  cfg.gateway.auth.token = "chonggou-openclaw-bridge";
+  cfg.auth = cfg.auth || {};
+  cfg.auth.profiles = {
+    ...(cfg.auth.profiles || {}),
+    [providerConfig.profileId]: {
+      provider: providerConfig.providerId,
+      mode: "api_key",
+    },
+  };
+  cfg.auth.order = {
+    ...(cfg.auth.order || {}),
+    [providerConfig.providerId]: [providerConfig.profileId],
+  };
+  cfg.models = cfg.models || {};
+  cfg.models.providers = {
+    ...(cfg.models.providers || {}),
+    [providerConfig.providerId]: {
+      ...((cfg.models.providers || {})[providerConfig.providerId] || {}),
+      api: "openai-completions",
+      baseUrl: providerConfig.baseUrl,
+      models: [
+        {
+          id: providerConfig.modelId,
+          name: "GLM-5",
+          reasoning: true,
+          input: ["text"],
+          contextWindow: 204800,
+          maxTokens: 131072,
+        },
+      ],
+    },
+  };
+  cfg.agents = cfg.agents || {};
+  cfg.agents.defaults = cfg.agents.defaults || {};
+  cfg.agents.defaults.model = cfg.agents.defaults.model || {};
+  cfg.agents.defaults.model.primary = providerConfig.modelRef;
+  cfg.agents.defaults.thinkingDefault = providerConfig.thinkingDefault;
+  delete cfg.agents.defaults.cliBackends;
+  fs.writeFileSync(targetConfig, JSON.stringify(cfg, null, 2), "utf8");
+  if (providerConfig.apiKey) {
+    const authStorePath = path.join(authAgentDir, "auth-profiles.json");
+    const authStore = readJsonIfExists(authStorePath) || { version: 1, profiles: {} };
+    authStore.version = 1;
+    authStore.profiles = {
+      ...(authStore.profiles || {}),
+      [providerConfig.profileId]: {
+        type: "api_key",
+        provider: providerConfig.providerId,
+        key: providerConfig.apiKey,
+      },
+    };
+    authStore.lastGood = {
+      ...(authStore.lastGood || {}),
+      [providerConfig.providerId]: providerConfig.profileId,
+    };
+    fs.writeFileSync(authStorePath, JSON.stringify(authStore, null, 2), "utf8");
   }
 };
 
@@ -333,6 +459,7 @@ const startLocalBackend = () => {
       env: {
         ...process.env,
         ...buildOpenClawProxyEnv(),
+        ...buildOpenClawProviderEnv(),
         PYTHONPATH: runtimeRoot,
         OPENCLAW_WORKSPACE_DIR: workspaceDir,
         OPENCLAW_STATE_DIR: stateDir,
@@ -406,6 +533,7 @@ const startLocalOpenClawGateway = () => {
       env: {
         ...process.env,
         ...buildOpenClawProxyEnv(),
+        ...buildOpenClawProviderEnv(),
         OPENCLAW_STATE_DIR: process.env.OPENCLAW_STATE_DIR || stateDir,
         OPENCLAW_CODEX_HOME: process.env.OPENCLAW_CODEX_HOME || codexHome,
         CODEX_HOME: process.env.CODEX_HOME || codexHome,

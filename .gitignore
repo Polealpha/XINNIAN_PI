@@ -26,7 +26,17 @@ app windows/dist/
 app windows/release/
 app windows/release-*/
 app windows/.vite/
-app windows/vendor/
+app windows/vendor/*
+!app windows/vendor/openclaw-runtime/
+!app windows/vendor/openclaw-runtime/**
+!app windows/vendor/python-runtime/
+!app windows/vendor/python-runtime/**
+!app windows/vendor/python-site-packages/
+!app windows/vendor/python-site-packages/**
+app windows/vendor/openclaw-runtime-stale-*/
+app windows/vendor/python-runtime-stale/
+app windows/vendor/python-site-packages-stale/
+app windows/vendor/Scripts/
 app windows/share/
 apps/**/__pycache__/
 models/

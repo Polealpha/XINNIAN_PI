@@ -55,6 +55,22 @@ function Copy-Tree([string]$SourceDir, [string]$TargetDir) {
     }
 }
 
+function Copy-DirectoryContents([string]$SourceDir, [string]$TargetDir) {
+    if (-not (Test-Path $SourceDir)) {
+        throw "Missing source directory: $SourceDir"
+    }
+
+    New-Item -ItemType Directory -Force -Path $TargetDir | Out-Null
+    Get-ChildItem $SourceDir -Force | ForEach-Object {
+        $destination = Join-Path $TargetDir $_.Name
+        if ($_.PSIsContainer) {
+            Copy-Tree $_.FullName $destination
+        } else {
+            Copy-Item -Force $_.FullName $destination
+        }
+    }
+}
+
 function Materialize-HoistedNodeModules([string]$RuntimeRoot) {
     $sourceHoisted = Join-Path $RuntimeRoot "node_modules\.pnpm\node_modules"
     $targetNodeModules = Join-Path $RuntimeRoot "node_modules"
@@ -133,14 +149,88 @@ function Prune-OpenClawRuntime([string]$RuntimeRoot) {
         ForEach-Object {
             Remove-Item -Force $_.FullName -ErrorAction SilentlyContinue
         }
+
+    Get-ChildItem -Path $RuntimeRoot -Directory -Recurse -Force -ErrorAction SilentlyContinue |
+        Where-Object { $_.Name -in @("docs", "doc", "examples", "example", "test", "tests") } |
+        Sort-Object FullName -Descending |
+        ForEach-Object {
+            Invoke-CmdChecked "rmdir /s /q `"$($_.FullName)`""
+        }
+
+    foreach ($typescriptPath in @(
+        (Join-Path $RuntimeRoot "node_modules\typescript"),
+        (Join-Path $RuntimeRoot "node_modules\.pnpm\typescript@5.9.3")
+    )) {
+        if (Test-Path $typescriptPath) {
+            Invoke-CmdChecked "rmdir /s /q `"$typescriptPath`""
+        }
+    }
+}
+
+function Get-OpenClawRuntimeVersion([string]$SourceDir, [string]$TargetDir) {
+    foreach ($candidate in @(
+        (Join-Path $SourceDir "package.json"),
+        (Join-Path $TargetDir "package.json"),
+        (Join-Path $PSScriptRoot "..\app windows\vendor\openclaw-runtime\package.json")
+    )) {
+        if (Test-Path $candidate) {
+            try {
+                $pkg = Get-Content $candidate -Raw | ConvertFrom-Json
+                if ($pkg.version) {
+                    return [string]$pkg.version
+                }
+            } catch {
+                # Ignore parse errors and try the next source.
+            }
+        }
+    }
+    return "2026.2.15"
+}
+
+function Bootstrap-OpenClawRuntimeFromRegistry([string]$TargetDir, [string]$Version) {
+    $tempRoot = Join-Path ([System.IO.Path]::GetTempPath()) ("openclaw-bootstrap-" + [System.Guid]::NewGuid().ToString("N"))
+    New-Item -ItemType Directory -Force -Path $tempRoot | Out-Null
+    $bootstrapPackage = @{
+        name = "openclaw-runtime-bootstrap"
+        private = $true
+        version = "0.0.0"
+        dependencies = @{
+            openclaw = $Version
+        }
+    } | ConvertTo-Json -Depth 6
+    Set-Content -Path (Join-Path $tempRoot "package.json") -Value $bootstrapPackage -Encoding UTF8
+
+    $npm = Get-Command npm -ErrorAction Stop
+    Push-Location $tempRoot
+    try {
+        & $npm.Source install --omit=dev --no-package-lock --no-audit --silent
+        if ($LASTEXITCODE -ne 0) {
+            throw "npm install failed with exit code $LASTEXITCODE"
+        }
+    } finally {
+        Pop-Location
+    }
+
+    $installedRoot = Join-Path $tempRoot "node_modules\openclaw"
+    if (-not (Test-Path $installedRoot)) {
+        throw "OpenClaw package was not installed from registry into $installedRoot"
+    }
+
+    Copy-DirectoryContents $installedRoot $TargetDir
+    Copy-Tree (Join-Path $tempRoot "node_modules") (Join-Path $TargetDir "node_modules")
+
+    $nestedRuntime = Join-Path $TargetDir "node_modules\openclaw"
+    if (Test-Path $nestedRuntime) {
+        Invoke-CmdChecked "rmdir /s /q `"$nestedRuntime`""
+    }
+
+    if (Test-Path $tempRoot) {
+        Invoke-CmdChecked "rmdir /s /q `"$tempRoot`""
+    }
 }
 
 $sourcePath = Resolve-FullPath $Source
 $targetPath = Resolve-FullPath $Target
-
-if (-not (Test-Path $sourcePath)) {
-    throw "OpenClaw source path does not exist: $sourcePath"
-}
 
 $pnpm = Get-Command pnpm -ErrorAction Stop
 $targetParent = Split-Path -Parent $targetPath
@@ -163,17 +253,21 @@ if (Test-Path $targetPath) {
 
 Initialize-ProxyEnvironment
 
-Write-Host "Preparing OpenClaw runtime from $sourcePath to $targetPath"
-
-Push-Location $sourcePath
-try {
-    & $pnpm.Source --filter . deploy --legacy --prod $targetPath
-} finally {
-    Pop-Location
-}
-
-if ($LASTEXITCODE -ne 0) {
-    throw "pnpm deploy failed with exit code $LASTEXITCODE"
+if (Test-Path $sourcePath) {
+    Write-Host "Preparing OpenClaw runtime from local source $sourcePath to $targetPath"
+    Push-Location $sourcePath
+    try {
+        & $pnpm.Source --filter . deploy --legacy --prod $targetPath
+    } finally {
+        Pop-Location
+    }
+    if ($LASTEXITCODE -ne 0) {
+        throw "pnpm deploy failed with exit code $LASTEXITCODE"
+    }
+} else {
+    $runtimeVersion = Get-OpenClawRuntimeVersion $sourcePath $targetPath
+    Write-Host "OpenClaw source path missing; bootstrapping openclaw@$runtimeVersion from npm registry"
+    Bootstrap-OpenClawRuntimeFromRegistry $targetPath $runtimeVersion
 }
 
 Materialize-HoistedNodeModules $targetPath

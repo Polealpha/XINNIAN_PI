@@ -50,8 +50,8 @@ DESKTOP_APP_ALLOWLIST_JSON = _env(
     "DESKTOP_APP_ALLOWLIST_JSON",
     '{"notepad":["notepad"],"calc":["calc"],"explorer":["explorer"],"vscode":["code"],"chrome":["cmd","/c","start","chrome"],"edge":["cmd","/c","start","msedge"]}',
 )
-OPENCLAW_PREFERRED_MODE = _env("OPENCLAW_PREFERRED_MODE", "cli")
-OPENCLAW_PREFERRED_CODE_MODEL = _env("OPENCLAW_PREFERRED_CODE_MODEL", "gpt-5.4")
+OPENCLAW_PREFERRED_MODE = _env("OPENCLAW_PREFERRED_MODE", "agent")
+OPENCLAW_PREFERRED_CODE_MODEL = _env("OPENCLAW_PREFERRED_CODE_MODEL", "glm-5")
 DESKTOP_STT_PROVIDER = _env("DESKTOP_STT_PROVIDER", "faster_whisper")
 DESKTOP_STT_FALLBACK_PROVIDER = _env("DESKTOP_STT_FALLBACK_PROVIDER", "sherpa_onnx")
 DESKTOP_STT_MODEL_NAME = _env("DESKTOP_STT_MODEL_NAME", "distil-large-v3")

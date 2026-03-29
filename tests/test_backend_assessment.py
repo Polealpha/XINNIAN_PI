@@ -45,7 +45,7 @@ def _bootstrap_configured_user(tmp_path, monkeypatch):
                 "",
                 "我是京亮。",
                 "{}",
-                "activation-dialogue-v4",
+                "activation-dialogue-v5",
                 now_ms,
                 now_ms,
                 now_ms,
@@ -96,10 +96,10 @@ def test_assessment_ai_flow_persists_dialogue_profile_and_memory(tmp_path, monke
 
     state = {"count": 0}
     questions = [
-        "你在被提醒做事时，更喜欢对方直接一点还是先给你缓冲？",
-        "当你压力上来时，你通常会先沉默、先整理，还是想立刻说出来？",
-        "别人安抚你时，什么方式最容易让你真正放松下来？",
-        "如果有人连续打断你，你更容易烦躁、退开，还是继续配合？",
+        "如果机器人想提醒你一件事，你更愿意它先轻轻提醒，还是直接说重点？",
+        "当你压力上来时，你更希望先被接住情绪，还是先得到解决办法？",
+        "如果你已经很累了，机器人说什么会让你更愿意继续互动？",
+        "如果机器人打断了你，你更能接受它怎么补救这次打断？",
     ]
 
     async def fake_send_message(session_key: str, text: str) -> str:
@@ -108,42 +108,38 @@ def test_assessment_ai_flow_persists_dialogue_profile_and_memory(tmp_path, monke
             return json.dumps(
                 {
                     "question_id": f"care-q-{index + 1}",
-                    "target_area": "care_style",
+                    "target_area": "comfort_preferences",
                     "question": questions[index],
-                    "rationale": "补足被关怀和被提醒场景下的稳定反应。",
+                    "rationale": "先确认被提醒和被关心时的接受方式。",
                 },
                 ensure_ascii=False,
             )
-        if ":assessment:scorer:" in session_key:
+        if ":assessment:turn:" in session_key:
             state["count"] += 1
+            next_index = min(state["count"], len(questions) - 1)
             return json.dumps(
                 {
                     "effective": True,
                     "profile_updates": {
-                        "summary": "对提醒和安抚方式较敏感，更偏好先被理解、再给具体建议。",
-                        "interaction_preferences": ["先共情再建议", "提醒前给缓冲"],
-                        "decision_style": "遇事先判断主次，再决定是否马上执行。",
+                        "summary": "更偏好先被理解，再接收具体建议。",
+                        "interaction_preferences": ["先共情再建议", "提醒前先给缓冲"],
+                        "decision_style": "遇事先判断轻重，再决定是否马上推进。",
                         "stress_response": "压力上来时会先收一收，不喜欢被连续追问。",
                         "comfort_preferences": ["语气放缓", "先确认感受", "建议要具体"],
                         "avoid_patterns": ["连续催促", "高压命令式提醒"],
                         "care_guidance": "主动关怀时先确认状态，再给一条最小可执行建议。",
                     },
                     "evidence_summary": [f"evidence-{state['count']}"],
-                    "reasoning": "已获得一条稳定偏好信号。",
-                    "next_focus": "stress_response",
-                    "stable_enough": state["count"] >= 4,
+                    "reasoning": "这一轮继续补强了被提醒和被安抚时的稳定偏好。",
                     "confidence": 0.88 if state["count"] >= 4 else 0.45,
-                    "summary_hint": "倾向先被理解，再接受具体建议。",
-                },
-                ensure_ascii=False,
-            )
-        if ":assessment:terminator:" in session_key:
-            return json.dumps(
-                {
                     "should_finish": state["count"] >= 4,
-                    "reason": "stable_dialogue_profile" if state["count"] >= 4 else "need_more_signal",
-                    "missing_area": "" if state["count"] >= 4 else "comfort_preferences",
-                    "confidence": 0.9 if state["count"] >= 4 else 0.52,
+                    "finish_reason": "stable_dialogue_profile" if state["count"] >= 4 else "need_more_signal",
+                    "missing_area": "" if state["count"] >= 4 else "stress_response",
+                    "next_question": {
+                        "question_id": f"care-q-{next_index + 1}",
+                        "next_focus": "stress_response",
+                        "question": questions[next_index],
+                    },
                 },
                 ensure_ascii=False,
             )
@@ -151,8 +147,8 @@ def test_assessment_ai_flow_persists_dialogue_profile_and_memory(tmp_path, monke
             return json.dumps(
                 {
                     "memory_title": "activation_dialogue_profile",
-                    "machine_readable": "name=京亮 | preference_profile=先共情再建议,提醒前给缓冲 | response_profile=压力时先收一收 | source=activation_dialogue",
-                    "ai_readable": "后续陪伴时先缓和接住情绪，再给一条可执行建议，避免连续催促。",
+                    "machine_readable": "name=京亮 | preference_profile=先共情再建议,提醒前先给缓冲 | response_profile=压力时先收一收 | source=activation_dialogue",
+                    "ai_readable": "后续陪伴时先接住情绪，再给一条具体建议，避免连续催促。",
                 },
                 ensure_ascii=False,
             )
@@ -179,7 +175,7 @@ def test_assessment_ai_flow_persists_dialogue_profile_and_memory(tmp_path, monke
                 "/api/activation/assessment/turn",
                 headers=headers,
                 json={
-                    "answer": f"第 {index + 1} 轮回答：我更喜欢先被理解，再听具体建议。",
+                    "answer": f"第{index + 1}轮回答：我更喜欢先被理解，再听具体建议。",
                     "surface": "desktop",
                     "voice_mode": "text",
                 },
@@ -193,9 +189,9 @@ def test_assessment_ai_flow_persists_dialogue_profile_and_memory(tmp_path, monke
 
         assert latest["status"] == "completed"
         assert latest["assessment_ready"] is True
-        assert latest["summary"]
-        assert latest["interaction_preferences"] == ["先共情再建议", "提醒前给缓冲"]
-        assert latest["decision_style"] == "遇事先判断主次，再决定是否马上执行。"
+        assert latest["summary"] == "更偏好先被理解，再接收具体建议。"
+        assert latest["interaction_preferences"] == ["先共情再建议", "提醒前先给缓冲"]
+        assert latest["decision_style"] == "遇事先判断轻重，再决定是否马上推进。"
         assert latest["stress_response"] == "压力上来时会先收一收，不喜欢被连续追问。"
         assert latest["comfort_preferences"] == ["语气放缓", "先确认感受", "建议要具体"]
         assert latest["avoid_patterns"] == ["连续催促", "高压命令式提醒"]
@@ -213,5 +209,5 @@ def test_assessment_ai_flow_persists_dialogue_profile_and_memory(tmp_path, monke
     memory_path = workspace_dir / "assistant_data" / "users" / "1" / "memory.md"
     text = memory_path.read_text(encoding="utf-8")
     assert "source=activation_dialogue" in text
-    assert "后续陪伴时先缓和接住情绪" in text
-    assert "第 1 轮回答" not in text
+    assert "后续陪伴时先接住情绪" in text
+    assert "第1轮回答" not in text

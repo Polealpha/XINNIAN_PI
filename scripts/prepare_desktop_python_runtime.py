@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import importlib.metadata as metadata
+import os
 from pathlib import Path
 import re
 import shutil
@@ -20,6 +21,27 @@ REQUIRED_RUNTIME_MARKERS = (
     "pydantic",
     "httpx",
 )
+
+PYTHON_HOME_EXCLUDES = {
+    "__pycache__",
+    "Doc",
+    "docs",
+    "include",
+    "libs",
+    "Scripts",
+    "tcl",
+    "test",
+    "tests",
+    "idlelib",
+    "ensurepip",
+    "venv",
+    "tkinter",
+    "pydoc_data",
+}
+
+PYTHON_HOME_FILE_EXCLUDES = {
+    "NEWS.txt",
+}
 
 
 def normalize_name(value: str) -> str:
@@ -134,9 +156,71 @@ def target_looks_ready(target_dir: Path) -> bool:
     return all((target_dir / marker).exists() for marker in REQUIRED_RUNTIME_MARKERS)
 
 
+def clean_and_recreate(target_dir: Path) -> None:
+    if target_dir.exists():
+        stale_dir = target_dir.with_name(f"{target_dir.name}-stale")
+        if stale_dir.exists():
+            shutil.rmtree(stale_dir, ignore_errors=True)
+        target_dir.rename(stale_dir)
+        shutil.rmtree(stale_dir, ignore_errors=True)
+    target_dir.mkdir(parents=True, exist_ok=True)
+
+
+def _should_skip_python_home_path(source_root: Path, current: Path) -> bool:
+    try:
+        relative = current.relative_to(source_root)
+    except Exception:
+        return False
+    parts = [part for part in relative.parts if part]
+    if not parts:
+        return False
+    if parts[0] == "Lib":
+        if len(parts) > 1 and parts[1] == "site-packages":
+            return True
+        if len(parts) > 1 and parts[1] in PYTHON_HOME_EXCLUDES:
+            return True
+    if len(parts) >= 2 and parts[0] == "DLLs" and parts[1] in {"tcl86t.dll", "tk86t.dll"}:
+        return True
+    return any(part in PYTHON_HOME_EXCLUDES for part in parts)
+
+
+def copy_python_home(source_root: Path, target_dir: Path) -> None:
+    source_root = source_root.resolve()
+    clean_and_recreate(target_dir)
+    copied_files = 0
+    for current_root, dirnames, filenames in os.walk(source_root):
+        current_root_path = Path(current_root)
+        dirnames[:] = [
+            name
+            for name in dirnames
+            if not _should_skip_python_home_path(source_root, current_root_path / name)
+        ]
+        if _should_skip_python_home_path(source_root, current_root_path):
+            dirnames[:] = []
+            continue
+        relative_root = current_root_path.relative_to(source_root)
+        destination_root = target_dir / relative_root
+        destination_root.mkdir(parents=True, exist_ok=True)
+        for filename in filenames:
+            source_file = current_root_path / filename
+            if _should_skip_python_home_path(source_root, source_file):
+                continue
+            if filename in PYTHON_HOME_FILE_EXCLUDES:
+                continue
+            destination_file = destination_root / filename
+            destination_file.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(source_file, destination_file)
+            copied_files += 1
+    print(f"Copied Python home ({copied_files} files) into {target_dir}")
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Vendor Python runtime dependencies for Electron desktop packaging.")
     parser.add_argument("--target", required=True, help="Target directory for vendored site-packages")
+    parser.add_argument(
+        "--python-home-target",
+        help="Optional target directory for a self-contained Python home copied from the current interpreter",
+    )
     parser.add_argument(
         "--requirements",
         nargs="+",
@@ -150,6 +234,7 @@ def main() -> int:
     parser = build_parser()
     args = parser.parse_args()
     target_dir = Path(args.target).resolve()
+    python_home_target = Path(args.python_home_target).resolve() if args.python_home_target else None
     requirement_files = [Path(item).resolve() for item in args.requirements]
 
     requirement_names: list[str] = []
@@ -162,12 +247,18 @@ def main() -> int:
         return 2
 
     if target_looks_ready(target_dir):
-        print(f"Reusing existing vendored runtime at {target_dir}")
-        return 0
+        print(f"Reusing existing vendored site-packages at {target_dir}")
+    else:
+        clean_target(target_dir)
+        copy_distributions(dists, target_dir)
+        print(f"Vendored {len(dists)} distributions into {target_dir}")
 
-    clean_target(target_dir)
-    copy_distributions(dists, target_dir)
-    print(f"Vendored {len(dists)} distributions into {target_dir}")
+    if python_home_target is not None:
+        python_home_source = Path(sys.base_prefix).resolve()
+        if not (python_home_target / "python.exe").exists():
+            copy_python_home(python_home_source, python_home_target)
+        else:
+            print(f"Reusing existing vendored Python home at {python_home_target}")
     return 0
 
 
