@@ -12,7 +12,6 @@ function Resolve-FullPath([string]$PathValue) {
     if ([System.IO.Path]::IsPathRooted($PathValue)) {
         return [System.IO.Path]::GetFullPath($PathValue)
     }
-
     return [System.IO.Path]::GetFullPath((Join-Path (Get-Location) $PathValue))
 }
 
@@ -36,6 +35,20 @@ function Get-MakensisPath {
     throw "makensis.exe not found"
 }
 
+function New-PayloadArchive([string]$SourceDir) {
+    $payloadTarPath = Join-Path ([System.IO.Path]::GetTempPath()) ("emoresonance-payload-" + [System.Guid]::NewGuid().ToString("N") + ".tar")
+    if (Test-Path $payloadTarPath) {
+        Remove-Item -Force $payloadTarPath
+    }
+
+    & tar.exe -cf $payloadTarPath -C $SourceDir .
+    if ($LASTEXITCODE -ne 0 -or -not (Test-Path $payloadTarPath)) {
+        throw "Failed to create payload.tar"
+    }
+
+    return $payloadTarPath
+}
+
 $appDirPath = Resolve-FullPath $AppDir
 $outputFilePath = Resolve-FullPath $OutputFile
 $outputDir = Split-Path -Parent $outputFilePath
@@ -57,10 +70,11 @@ if (Test-Path $outputFilePath) {
 
 $nsisScriptPath = Join-Path ([System.IO.Path]::GetTempPath()) ("emoresonance-installer-" + [System.Guid]::NewGuid().ToString("N") + ".nsi")
 $makensis = Get-MakensisPath
+$payloadArchivePath = New-PayloadArchive $appDirPath
 
-$escapedAppDir = $appDirPath.Replace('\', '\\')
 $escapedOutput = $outputFilePath.Replace('\', '\\')
 $escapedIcon = $iconPath.Replace('\', '\\')
+$escapedPayloadArchive = $payloadArchivePath.Replace('\', '\\')
 $escapedInstallSubdir = $InstallSubdir.Replace('"', '$\"')
 $escapedProductName = $ProductName.Replace('"', '$\"')
 $escapedVersion = $Version.Replace('"', '$\"')
@@ -70,7 +84,7 @@ Unicode true
 ManifestDPIAware true
 RequestExecutionLevel user
 CRCCheck on
-SetCompressor /FINAL /SOLID lzma
+SetCompress off
 
 Name "__PRODUCT_NAME__"
 OutFile "__OUTPUT_FILE__"
@@ -95,8 +109,17 @@ Section "Install"
   RMDir /r "$INSTDIR"
   CreateDirectory "$INSTDIR"
   SetOutPath "$INSTDIR"
-  File /r "__APP_DIR__\*"
+  File /oname=payload.tar "__PAYLOAD_ARCHIVE__"
+  File /oname=uninstallerIcon.ico "__ICON_PATH__"
 
+  nsExec::ExecToStack '"$SYSDIR\tar.exe" -xf "$INSTDIR\payload.tar" -C "$INSTDIR"'
+  Pop $0
+  Pop $1
+  StrCmp $0 "0" +3
+    DetailPrint "Payload extraction failed: $1"
+    Abort "Failed to extract application payload."
+
+  Delete "$INSTDIR\payload.tar"
   WriteUninstaller "$INSTDIR\Uninstall EmoResonance.exe"
   CreateDirectory "$SMPROGRAMS\__PRODUCT_NAME__"
   CreateShortcut "$SMPROGRAMS\__PRODUCT_NAME__\__PRODUCT_NAME__.lnk" "$INSTDIR\EmoResonance.exe"
@@ -118,6 +141,7 @@ Section "Uninstall"
   Delete "$SMPROGRAMS\__PRODUCT_NAME__\__PRODUCT_NAME__.lnk"
   RMDir "$SMPROGRAMS\__PRODUCT_NAME__"
   Delete /REBOOTOK "$INSTDIR\Uninstall EmoResonance.exe"
+  Delete /REBOOTOK "$INSTDIR\uninstallerIcon.ico"
   RMDir /r /REBOOTOK "$INSTDIR"
   DeleteRegKey HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\EmoResonance"
 SectionEnd
@@ -128,7 +152,7 @@ $nsisScript = $nsisScript.Replace('__VERSION__', $escapedVersion)
 $nsisScript = $nsisScript.Replace('__OUTPUT_FILE__', $escapedOutput)
 $nsisScript = $nsisScript.Replace('__INSTALL_SUBDIR__', $escapedInstallSubdir)
 $nsisScript = $nsisScript.Replace('__ICON_PATH__', $escapedIcon)
-$nsisScript = $nsisScript.Replace('__APP_DIR__', $escapedAppDir)
+$nsisScript = $nsisScript.Replace('__PAYLOAD_ARCHIVE__', $escapedPayloadArchive)
 
 Set-Content -Path $nsisScriptPath -Value $nsisScript -Encoding UTF8
 
@@ -141,5 +165,8 @@ try {
 } finally {
     if (Test-Path $nsisScriptPath) {
         Remove-Item -Force $nsisScriptPath -ErrorAction SilentlyContinue
+    }
+    if ($payloadArchivePath -and (Test-Path $payloadArchivePath)) {
+        Remove-Item -Force $payloadArchivePath -ErrorAction SilentlyContinue
     }
 }

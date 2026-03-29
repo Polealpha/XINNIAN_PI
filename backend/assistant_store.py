@@ -158,6 +158,43 @@ class AssistantWorkspaceStore:
         with memory_path.open("a", encoding="utf-8") as fh:
             fh.write(chunk)
 
+    def get_profile_memory_summary(self, user_id: int, max_chars: int = 1200) -> str:
+        memory_path = self._memory_path(user_id)
+        if not memory_path.exists():
+            return ""
+        try:
+            text = memory_path.read_text(encoding="utf-8", errors="ignore")
+        except Exception:
+            return ""
+        if not text.strip():
+            return ""
+
+        marker_hits = (
+            "activation_dialogue_profile",
+            "dialogue_profile",
+            "activation_profile",
+            "personality_profile",
+            "首次激活",
+            "偏好",
+            "陪伴",
+        )
+        sections = []
+        for chunk in re.split(r"(?=^##\s)", text, flags=re.MULTILINE):
+            cleaned = str(chunk or "").strip()
+            if not cleaned:
+                continue
+            lowered = cleaned.lower()
+            if any(marker.lower() in lowered for marker in marker_hits):
+                sections.append(cleaned)
+
+        if not sections:
+            sections = [text.strip()]
+
+        summary = "\n\n".join(sections[-3:]).strip()
+        if len(summary) > max_chars:
+            summary = summary[-max_chars:]
+        return summary
+
     def write_note(self, user_id: int, title: str, body: str) -> Dict[str, object]:
         slug = re.sub(r"[^a-zA-Z0-9_-]+", "-", str(title or "note").strip()).strip("-").lower() or "note"
         path = self._notes_dir(user_id) / f"{slug}-{int(time.time())}.md"

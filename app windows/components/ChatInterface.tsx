@@ -205,7 +205,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
       window.cancelAnimationFrame(rafId);
       window.clearTimeout(timer);
     };
-  }, []);
+  }, [assistantRuntime?.gateway_ready, assistantRuntime?.provider_network_ok]);
 
   useEffect(() => {
     let active = true;
@@ -225,7 +225,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
     void refreshRuntime();
     const timer = window.setInterval(() => {
       void refreshRuntime();
-    }, 15000);
+    }, assistantRuntime?.gateway_ready && assistantRuntime?.provider_network_ok ? 15000 : 3000);
 
     return () => {
       active = false;
@@ -236,9 +236,21 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
   const assistantReady = Boolean(
     assistantRuntime?.gateway_ready && assistantRuntime?.provider_network_ok
   );
+  const assistantBooting = Boolean(
+    !isGuest &&
+      assistantRuntime &&
+      !assistantRuntime.gateway_ready &&
+      assistantRuntime.provider_network_ok
+  );
   const assistantDetail = assistantRuntimeError
     ? assistantRuntimeError
     : assistantRuntime?.provider_network_detail || assistantRuntime?.gateway_error || "";
+  const chatInputDisabled = Boolean(!isGuest && !assistantReady);
+  const chatInputPlaceholder = assistantBooting
+    ? "本地 OpenClaw 正在启动，大约需要几十秒…"
+    : !isGuest && !assistantReady
+    ? "OpenClaw 未就绪，暂时不能发送消息"
+    : "和你的伙伴聊聊…";
 
   const stopSpeaking = () => {
     speechSynthesisRef.current?.cancel();
@@ -315,7 +327,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
   };
 
   const pickAttachments = () => {
-    if (uploading) return;
+    if (uploading || chatInputDisabled) return;
     fileInputRef.current?.click();
   };
 
@@ -452,11 +464,13 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
       return;
     }
 
-    if (assistantRuntime && !assistantReady) {
+    if (!assistantRuntime || !assistantReady) {
       const botMsg: ChatMessage = {
         id: `bot-${Date.now()}`,
         sender: "bot",
-        text: `OpenClaw 当前未连接，暂时不能给出真实 AI 回答。${assistantDetail ? ` 原因：${assistantDetail}` : ""}`,
+        text: assistantBooting
+          ? "本地 OpenClaw 正在启动，请稍等几十秒后再发消息。"
+          : `OpenClaw 当前未连接，暂时不能给出真实 AI 回答。${assistantDetail ? ` 原因：${assistantDetail}` : assistantRuntime ? "" : " 原因：本地助手运行态暂未就绪。"}`,
         timestamp: new Date(),
         contentType: "text",
         attachments: [],
@@ -830,7 +844,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
           <button
             type="button"
             onClick={pickAttachments}
-            disabled={uploading || voiceBusy}
+            disabled={uploading || voiceBusy || chatInputDisabled}
             className="text-slate-300 hover:text-white disabled:opacity-40"
             title="上传图片或视频"
           >
@@ -839,7 +853,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
           <button
             type="button"
             onClick={handleVoiceToggle}
-            disabled={uploading || isTyping || voiceBusy}
+            disabled={uploading || isTyping || voiceBusy || chatInputDisabled}
             className={`disabled:opacity-40 ${voiceRecording ? "text-rose-300 hover:text-rose-200" : "text-slate-300 hover:text-white"}`}
             title={voiceRecording ? "结束录音并转写" : "本地语音输入"}
           >
@@ -857,14 +871,15 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={(e) => e.key === "Enter" && handleSend()}
             onPaste={onInputPaste}
-            placeholder="和你的伙伴聊聊…"
+            placeholder={chatInputPlaceholder}
+            disabled={chatInputDisabled}
             className={`flex-1 bg-transparent border-none outline-none text-slate-200 font-bold placeholder-slate-500 ${
               compact ? "text-[12px]" : "text-sm"
             }`}
           />
           <button
             onClick={handleSend}
-            disabled={(!input.trim() && pendingAttachments.length === 0) || isTyping || uploading}
+            disabled={chatInputDisabled || (!input.trim() && pendingAttachments.length === 0) || isTyping || uploading}
             className={`bg-indigo-500 text-white rounded-full q-bounce disabled:opacity-30 shadow-lg shadow-indigo-500/20 ${
               compact ? "p-3" : "p-3.5"
             }`}

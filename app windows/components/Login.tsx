@@ -1,15 +1,14 @@
 import React, { useState } from "react";
-import { Mail, Lock, ArrowRight, Github, UserPlus, User } from "lucide-react";
+import { Mail, Lock, ArrowRight, Github, UserPlus } from "lucide-react";
 import { login, register, LoginResult } from "../services/authService";
 
 interface LoginProps {
   onLogin: (result: LoginResult) => Promise<void> | void;
-  onGuest: () => void;
 }
 
 type AuthMode = "login" | "register";
 
-export const Login: React.FC<LoginProps> = ({ onLogin, onGuest }) => {
+export const Login: React.FC<LoginProps> = ({ onLogin }) => {
   const appIcon = new URL("../assets/app-icon.png", import.meta.url).href;
   const [mode, setMode] = useState<AuthMode>("login");
   const [email, setEmail] = useState("");
@@ -21,11 +20,11 @@ export const Login: React.FC<LoginProps> = ({ onLogin, onGuest }) => {
   const isRegister = mode === "register";
 
   const handleForgotPassword = () => {
-    setError("忘记密码暂未开放，请联系管理员或使用新账号注册。");
+    setError("忘记密码功能暂未开放，请联系管理员或重新注册账号。");
   };
 
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
+  const handleSubmit = async (event: React.FormEvent) => {
+    event.preventDefault();
     setLoading(true);
     setError("");
     try {
@@ -47,7 +46,7 @@ export const Login: React.FC<LoginProps> = ({ onLogin, onGuest }) => {
     } catch (err: any) {
       console.error(err);
       if (isRegister && String(err?.message || "").includes("409")) {
-        setError("账号已存在，请直接登录。");
+        setError("这个邮箱已经注册过了，请直接登录。");
       } else {
         setError(isRegister ? "注册失败，请稍后重试。" : "登录失败，请检查账号或密码。");
       }
@@ -123,13 +122,13 @@ export const Login: React.FC<LoginProps> = ({ onLogin, onGuest }) => {
                 required
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
-                placeholder="••••••••"
+                placeholder="请输入密码"
                 className="w-full bg-slate-800/50 border border-white/5 rounded-2xl py-4 pl-14 pr-6 text-white font-bold outline-none focus:ring-2 focus:ring-indigo-500/30 focus:border-indigo-500/50 transition-all placeholder:text-slate-600"
               />
             </div>
           </div>
 
-          {isRegister && (
+          {isRegister ? (
             <div className="space-y-2">
               <label className="text-[10px] font-black text-slate-500 uppercase ml-4 tracking-[0.2em]">
                 确认密码
@@ -148,9 +147,7 @@ export const Login: React.FC<LoginProps> = ({ onLogin, onGuest }) => {
                 />
               </div>
             </div>
-          )}
-
-          {!isRegister && (
+          ) : (
             <div className="flex items-center justify-between px-2 pt-2 text-[11px] font-black uppercase text-slate-500 tracking-tighter">
               <label className="flex items-center gap-2 cursor-pointer hover:text-slate-300 transition-colors">
                 <input type="checkbox" className="accent-indigo-500 w-4 h-4 rounded-md" />
@@ -180,7 +177,7 @@ export const Login: React.FC<LoginProps> = ({ onLogin, onGuest }) => {
               </>
             )}
           </button>
-          {error && <p className="text-center text-[10px] font-bold text-rose-400 mt-2">{error}</p>}
+          {error ? <p className="text-center text-[10px] font-bold text-rose-400 mt-2">{error}</p> : null}
         </form>
 
         <div className="mt-10 flex flex-col items-center">
@@ -197,17 +194,6 @@ export const Login: React.FC<LoginProps> = ({ onLogin, onGuest }) => {
               className="p-4 bg-white/5 rounded-2xl border border-white/5 text-slate-400 hover:text-white hover:bg-white/10 transition-all q-bounce"
             >
               <Github size={20} />
-            </button>
-            <button
-              type="button"
-              onClick={() => {
-                setError("");
-                onGuest();
-              }}
-              className="px-8 py-4 bg-white/5 rounded-2xl border border-white/5 text-slate-400 hover:text-white hover:bg-white/10 transition-all font-black text-[11px] uppercase tracking-widest q-bounce flex items-center gap-2"
-            >
-              <User size={16} />
-              游客模式
             </button>
           </div>
         </div>

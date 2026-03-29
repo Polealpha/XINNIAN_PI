@@ -47,31 +47,10 @@ export interface PersonalityProfile {
   raw_json?: Record<string, unknown>;
 }
 
-export interface CognitiveFunctionScores {
-  Se: number;
-  Si: number;
-  Ne: number;
-  Ni: number;
-  Te: number;
-  Ti: number;
-  Fe: number;
-  Fi: number;
-}
-
-export interface CognitiveFunctionConfidence {
-  Se: number;
-  Si: number;
-  Ne: number;
-  Ni: number;
-  Te: number;
-  Ti: number;
-  Fe: number;
-  Fi: number;
-}
-
-export interface AssessmentEvidenceSummary {
-  highlights: string[];
-  notes: string;
+export interface ActivationDialogueTurn {
+  role: "assistant" | "user";
+  text: string;
+  timestamp_ms?: number | null;
 }
 
 export interface ActivationAssessmentState {
@@ -83,34 +62,35 @@ export interface ActivationAssessmentState {
   completed_at_ms?: number | null;
   turn_count: number;
   effective_turn_count: number;
+  conversation_count: number;
   latest_question: string;
   latest_transcript: string;
   last_question_id: string;
-  type_code: string;
-  mapped_type_code: string;
-  cognitive_scores: CognitiveFunctionScores;
-  function_confidence: CognitiveFunctionConfidence;
-  evidence_summary: AssessmentEvidenceSummary;
-  dominant_stack: string[];
-  conversation_count: number;
   finish_reason: string;
   voice_mode: string;
   voice_session_active: boolean;
   device_online: boolean;
   summary: string;
-  response_style: string;
-  care_style: string;
+  interaction_preferences: string[];
+  decision_style: string;
+  stress_response: string;
+  comfort_preferences: string[];
+  avoid_patterns: string[];
+  care_guidance: string;
+  confidence: number;
   inference_version: string;
   required_min_turns: number;
   max_turns: number;
   question_source: string;
   scoring_source: string;
   question_pair: string;
+  current_focus: string;
   mode_hint: string;
   can_submit_text: boolean;
   assessment_ready: boolean;
   ai_required: boolean;
   blocking_reason: string;
+  dialogue_turns: ActivationDialogueTurn[];
 }
 
 export interface ActivationAssessmentTurnResponse extends ActivationAssessmentState {

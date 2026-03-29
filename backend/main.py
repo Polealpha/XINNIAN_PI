@@ -580,6 +580,7 @@ def _get_owner_binding_state(
     is_configured: bool,
     psychometric_completed: bool,
 ) -> Dict[str, object]:
+    # Face enrollment is no longer part of the activation gate.
     devices = _list_devices(conn, int(user_id))
     if not devices:
         return {"required": False, "completed": False, "device_id": None}
@@ -589,8 +590,8 @@ def _get_owner_binding_state(
         return {"required": False, "completed": False, "device_id": None}
     profile = _get_owner_profile(conn, int(user_id), device_id)
     completed = bool(profile)
-    required = bool(is_configured and psychometric_completed and not completed)
-    return {"required": required, "completed": completed, "device_id": device_id}
+    del is_configured, psychometric_completed
+    return {"required": False, "completed": completed, "device_id": device_id}
 
 
 def _json_list(value: object) -> List[str]:
@@ -861,10 +862,17 @@ def _get_psychometric_profile(conn: Connection, user_id: int) -> Dict[str, objec
             "summary": str(payload.get("summary") or "").strip(),
             "response_style": str(payload.get("response_style") or "").strip(),
             "care_style": str(payload.get("care_style") or "").strip(),
+            "interaction_preferences": [str(item).strip() for item in merged.get("interaction_preferences") or [] if str(item).strip()],
+            "decision_style": str(merged.get("decision_style") or payload.get("response_style") or "").strip(),
+            "stress_response": str(merged.get("stress_response") or "").strip(),
+            "comfort_preferences": [str(item).strip() for item in merged.get("comfort_preferences") or [] if str(item).strip()],
+            "avoid_patterns": [str(item).strip() for item in merged.get("avoid_patterns") or [] if str(item).strip()],
+            "care_guidance": str(merged.get("care_guidance") or payload.get("care_style") or "").strip(),
+            "confidence": float(merged.get("confidence") or 0.0),
             "conversation_count": int(payload.get("conversation_count") or 0),
             "completed_at_ms": int(payload.get("completed_at_ms") or 0) or None,
             "updated_at_ms": int(payload.get("updated_at") or 0) or None,
-            "inference_version": str(payload.get("inference_version") or "assessment-v2-jung8").strip() or "assessment-v2-jung8",
+            "inference_version": str(payload.get("inference_version") or "activation-dialogue-v3").strip() or "activation-dialogue-v3",
             "dominant_stack": [str(item).strip() for item in merged.get("dominant_stack") or [] if str(item).strip()],
             "assessment_ready": bool(merged.get("assessment_ready", True)),
             "ai_required": bool(merged.get("ai_required", True)),
@@ -919,16 +927,16 @@ def _upsert_psychometric_profile(conn: Connection, user_id: int, profile: Dict[s
         """,
         (
             int(user_id),
-            str(profile.get("mapped_type_code") or profile.get("type_code") or derive_type_code(scores)).strip() or None,
+            str(profile.get("mapped_type_code") or profile.get("type_code") or "").strip() or None,
             json.dumps(scores, ensure_ascii=False, separators=(",", ":")),
             json.dumps(confidence, ensure_ascii=False, separators=(",", ":")),
             json.dumps(evidence_summary, ensure_ascii=False, separators=(",", ":")),
             str(profile.get("summary") or "").strip() or None,
-            str(profile.get("response_style") or "").strip() or None,
-            str(profile.get("care_style") or "").strip() or None,
+            str(profile.get("decision_style") or profile.get("response_style") or "").strip() or None,
+            str(profile.get("care_guidance") or profile.get("care_style") or "").strip() or None,
             int(profile.get("conversation_count") or 0),
             int(profile.get("completed_at_ms") or 0) or None,
-            str(profile.get("inference_version") or "assessment-v2-jung8").strip() or "assessment-v2-jung8",
+            str(profile.get("inference_version") or "activation-dialogue-v3").strip() or "activation-dialogue-v3",
             json.dumps(payload, ensure_ascii=False, separators=(",", ":")),
             now_ms,
             now_ms,
@@ -940,8 +948,6 @@ def _upsert_psychometric_profile(conn: Connection, user_id: int, profile: Dict[s
 
 def _assessment_response(session: Dict[str, object], device_online: bool = False, exists: bool = True) -> ActivationAssessmentStateResponse:
     final = session.get("final_result") if isinstance(session.get("final_result"), dict) else {}
-    scores = normalize_scores((final or session).get("cognitive_scores") or (final or session).get("scores"))
-    confidence = normalize_confidence((final or session).get("function_confidence") or (final or session).get("dimension_confidence"))
     evidence = (final or session).get("evidence_summary")
     if not isinstance(evidence, dict):
         evidence = {}
@@ -967,35 +973,44 @@ def _assessment_response(session: Dict[str, object], device_online: bool = False
         completed_at_ms=int((final or session).get("completed_at_ms") or 0) or None,
         turn_count=max(0, int(session.get("turn_count") or 0)),
         effective_turn_count=max(0, int(session.get("effective_turn_count") or 0)),
+        conversation_count=max(0, int((final or session).get("conversation_count") or session.get("effective_turn_count") or 0)),
         latest_question=str(session.get("latest_question") or ""),
         latest_transcript=str(session.get("latest_transcript") or ""),
         last_question_id=str(session.get("last_question_id") or ""),
-        type_code=str((final or session).get("type_code") or (final or session).get("mapped_type_code") or ""),
-        mapped_type_code=str((final or session).get("mapped_type_code") or (final or session).get("type_code") or ""),
-        cognitive_scores=scores,
-        function_confidence=confidence,
         evidence_summary={
             "highlights": [str(item).strip() for item in evidence.get("highlights") or [] if str(item).strip()],
             "notes": str(evidence.get("notes") or "").strip(),
         },
-        dominant_stack=[str(item).strip() for item in ((final or session).get("dominant_stack") or []) if str(item).strip()],
-        conversation_count=max(0, int((final or session).get("conversation_count") or session.get("effective_turn_count") or 0)),
         finish_reason=str(session.get("finish_reason") or ""),
         voice_mode=voice_mode,
         voice_session_active=voice_session_active,
         device_online=bool(device_online),
         summary=str((final or session).get("summary") or (session.get("profile_preview") or {}).get("summary") or ""),
-        response_style=str((final or session).get("response_style") or (session.get("profile_preview") or {}).get("response_style") or ""),
-        care_style=str((final or session).get("care_style") or (session.get("profile_preview") or {}).get("care_style") or ""),
-        inference_version=str((final or session).get("inference_version") or "assessment-v2-jung8"),
+        inference_version=str((final or session).get("inference_version") or "activation-dialogue-v4"),
         question_source=str(session.get("question_source") or "ai_required"),
         scoring_source=str(session.get("scoring_source") or "pending"),
-        question_pair=str(session.get("question_pair") or ""),
+        current_focus=str(session.get("current_focus") or session.get("question_pair") or ""),
         mode_hint=mode_hint,
         can_submit_text=not bool(blocking_reason),
         assessment_ready=bool((final or session).get("assessment_ready")),
         ai_required=bool((final or session).get("ai_required", True)),
         blocking_reason=blocking_reason,
+        dialogue_turns=[
+            {
+                "role": str(item.get("role") or "").strip(),
+                "text": str(item.get("text") or "").strip(),
+                "timestamp_ms": int(item.get("timestamp_ms") or 0) or None,
+            }
+            for item in ((final or session).get("dialogue_turns") or session.get("dialogue_turns") or [])
+            if isinstance(item, dict) and str(item.get("text") or "").strip()
+        ],
+        interaction_preferences=[str(item).strip() for item in ((final or session).get("interaction_preferences") or []) if str(item).strip()],
+        decision_style=str((final or session).get("decision_style") or (final or session).get("response_style") or ""),
+        stress_response=str((final or session).get("stress_response") or ""),
+        comfort_preferences=[str(item).strip() for item in ((final or session).get("comfort_preferences") or []) if str(item).strip()],
+        avoid_patterns=[str(item).strip() for item in ((final or session).get("avoid_patterns") or []) if str(item).strip()],
+        care_guidance=str((final or session).get("care_guidance") or (final or session).get("care_style") or ""),
+        confidence=float((final or session).get("confidence") or 0.0),
     )
 
 
@@ -1080,7 +1095,7 @@ async def _assessment_apply_turn(
     ai_snapshot = _activation_ai_runtime_snapshot()
     if not bool(ai_snapshot["ai_ready"]):
         session_payload["status"] = "blocked"
-        session_payload["blocking_reason"] = str(ai_snapshot["blocking_reason"] or "AI 未就绪，正式测评已暂停。")
+        session_payload["blocking_reason"] = str(ai_snapshot["blocking_reason"] or "AI 未就绪，正式建档已暂停。")
         session_payload["assessment_ready"] = False
         _save_assessment_session(conn, int(user_id), session_payload, session_id=int(session_id))
         device_online, _selected = _assessment_device_online(conn, int(user_id), device_id)
@@ -1091,14 +1106,10 @@ async def _assessment_apply_turn(
             just_completed=False,
         )
 
-    question_id = str(session_payload.get("last_question_id") or "").strip()
-    question = QUESTION_MAP.get(question_id) or {
-        "id": question_id or "ad-hoc",
-        "pair": str(session_payload.get("question_pair") or "Ni"),
-        "prompt": str(session_payload.get("latest_question") or ""),
-        "dimension_targets": [str(session_payload.get("question_pair") or "Ni")],
-        "difficulty": 2,
-        "followup_rules": [],
+    question = {
+        "id": str(session_payload.get("last_question_id") or "").strip() or f"dialogue-{int(time.time() * 1000)}",
+        "pair": str(session_payload.get("current_focus") or session_payload.get("question_pair") or "").strip(),
+        "prompt": str(session_payload.get("latest_question") or "").strip(),
     }
     try:
         scoring = await _assessment_score_model(int(user_id), question, session_payload, answer_text)
@@ -1145,14 +1156,16 @@ async def _assessment_apply_turn(
     if terminator.get("should_finish") and merged.get("status") != "completed":
         merged["completed_at_ms"] = int(time.time() * 1000)
         merged["finish_reason"] = str(terminator.get("reason") or "model_finish")
+        merged["confidence"] = max(float(merged.get("confidence") or 0.0), float(terminator.get("confidence") or 0.0))
         merged["final_result"] = build_final_profile(merged)
         if bool((merged.get("final_result") or {}).get("assessment_ready")):
             merged["status"] = "completed"
             merged["latest_question"] = ""
             merged["last_question_id"] = ""
+            merged["current_focus"] = ""
         else:
             merged["status"] = "blocked"
-            merged["blocking_reason"] = "AI 尚未得到稳定八功能结果，正式测评继续等待更多信号。"
+            merged["blocking_reason"] = "AI 认为当前信息还不够稳定，正式建档继续等待更多回答。"
     elif merged.get("status") != "completed":
         try:
             suggested = await _assessment_pick_model_question(int(user_id), _get_activation_profile(conn, int(user_id)), merged)
@@ -1161,6 +1174,7 @@ async def _assessment_apply_turn(
             merged["latest_question"] = str(suggested.get("prompt") or merged.get("latest_question") or "")
             merged["last_question_id"] = str(suggested.get("id") or merged.get("last_question_id") or "")
             merged["question_pair"] = str(suggested.get("pair") or merged.get("question_pair") or "")
+            merged["current_focus"] = str(suggested.get("focus") or suggested.get("pair") or terminator.get("missing_area") or merged.get("current_focus") or "")
             merged["question_source"] = "ai"
         except Exception as exc:
             merged["status"] = "blocked"
@@ -1275,13 +1289,22 @@ def _build_assistant_identity_context(conn: Connection, user_id: int) -> Dict[st
             "signals": [str(item) for item in personality.get("signals") or [] if str(item).strip()],
         },
         "psychometric": {
-            "type_code": str(psychometric.get("type_code") or "").strip(),
-            "scores": psychometric.get("scores") or empty_score_map(),
-            "dimension_confidence": psychometric.get("dimension_confidence") or empty_pair_confidence(),
             "summary": str(psychometric.get("summary") or "").strip(),
-            "response_style": str(psychometric.get("response_style") or "").strip(),
-            "care_style": str(psychometric.get("care_style") or "").strip(),
+            "interaction_preferences": [
+                str(item) for item in psychometric.get("interaction_preferences") or [] if str(item).strip()
+            ],
+            "decision_style": str(psychometric.get("decision_style") or psychometric.get("response_style") or "").strip(),
+            "stress_response": str(psychometric.get("stress_response") or "").strip(),
+            "comfort_preferences": [
+                str(item) for item in psychometric.get("comfort_preferences") or [] if str(item).strip()
+            ],
+            "avoid_patterns": [
+                str(item) for item in psychometric.get("avoid_patterns") or [] if str(item).strip()
+            ],
+            "care_guidance": str(psychometric.get("care_guidance") or psychometric.get("care_style") or "").strip(),
+            "confidence": float(psychometric.get("confidence") or 0.0),
             "conversation_count": int(psychometric.get("conversation_count") or 0),
+            "completion_reason": str(psychometric.get("completion_reason") or "").strip(),
         },
         "runtime_preferences": {
             "preferred_mode": OPENCLAW_PREFERRED_MODE,
@@ -1393,40 +1416,32 @@ async def _assessment_memory_writer_model(user_id: int, final_profile: Dict[str,
     if not machine_readable or not ai_readable:
         raise RuntimeError("AI memory compression returned incomplete payload")
     return {
-        "memory_title": str(parsed.get("memory_title") or "psychometric_profile").strip() or "psychometric_profile",
+        "memory_title": str(parsed.get("memory_title") or "activation_dialogue_profile").strip() or "activation_dialogue_profile",
         "machine_readable": machine_readable,
         "ai_readable": ai_readable,
     }
 
 
 def _assessment_sync_personality_profile(conn: Connection, user_id: int, psychometric: Dict[str, object]) -> None:
-    type_code = str(psychometric.get("mapped_type_code") or psychometric.get("type_code") or "").strip()
-    function_confidence = normalize_confidence(psychometric.get("function_confidence") or psychometric.get("dimension_confidence"))
-    traits = [f"兼容类型:{type_code}"] if type_code else []
-    for function_name in psychometric.get("dominant_stack") or []:
-        label = str(function_name).strip()
-        if label:
-            traits.append(f"主功能:{label}")
-    for function_name in PAIR_KEYS:
-        score = float(function_confidence.get(function_name, 0.0) or 0.0)
-        if score >= 0.72:
-            traits.append(f"{function_name}信号稳定")
     summary = str(psychometric.get("summary") or "").strip()
     _upsert_personality_profile(
         conn,
         int(user_id),
         {
             "summary": summary,
-            "response_style": str(psychometric.get("response_style") or "").strip(),
-            "care_style": str(psychometric.get("care_style") or "").strip(),
-            "traits": traits[:6],
+            "response_style": str(psychometric.get("decision_style") or psychometric.get("response_style") or "").strip(),
+            "care_style": str(psychometric.get("care_guidance") or psychometric.get("care_style") or "").strip(),
+            "traits": [str(item).strip() for item in psychometric.get("interaction_preferences") or [] if str(item).strip()][:6],
             "topics": [],
-            "boundaries": [],
-            "signals": [str(item) for item in ((psychometric.get("evidence_summary") or {}).get("highlights") or [])[:4]],
-            "confidence": min(0.99, max(function_confidence.values() or [0.0])),
+            "boundaries": [str(item).strip() for item in psychometric.get("avoid_patterns") or [] if str(item).strip()][:6],
+            "signals": [
+                *([str(psychometric.get("stress_response") or "").strip()] if str(psychometric.get("stress_response") or "").strip() else []),
+                *[str(item) for item in ((psychometric.get("evidence_summary") or {}).get("highlights") or [])[:3]],
+            ],
+            "confidence": float(psychometric.get("confidence") or 0.0),
             "sample_count": int(psychometric.get("conversation_count") or 0),
-            "inference_version": str(psychometric.get("inference_version") or "assessment-v2-jung8"),
-            "profile": {"source": "psychometric_assessment", "psychometric_profile": psychometric},
+            "inference_version": str(psychometric.get("inference_version") or "activation-dialogue-v3"),
+            "profile": {"source": "activation_dialogue", "psychometric_profile": psychometric},
         },
     )
 
@@ -1446,15 +1461,15 @@ async def _persist_assessment_completion(conn: Connection, user_id: int, session
     preferred_name = str(activation.get("preferred_name") or "").strip()
     assistant_service.store.append_memory(
         int(user_id),
-        title=str(memory_payload["memory_title"] or "psychometric_profile"),
+        title=str(memory_payload["memory_title"] or "activation_dialogue_profile"),
         content=f"{memory_payload['machine_readable']}\n{memory_payload['ai_readable']}",
-        tags=["activation", "assessment", "psychometric"],
+        tags=["activation", "assessment", "dialogue_profile"],
     )
     assistant_service.store.append_memory(
         int(user_id),
-        title="psychometric_index_backup",
+        title="activation_dialogue_profile_backup",
         content=build_memory_summary(psychometric, preferred_name=preferred_name),
-        tags=["activation", "assessment", "psychometric", "backup"],
+        tags=["activation", "assessment", "dialogue_profile", "backup"],
     )
     return psychometric
 
@@ -3154,7 +3169,7 @@ async def activation_assessment_start(
     if not bool(ai_snapshot["ai_ready"]):
         blocked_payload = dict(existing or build_initial_session(int(time.time() * 1000)))
         blocked_payload["status"] = "blocked"
-        blocked_payload["blocking_reason"] = str(ai_snapshot["blocking_reason"] or "AI 未就绪，正式测评已暂停。")
+        blocked_payload["blocking_reason"] = str(ai_snapshot["blocking_reason"] or "AI 未就绪，正式建档已暂停。")
         blocked_payload["assessment_ready"] = False
         if existing and session_id is not None:
             _save_assessment_session(conn, int(user["id"]), blocked_payload, session_id=int(session_id))
@@ -3168,14 +3183,27 @@ async def activation_assessment_start(
         model_question = await _assessment_pick_model_question(int(user["id"]), activation, session_payload)
         if not model_question:
             session_payload["status"] = "blocked"
-            session_payload["blocking_reason"] = "AI 没有生成首个正式测评问题。"
+            session_payload["blocking_reason"] = "AI 没有生成首个正式建档问题。"
         else:
             session_payload["last_question_id"] = str(model_question.get("id") or "")
             session_payload["latest_question"] = str(model_question.get("prompt") or "")
             session_payload["question_pair"] = str(model_question.get("pair") or "")
+            session_payload["current_focus"] = str(model_question.get("focus") or model_question.get("pair") or "")
             session_payload["question_source"] = "ai"
         session_id = _save_assessment_session(conn, int(user["id"]), session_payload, session_id=None)
         existing = session_payload
+    elif not str(existing.get("latest_question") or "").strip() and str(existing.get("status") or "") != "completed":
+        activation = _get_activation_profile(conn, int(user["id"]))
+        model_question = await _assessment_pick_model_question(int(user["id"]), activation, existing)
+        if model_question:
+            existing["status"] = "active"
+            existing["blocking_reason"] = ""
+            existing["last_question_id"] = str(model_question.get("id") or "")
+            existing["latest_question"] = str(model_question.get("prompt") or "")
+            existing["question_pair"] = str(model_question.get("pair") or "")
+            existing["current_focus"] = str(model_question.get("focus") or model_question.get("pair") or "")
+            existing["question_source"] = "ai"
+            _save_assessment_session(conn, int(user["id"]), existing, session_id=int(session_id))
     device_online, _selected = _assessment_device_online(conn, int(user["id"]), payload.device_id)
     return _assessment_response(existing, device_online=device_online, exists=True)
 
@@ -3198,9 +3226,9 @@ def activation_assessment_state(
                 "updated_at_ms": completed.get("updated_at_ms"),
                 "effective_turn_count": completed.get("conversation_count"),
                 "turn_count": completed.get("conversation_count"),
-                "type_code": completed.get("type_code"),
                 "voice_mode": "idle",
                 "voice_session_active": False,
+                "dialogue_turns": completed.get("dialogue_turns") or [],
                 "final_result": completed,
             }
             return _assessment_response(session_payload, device_online=device_online, exists=True)
@@ -4595,6 +4623,14 @@ async def _assistant_send_impl(
     if "assistant_native_control" not in merged_metadata:
         merged_metadata["assistant_native_control"] = bool(assistant_runtime.get("native_control_enabled", True))
     merged_metadata["user_profile"] = _build_assistant_identity_context(conn, int(user_id))
+    stored_memory_summary = assistant_service.get_profile_memory_summary(int(user_id), max_chars=1200)
+    provided_memory_summary = str(merged_metadata.get("memory_summary") or "").strip()
+    if stored_memory_summary:
+        if provided_memory_summary:
+            if stored_memory_summary not in provided_memory_summary:
+                merged_metadata["memory_summary"] = f"{stored_memory_summary}\n\n最近上下文补充：{provided_memory_summary}"
+        else:
+            merged_metadata["memory_summary"] = stored_memory_summary
     response_payload = await assistant_service.send_message(
         conn,
         user_id=int(user_id),
@@ -5043,6 +5079,7 @@ async def _run_care_reply(
     user_profile = _build_assistant_identity_context(conn, int(user_id))
     context = _build_care_context(payload)
     runtime_snapshot = _normalize_care_runtime(assistant_service.runtime_status())
+    stored_memory_summary = assistant_service.get_profile_memory_summary(int(user_id), max_chars=1200)
     prompt = _build_care_prompt(context, user_profile, runtime_snapshot)
     if not bool(runtime_snapshot.get("ai_ready")):
         fallback_text = _fallback_care_text(payload, user_profile, str(runtime_snapshot.get("ai_detail") or ""))
@@ -5069,6 +5106,7 @@ async def _run_care_reply(
                 "care_channel": "proactive_care",
                 "care_runtime": runtime_snapshot,
                 "user_profile": user_profile,
+                "memory_summary": stored_memory_summary,
             },
         )
         safe_text, _rewritten = _sanitize_outbound_bot_text(str(assistant_reply.get("text") or ""))

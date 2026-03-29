@@ -317,6 +317,9 @@ class AssistantService:
     def search_memory(self, user_id: int, query: str, limit: int = 10) -> List[Dict[str, object]]:
         return self.store.search_memory(user_id, query, limit=limit)
 
+    def get_profile_memory_summary(self, user_id: int, max_chars: int = 1200) -> str:
+        return self.store.get_profile_memory_summary(user_id, max_chars=max_chars)
+
     def runtime_status(self) -> Dict[str, object]:
         try:
             state_dir = discover_openclaw_state_dir(OPENCLAW_STATE_DIR, self.workspace_dir)

@@ -20,6 +20,7 @@ import {
 import { AtmosphereView } from "./components/AtmosphereView";
 import { ActivationGate } from "./components/ActivationGate";
 import { ChatInterface } from "./components/ChatInterface";
+import { CompanionProfilePanel } from "./components/CompanionProfilePanel";
 import { MoodChart } from "./components/MoodChart";
 import { Login } from "./components/Login";
 import { DeviceMonitor } from "./components/DeviceMonitor";
@@ -69,7 +70,7 @@ import { connectEventStream, EngineEvent } from "./services/eventService";
 import { getUserProfile, updateUserProfile } from "./services/profileService";
 import { sendEngineSignal } from "./services/engineService";
 import { generateDailySummary } from "./services/llmService";
-import { getAssistantRuntimeStatus, getDueAssistantTodos } from "./services/assistantService";
+import { AssistantRuntimeStatus, getAssistantRuntimeStatus, getDueAssistantTodos } from "./services/assistantService";
 
 enum Tab {
   DASHBOARD = "DASHBOARD",
@@ -109,21 +110,7 @@ type ThemeToken = {
   accent3?: string;
 };
 
-type PersonaProfile = {
-  id: string;
-  name: string;
-  title: string;
-  vibe: string;
-  voiceStyle: string;
-  traits: string[];
-  intro: string;
-  image: string;
-};
-
 const APP_ICON_URL = new URL("./assets/app-icon.png", import.meta.url).href;
-const PERSONA_BEIDOU_IMAGE_URL = new URL("./assets/personas/beidou.jpg", import.meta.url).href;
-const PERSONA_MOLING_IMAGE_URL = new URL("./assets/personas/moling.jpg", import.meta.url).href;
-const PERSONA_XIAOGUANG_IMAGE_URL = new URL("./assets/personas/xiaoguang.jpg", import.meta.url).href;
 
 const THEME_OPTIONS: ThemeOption[] = [
   {
@@ -401,89 +388,6 @@ const THEME_TOKENS: Record<string, ThemeToken> = {
   },
 };
 
-const PERSONA_PROFILES: PersonaProfile[] = [
-  {
-    id: "qing-lan",
-    name: "晴岚",
-    title: "温柔共情型",
-    vibe: "先接住情绪，再慢慢引导",
-    voiceStyle: "轻柔、细腻、低打扰",
-    traits: ["情绪安抚", "稳定陪伴", "共情表达"],
-    intro: "适合压力大、容易内耗的时段。她不会追问，只会先说“我在”，再给你一个很小但可执行的下一步。",
-    image: "https://images.unsplash.com/photo-1745434159123-5b99b94206ca?auto=format&fit=crop&w=1200&q=80",
-  },
-  {
-    id: "bei-dou",
-    name: "北斗",
-    title: "冷静策略型",
-    vibe: "快速梳理重点，降低混乱感",
-    voiceStyle: "克制、清晰、结构化",
-    traits: ["任务拆解", "优先级判断", "节奏控制"],
-    intro: "适合工作高压和信息过载。先把问题分层，再给你可落地的顺序，不灌鸡汤、只给抓手。",
-    image: PERSONA_BEIDOU_IMAGE_URL,
-  },
-  {
-    id: "a-che",
-    name: "阿澈",
-    title: "行动搭子型",
-    vibe: "少想一点，先做一点",
-    voiceStyle: "直接、轻快、推进感强",
-    traits: ["执行推进", "反拖延", "结果导向"],
-    intro: "适合“知道该做但起不来”的状态。他会把任务切成超小步骤，陪你把第一步迈出去。",
-    image: "https://images.unsplash.com/photo-1754476151319-bc8cf50a1807?auto=format&fit=crop&w=1200&q=80",
-  },
-  {
-    id: "ni-xia",
-    name: "霓夏",
-    title: "轻松幽默型",
-    vibe: "把紧绷情绪松开一点",
-    voiceStyle: "俏皮、活泼、带一点玩笑",
-    traits: ["情绪解压", "气氛调节", "社交感陪伴"],
-    intro: "适合长时间沉默和情绪低落。她会用不冒犯的小幽默把你拉回当下，再温柔提醒休息。",
-    image: "https://images.unsplash.com/photo-1740858606672-18ae1a96deeb?auto=format&fit=crop&w=1200&q=80",
-  },
-  {
-    id: "cheng-yin",
-    name: "澄音",
-    title: "夜间治愈型",
-    vibe: "适合睡前复盘与情绪沉淀",
-    voiceStyle: "慢速、安静、陪伴感强",
-    traits: ["夜间总结", "缓和焦虑", "稳定收尾"],
-    intro: "适合晚上聊天和总结。她会把一天的情绪脉络说清楚，帮你把情绪放下，而不是继续拉扯。",
-    image: "https://images.unsplash.com/photo-1687360440741-f5df549b352d?auto=format&fit=crop&w=1200&q=80",
-  },
-  {
-    id: "hu-po",
-    name: "琥珀",
-    title: "边界守护型",
-    vibe: "尊重空间，不强行介入",
-    voiceStyle: "沉稳、克制、礼貌",
-    traits: ["不打扰模式", "边界感强", "安全表达"],
-    intro: "适合需要独处但又希望被看见的时段。你说停，他就停；你想聊，他再出现。",
-    image: "https://images.unsplash.com/photo-1749224445782-297c6fe4f4ec?auto=format&fit=crop&w=1200&q=80",
-  },
-  {
-    id: "mo-ling",
-    name: "墨零",
-    title: "专注协作型",
-    vibe: "降低外部噪声，进入深度工作",
-    voiceStyle: "短句、明确、节律感强",
-    traits: ["番茄协作", "专注提醒", "中断恢复"],
-    intro: "适合工位深度工作。他不会频繁说话，只在关键时点提醒你呼吸、喝水、拉回专注。",
-    image: PERSONA_MOLING_IMAGE_URL,
-  },
-  {
-    id: "xiao-guang",
-    name: "小光",
-    title: "鼓励成长型",
-    vibe: "看到微小进步并及时反馈",
-    voiceStyle: "明亮、积极、鼓舞感",
-    traits: ["正向反馈", "习惯养成", "目标对齐"],
-    intro: "适合长期计划和习惯养成。每一点进展都会被记录并反馈，帮你保持“持续前进”的心态。",
-    image: PERSONA_XIAOGUANG_IMAGE_URL,
-  },
-];
-
 const clamp = (value: number, min: number, max: number) => Math.min(max, Math.max(min, value));
 
 const hexToRgb = (hex: string) => {
@@ -581,22 +485,40 @@ const defaultDeviceUiState = (): DeviceUiState => ({
   source: "desktop",
 });
 
+const APP_LOGIN_RESET_MARKER = "2026-03-29-engine-gate-v5";
+
+const clearStoredSessionState = () => {
+  for (const key of [
+    "auth_token",
+    "refresh_token",
+    "guest_mode",
+    "activation_required",
+    "activation_path",
+    "profile_name",
+    "profile_avatar",
+    "profile_bio",
+    "profile_location",
+    "profile_username",
+    "profile_created_at",
+    "profile_updated_at",
+  ]) {
+    localStorage.removeItem(key);
+  }
+  try {
+    sessionStorage.clear();
+  } catch {}
+};
+
 const App: React.FC = () => {
-  const [isGuest, setIsGuest] = useState(() => localStorage.getItem("guest_mode") === "true");
-  const [isAuthenticated, setIsAuthenticated] = useState(
-    () => localStorage.getItem("guest_mode") === "true"
-  );
+  const [isGuest, setIsGuest] = useState(false);
+  const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [authChecked, setAuthChecked] = useState(false);
-  const [activationRequired, setActivationRequired] = useState(
-    () => localStorage.getItem("activation_required") === "true"
-  );
-  const [activationPath, setActivationPath] = useState(
-    () => localStorage.getItem("activation_path") || "/activate"
-  );
+  const [activationRequired, setActivationRequired] = useState(false);
+  const [activationPath, setActivationPath] = useState("/activate");
+  const [assistantRuntime, setAssistantRuntime] = useState<AssistantRuntimeStatus | null>(null);
+  const [assistantRuntimeError, setAssistantRuntimeError] = useState("");
+  const [runtimeChecked, setRuntimeChecked] = useState(false);
   const [activeTab, setActiveTab] = useState<Tab>(Tab.DASHBOARD);
-  const [selectedPersonaId, setSelectedPersonaId] = useState(
-    () => localStorage.getItem("persona_profile_id") || PERSONA_PROFILES[0].id
-  );
   const [mode, setMode] = useState<EngineMode>("normal");
   const [careDeliveryStrategy, setCareDeliveryStrategy] = useState<CareDeliveryStrategy>(() =>
     normalizeCareDeliveryStrategy(localStorage.getItem("care_delivery_strategy"))
@@ -799,8 +721,6 @@ const App: React.FC = () => {
   const [pomodoroRunning, setPomodoroRunning] = useState(false);
   const [pomodoroSeconds, setPomodoroSeconds] = useState(() => pomodoroWorkMin * 60);
   const [floatDragging, setFloatDragging] = useState(false);
-  const selectedPersona =
-    PERSONA_PROFILES.find((item) => item.id === selectedPersonaId) || PERSONA_PROFILES[0];
 
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const themeMenuRef = useRef<HTMLDivElement | null>(null);
@@ -1662,15 +1582,18 @@ const App: React.FC = () => {
     setIsGuest(false);
     setIsAuthenticated(true);
     setAuthChecked(true);
+    setRuntimeChecked(false);
+    setAssistantRuntime(null);
+    setAssistantRuntimeError("");
     localStorage.removeItem("guest_mode");
 
     let gateRequired = Boolean(result.activation_required || result.assessment_required);
-    let nextActivationPath = result.activation_path || "/activate";
+    let nextActivationPath = "/activate";
 
     try {
       const activation = await getActivationState();
       gateRequired = Boolean(activation.activation_required || activation.assessment_required);
-      nextActivationPath = gateRequired ? "/activate" : nextActivationPath;
+      nextActivationPath = gateRequired ? "/activate" : "/activate";
     } catch (err) {
       console.warn("activation state refresh after login failed:", err);
     }
@@ -1679,18 +1602,6 @@ const App: React.FC = () => {
     localStorage.setItem("activation_path", nextActivationPath);
     setActivationRequired(gateRequired);
     setActivationPath(nextActivationPath);
-    setActiveTab(Tab.DASHBOARD);
-  }, []);
-
-  const handleGuest = useCallback(() => {
-    localStorage.setItem("guest_mode", "true");
-    localStorage.removeItem("activation_required");
-    localStorage.removeItem("activation_path");
-    setIsGuest(true);
-    setIsAuthenticated(true);
-    setActivationRequired(false);
-    setActivationPath("/activate");
-    setAuthChecked(true);
     setActiveTab(Tab.DASHBOARD);
   }, []);
 
@@ -1710,6 +1621,9 @@ const App: React.FC = () => {
       setIsAuthenticated(false);
       setActivationRequired(false);
       setActivationPath("/activate");
+      setAssistantRuntime(null);
+      setAssistantRuntimeError("");
+      setRuntimeChecked(false);
       setAuthChecked(true);
       return;
     }
@@ -1734,6 +1648,9 @@ const App: React.FC = () => {
       setIsGuest(false);
       setActivationRequired(false);
       setActivationPath("/activate");
+      setAssistantRuntime(null);
+      setAssistantRuntimeError("");
+      setRuntimeChecked(false);
       setAuthChecked(true);
     }
   }, [isGuest]);
@@ -1741,10 +1658,11 @@ const App: React.FC = () => {
   const handleActivationCompleted = useCallback(async () => {
     const activation = await getActivationState();
     if (activation.activation_required || activation.assessment_required) {
-      throw new Error("激活尚未完成，请先确认身份并完成详细人格测评。");
+      throw new Error("激活尚未完成，请先确认姓名并完成正式建档。");
     }
     localStorage.setItem("activation_required", "false");
     setActivationRequired(false);
+    setRuntimeChecked(false);
   }, []);
 
   const handlePickAvatar = () => {
@@ -1906,17 +1824,13 @@ const App: React.FC = () => {
 
   useEffect(() => {
     let active = true;
-    const guest = localStorage.getItem("guest_mode") === "true";
-    if (guest) {
-      setIsGuest(true);
-      setIsAuthenticated(true);
-      setAuthChecked(true);
-      return () => {
-        active = false;
-      };
+    if (localStorage.getItem("app_login_reset_marker") !== APP_LOGIN_RESET_MARKER) {
+      clearStoredSessionState();
+      localStorage.setItem("app_login_reset_marker", APP_LOGIN_RESET_MARKER);
     }
     const token = localStorage.getItem("auth_token");
     if (!token) {
+      setIsGuest(false);
       setIsAuthenticated(false);
       setAuthChecked(true);
       return () => {
@@ -1931,7 +1845,7 @@ const App: React.FC = () => {
           if (!active) return;
           const gateRequired = Boolean(activation.activation_required || activation.assessment_required);
           setActivationRequired(gateRequired);
-          setActivationPath(localStorage.getItem("activation_path") || "/activate");
+          setActivationPath("/activate");
           localStorage.setItem(
             "activation_required",
             gateRequired ? "true" : "false"
@@ -1961,6 +1875,50 @@ const App: React.FC = () => {
       active = false;
     };
   }, []);
+
+  useEffect(() => {
+    if (!isAuthenticated || isGuest || activationRequired) {
+      setAssistantRuntime(null);
+      setAssistantRuntimeError("");
+      setRuntimeChecked(false);
+      return;
+    }
+    let active = true;
+    let timer: number | null = null;
+    const pollRuntime = async () => {
+      let nextReady = false;
+      try {
+        const status = await getAssistantRuntimeStatus();
+        if (!active) return;
+        setAssistantRuntime(status);
+        setAssistantRuntimeError(
+          status.gateway_ready
+            ? status.provider_network_ok
+              ? ""
+              : status.provider_network_detail || "provider_unreachable"
+            : status.gateway_error || "OpenClaw gateway unavailable"
+        );
+        setRuntimeChecked(true);
+        nextReady = Boolean(status.gateway_ready && status.provider_network_ok);
+      } catch (err) {
+        if (!active) return;
+        const detail = err instanceof Error ? err.message : String(err || "本地 backend 未就绪");
+        setAssistantRuntime(null);
+        setAssistantRuntimeError(detail || "本地 backend 未就绪");
+        setRuntimeChecked(true);
+      } finally {
+        if (!active) return;
+        timer = window.setTimeout(pollRuntime, nextReady ? 10000 : 2500);
+      }
+    };
+    void pollRuntime();
+    return () => {
+      active = false;
+      if (timer !== null) {
+        window.clearTimeout(timer);
+      }
+    };
+  }, [activationRequired, isAuthenticated, isGuest]);
 
   useEffect(() => {
     applyTheme(uiTheme);
@@ -2185,10 +2143,6 @@ const App: React.FC = () => {
   useEffect(() => {
     localStorage.setItem("face_track_overlay", String(faceTrackOverlayEnabled));
   }, [faceTrackOverlayEnabled]);
-
-  useEffect(() => {
-    localStorage.setItem("persona_profile_id", selectedPersonaId);
-  }, [selectedPersonaId]);
 
   useEffect(() => {
     if (!pomodoroRunning) return;
@@ -2449,11 +2403,70 @@ const App: React.FC = () => {
     );
   }
 
-  if (!isAuthenticated) return <Login onLogin={handleLogin} onGuest={handleGuest} />;
+  const engineOnline = Boolean(assistantRuntime?.gateway_ready && assistantRuntime?.provider_network_ok);
+  const desktopGateActive = isAuthenticated && !isGuest && !activationRequired;
+  const shouldBlockDesktop = desktopGateActive && (!runtimeChecked || !engineOnline);
+  const backendStatusLabel = !runtimeChecked ? "starting" : assistantRuntime ? "ready" : "offline";
+  const gatewayStatusLabel = !runtimeChecked
+    ? "starting"
+    : assistantRuntime?.gateway_ready
+      ? "ready"
+      : "offline";
+  const providerStatusLabel = !runtimeChecked
+    ? "waiting"
+    : assistantRuntime?.provider_network_ok
+      ? "reachable"
+      : "blocked";
+  const startupBlockingReason =
+    assistantRuntimeError ||
+    assistantRuntime?.gateway_error ||
+    assistantRuntime?.provider_network_detail ||
+    "正在启动本地引擎…";
+
+  if (!isAuthenticated) return <Login onLogin={handleLogin} />;
 
   if (activationRequired && !isGuest) {
     return (
       <ActivationGate onActivated={handleActivationCompleted} />
+    );
+  }
+
+  if (shouldBlockDesktop) {
+    return (
+      <div className="w-screen h-screen bg-[#070b14] flex items-center justify-center px-8 text-slate-200">
+        <div className="w-full max-w-4xl rounded-[36px] border border-white/10 bg-white/[0.04] p-10 shadow-[0_30px_120px_rgba(0,0,0,0.45)]">
+          <div className="flex items-start justify-between gap-8">
+            <div>
+              <div className="text-[13px] font-black uppercase tracking-[0.5em] text-cyan-300/70">Engine Boot</div>
+              <h1 className="mt-4 text-4xl font-black text-white">正在连接本地引擎</h1>
+              <p className="mt-4 max-w-2xl text-lg leading-8 text-slate-300">
+                登录已经完成。当前会在进入主桌面前先确认本地 backend、OpenClaw gateway 和 provider 全部就绪，避免再出现进入桌面后
+                ENGINE OFFLINE 或固定模板回复的假可用状态。
+              </p>
+            </div>
+            <div className="h-16 w-16 rounded-2xl border border-cyan-400/30 bg-cyan-400/10 flex items-center justify-center text-cyan-200 text-2xl font-black">
+              {runtimeChecked ? "AI" : "..."}
+            </div>
+          </div>
+
+          <div className="mt-10 grid grid-cols-1 gap-4 md:grid-cols-3">
+            {[
+              { label: "backend", value: backendStatusLabel },
+              { label: "gateway", value: gatewayStatusLabel },
+              { label: "provider", value: providerStatusLabel },
+            ].map((item) => (
+              <div key={item.label} className="rounded-[24px] border border-white/10 bg-white/[0.03] px-5 py-5">
+                <div className="text-[11px] font-black uppercase tracking-[0.35em] text-slate-500">{item.label}</div>
+                <div className="mt-3 text-2xl font-black text-white">{item.value}</div>
+              </div>
+            ))}
+          </div>
+
+          <div className="mt-8 rounded-[24px] border border-amber-300/20 bg-amber-400/10 px-6 py-5 text-[16px] leading-8 text-amber-50">
+            {startupBlockingReason}
+          </div>
+        </div>
+      </div>
     );
   }
 
@@ -2630,9 +2643,9 @@ const App: React.FC = () => {
 
           <div className="flex items-center gap-6" style={{ WebkitAppRegion: "no-drag" }}>
             <div className="theme-pill flex items-center gap-3 px-4 py-2 backdrop-blur-xl rounded-full">
-              <div className={`status-dot animate-pulse ${wsConnected ? "" : "status-dot--offline"}`}></div>
+              <div className={`status-dot animate-pulse ${engineOnline ? "" : "status-dot--offline"}`}></div>
               <span className="text-[9px] font-black uppercase tracking-widest">
-                {wsConnected ? "ENGINE ONLINE" : "ENGINE OFFLINE"}
+                {engineOnline ? "ENGINE ONLINE" : "ENGINE OFFLINE"}
               </span>
             </div>
             <div
@@ -2781,88 +2794,7 @@ const App: React.FC = () => {
             </div>
           )}
           {activeTab === Tab.PERSONA && (
-            <div className="h-full w-full overflow-y-auto pr-1 no-scrollbar">
-              <div className="w-full max-w-6xl mx-auto animate-pop-in pb-6">
-                <div className="bg-[#0c1222]/50 backdrop-blur-3xl rounded-[2.5rem] border border-white/[0.05] shadow-2xl p-8">
-                  <div className="flex items-start justify-between gap-6">
-                    <div>
-                      <h3 className="text-2xl font-black text-white">人格与风格切换</h3>
-                      <p className="mt-2 text-[12px] font-semibold text-slate-400">
-                        为不同场景选择不同陪伴角色。当前版本先做软件端切换与展示。
-                      </p>
-                    </div>
-                    <div className="min-w-[260px] bg-white/[0.03] border border-white/[0.08] rounded-2xl p-4">
-                      <p className="text-[10px] uppercase tracking-widest text-slate-500 font-black">当前角色</p>
-                      <p className="mt-2 text-lg font-black text-white">{selectedPersona.name}</p>
-                      <p className="text-[11px] text-indigo-300 font-bold">{selectedPersona.title}</p>
-                      <p className="mt-2 text-[11px] text-slate-400 font-semibold leading-relaxed">
-                        {selectedPersona.vibe}
-                      </p>
-                    </div>
-                  </div>
-
-                  <div className="mt-6 grid grid-cols-1 lg:grid-cols-2 gap-6">
-                    {PERSONA_PROFILES.map((persona) => {
-                      const active = persona.id === selectedPersona.id;
-                      return (
-                        <button
-                          key={persona.id}
-                          onClick={() => setSelectedPersonaId(persona.id)}
-                          className={`group text-left rounded-3xl overflow-hidden border transition-all ${
-                            active
-                              ? "border-indigo-400/60 shadow-[0_0_0_1px_rgba(129,140,248,0.35)]"
-                              : "border-white/[0.08] hover:border-indigo-300/40"
-                          }`}
-                        >
-                          <div className="relative h-52">
-                            <img
-                              src={persona.image}
-                              alt={persona.name}
-                              className="w-full h-full object-cover"
-                              style={{ objectPosition: "center 24%" }}
-                              loading="lazy"
-                              referrerPolicy="no-referrer"
-                            />
-                            <div className="absolute inset-0 bg-gradient-to-t from-[#090c18]/95 via-[#090c18]/30 to-transparent" />
-                            <div className="absolute left-4 right-4 bottom-4">
-                              <div className="flex items-center justify-between gap-3">
-                                <div>
-                                  <p className="text-lg font-black text-white">{persona.name}</p>
-                                  <p className="text-[11px] font-bold text-indigo-200">{persona.title}</p>
-                                </div>
-                                {active && <CheckCircle2 size={18} className="text-indigo-300 shrink-0" />}
-                              </div>
-                            </div>
-                          </div>
-                          <div className="p-4 bg-[#0b1020]/80">
-                            <p className="text-[11px] text-slate-300 font-semibold leading-relaxed">
-                              {persona.intro}
-                            </p>
-                            <div className="mt-3 flex flex-wrap gap-2">
-                              <span className="px-2 py-1 rounded-full text-[10px] font-bold bg-indigo-500/15 text-indigo-200 border border-indigo-400/20">
-                                {persona.voiceStyle}
-                              </span>
-                              {persona.traits.map((trait) => (
-                                <span
-                                  key={`${persona.id}-${trait}`}
-                                  className="px-2 py-1 rounded-full text-[10px] font-bold bg-white/[0.04] text-slate-300 border border-white/[0.08]"
-                                >
-                                  {trait}
-                                </span>
-                              ))}
-                            </div>
-                          </div>
-                        </button>
-                      );
-                    })}
-                  </div>
-
-                  <div className="mt-5 text-[11px] text-slate-500 font-bold">
-                    软件端已支持角色预览与切换，后续可再联动话术/动作策略。
-                  </div>
-                </div>
-              </div>
-            </div>
+            <CompanionProfilePanel />
           )}
           {activeTab === Tab.FOCUS && (
             <div className="h-full w-full grid grid-cols-12 gap-6">

@@ -22,6 +22,13 @@ function Test-OpenClawRuntimeReady([string]$RuntimeRoot) {
         (Join-Path $RuntimeRoot "package.json"),
         (Join-Path $RuntimeRoot "dist\entry.js"),
         (Join-Path $RuntimeRoot "dist\index.js"),
+        (Join-Path $RuntimeRoot "node_modules"),
+        (Join-Path $RuntimeRoot "node_modules\chalk\package.json"),
+        (Join-Path $RuntimeRoot "node_modules\tslog\package.json"),
+        (Join-Path $RuntimeRoot "node_modules\@anthropic-ai\sdk\package.json"),
+        (Join-Path $RuntimeRoot "node_modules\@aws-sdk\client-bedrock-runtime\package.json"),
+        (Join-Path $RuntimeRoot "node_modules\@google\genai\package.json"),
+        (Join-Path $RuntimeRoot "node_modules\openai\package.json"),
         (Join-Path $RuntimeRoot "skills"),
         (Join-Path $RuntimeRoot "extensions")
     )
@@ -33,6 +40,47 @@ function Invoke-CmdChecked([string]$CommandLine) {
     & cmd.exe /c $CommandLine
     if ($LASTEXITCODE -ne 0) {
         throw "Command failed with exit code ${LASTEXITCODE}: $CommandLine"
+    }
+}
+
+function Copy-Tree([string]$SourceDir, [string]$TargetDir) {
+    if (-not (Test-Path $SourceDir)) {
+        throw "Missing source directory: $SourceDir"
+    }
+
+    New-Item -ItemType Directory -Force -Path $TargetDir | Out-Null
+    & robocopy.exe $SourceDir $TargetDir /MIR /R:1 /W:1 /NFL /NDL /NP /NJH /NJS | Out-Null
+    if ($LASTEXITCODE -ge 8) {
+        throw "robocopy failed with exit code $LASTEXITCODE from $SourceDir to $TargetDir"
+    }
+}
+
+function Materialize-HoistedNodeModules([string]$RuntimeRoot) {
+    $sourceHoisted = Join-Path $RuntimeRoot "node_modules\.pnpm\node_modules"
+    $targetNodeModules = Join-Path $RuntimeRoot "node_modules"
+    if (-not (Test-Path $sourceHoisted)) {
+        return
+    }
+
+    Get-ChildItem $sourceHoisted -Force | ForEach-Object {
+        if ($_.Name -eq ".bin") {
+            return
+        }
+
+        $targetPath = Join-Path $targetNodeModules $_.Name
+        if (-not (Test-Path $targetPath)) {
+            Copy-Tree $_.FullName $targetPath
+            return
+        }
+
+        if ($_.PSIsContainer -and $_.Name.StartsWith("@")) {
+            Get-ChildItem $_.FullName -Force | ForEach-Object {
+                $scopedTarget = Join-Path $targetPath $_.Name
+                if (-not (Test-Path $scopedTarget)) {
+                    Copy-Tree $_.FullName $scopedTarget
+                }
+            }
+        }
     }
 }
 
@@ -61,17 +109,11 @@ function Prune-OpenClawRuntime([string]$RuntimeRoot) {
         return
     }
 
-    $patterns = @(
-        "@node-llama-cpp*",
-        "node-llama-cpp@*",
-        "@napi-rs+canvas*"
-    )
-
-    foreach ($pattern in $patterns) {
-        Get-ChildItem $pnpmRoot -Directory -Filter $pattern -ErrorAction SilentlyContinue | ForEach-Object {
+    Get-ChildItem $pnpmRoot -Directory -ErrorAction SilentlyContinue |
+        Where-Object { $_.Name -like "@node-llama-cpp*" -or $_.Name -like "node-llama-cpp@*" -or $_.Name -like "@napi-rs+canvas*" } |
+        ForEach-Object {
             Invoke-CmdChecked "rmdir /s /q `"$($_.FullName)`""
         }
-    }
 
     $topLevelRemovals = @(
         (Join-Path $RuntimeRoot "node_modules\node-llama-cpp"),
@@ -86,6 +128,11 @@ function Prune-OpenClawRuntime([string]$RuntimeRoot) {
             Invoke-CmdChecked "rmdir /s /q `"$path`""
         }
     }
+
+    Get-ChildItem $RuntimeRoot -Recurse -File -Include *.d.ts,*.d.cts,*.d.mts,*.map -ErrorAction SilentlyContinue |
+        ForEach-Object {
+            Remove-Item -Force $_.FullName -ErrorAction SilentlyContinue
+        }
 }
 
 $sourcePath = Resolve-FullPath $Source
@@ -118,10 +165,20 @@ Initialize-ProxyEnvironment
 
 Write-Host "Preparing OpenClaw runtime from $sourcePath to $targetPath"
 
-& $pnpm.Source --dir $sourcePath --filter openclaw deploy --legacy --prod --offline $targetPath
+Push-Location $sourcePath
+try {
+    & $pnpm.Source --filter . deploy --legacy --prod $targetPath
+} finally {
+    Pop-Location
+}
 
 if ($LASTEXITCODE -ne 0) {
     throw "pnpm deploy failed with exit code $LASTEXITCODE"
 }
 
+Materialize-HoistedNodeModules $targetPath
 Prune-OpenClawRuntime $targetPath
+
+if (-not (Test-OpenClawRuntimeReady $targetPath)) {
+    throw "OpenClaw runtime is incomplete after deploy: $targetPath"
+}

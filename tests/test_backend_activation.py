@@ -19,12 +19,11 @@ def _setup_user(tmp_path, monkeypatch, *, configured: bool = False):
     monkeypatch.setattr(main.assistant_service, "store", AssistantWorkspaceStore(str(workspace_dir)))
     db.init_db()
 
-    password = "secret123"
     conn = sqlite3.connect(str(db_path))
     try:
         conn.execute(
             "INSERT INTO users (id, username, password_hash, created_at, is_configured) VALUES (?, ?, ?, ?, ?)",
-            (1, "owner@example.com", auth.hash_password(password), int(time.time()), 1 if configured else 0),
+            (1, "owner@example.com", auth.hash_password("secret123"), int(time.time()), 1 if configured else 0),
         )
         conn.commit()
     finally:
@@ -97,6 +96,7 @@ def test_activation_identity_infer_uses_ai_result(tmp_path, monkeypatch):
 
     async def fake_send_message(session_key: str, text: str) -> str:
         assert session_key.startswith("activation:1:infer:")
+        assert "京亮" in text
         return json.dumps(
             {
                 "preferred_name": "京亮",

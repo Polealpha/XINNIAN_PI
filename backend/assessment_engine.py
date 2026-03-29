@@ -1,58 +1,15 @@
 from __future__ import annotations
 
 import json
-import math
-import re
 from typing import Dict, List, Optional, Tuple
 
 
 SCORE_KEYS = ("Se", "Si", "Ne", "Ni", "Te", "Ti", "Fe", "Fi")
 PAIR_KEYS = SCORE_KEYS
+QUESTION_MAP: Dict[str, Dict[str, object]] = {}
 
-FUNCTION_BANK: List[Dict[str, object]] = [
-    {
-        "id": "se_present_action",
-        "pair": "Se",
-        "prompt": "遇到新环境时，你会先直接上手试一试，还是先在脑子里想清楚再动？",
-    },
-    {
-        "id": "si_repeat_pattern",
-        "pair": "Si",
-        "prompt": "做熟悉的事情时，你更依赖自己已经验证过的习惯和步骤吗？",
-    },
-    {
-        "id": "ne_possibility_scan",
-        "pair": "Ne",
-        "prompt": "别人提一个想法时，你会自然联想到很多可能性和延伸路线吗？",
-    },
-    {
-        "id": "ni_pattern_focus",
-        "pair": "Ni",
-        "prompt": "面对复杂信息时，你会先抓背后的主线和趋势，再决定怎么做吗？",
-    },
-    {
-        "id": "te_external_structure",
-        "pair": "Te",
-        "prompt": "推进事情时，你会更想先定标准、排步骤、把结果落地吗？",
-    },
-    {
-        "id": "ti_internal_logic",
-        "pair": "Ti",
-        "prompt": "你会因为一件事逻辑说不通而一直想把它推演明白吗？",
-    },
-    {
-        "id": "fe_social_attunement",
-        "pair": "Fe",
-        "prompt": "沟通时，你会下意识先看气氛和别人能不能舒服接住这句话吗？",
-    },
-    {
-        "id": "fi_inner_values",
-        "pair": "Fi",
-        "prompt": "做决定时，你会很在意这件事是不是符合你自己真正认同的价值吗？",
-    },
-]
-
-QUESTION_MAP = {str(item["id"]): item for item in FUNCTION_BANK}
+PROFILE_LIST_KEYS = ("interaction_preferences", "comfort_preferences", "avoid_patterns")
+PROFILE_TEXT_KEYS = ("summary", "decision_style", "stress_response", "care_guidance")
 
 
 def empty_score_map() -> Dict[str, float]:
@@ -61,62 +18,6 @@ def empty_score_map() -> Dict[str, float]:
 
 def empty_pair_confidence() -> Dict[str, float]:
     return {key: 0.0 for key in SCORE_KEYS}
-
-
-def build_initial_session(now_ms: int) -> Dict[str, object]:
-    return {
-        "status": "active",
-        "started_at_ms": int(now_ms),
-        "updated_at_ms": int(now_ms),
-        "turn_count": 0,
-        "effective_turn_count": 0,
-        "scores": empty_score_map(),
-        "cognitive_scores": empty_score_map(),
-        "dimension_confidence": empty_pair_confidence(),
-        "function_confidence": empty_pair_confidence(),
-        "asked_question_ids": [],
-        "question_history": [],
-        "transcript_history": [],
-        "evidence_summary": [],
-        "last_question_id": "",
-        "latest_question": "",
-        "latest_transcript": "",
-        "question_pair": "",
-        "question_source": "ai_required",
-        "scoring_source": "pending",
-        "type_code": "",
-        "mapped_type_code": "",
-        "dominant_stack": [],
-        "profile_preview": {},
-        "voice_mode": "idle",
-        "voice_session_active": False,
-        "assessment_ready": False,
-        "ai_required": True,
-        "blocking_reason": "",
-        "finish_reason": "",
-        "required_min_turns": 12,
-        "max_turns": 28,
-    }
-
-
-def normalize_scores(raw: Optional[Dict[str, object]]) -> Dict[str, float]:
-    scores = empty_score_map()
-    for key in SCORE_KEYS:
-        try:
-            scores[key] = round(float((raw or {}).get(key, 0.0) or 0.0), 4)
-        except Exception:
-            scores[key] = 0.0
-    return scores
-
-
-def normalize_confidence(raw: Optional[Dict[str, object]]) -> Dict[str, float]:
-    confidence = empty_pair_confidence()
-    for key in SCORE_KEYS:
-        try:
-            confidence[key] = max(0.0, min(1.0, float((raw or {}).get(key, 0.0) or 0.0)))
-        except Exception:
-            confidence[key] = 0.0
-    return confidence
 
 
 def parse_json_dict(text: str) -> Dict[str, object]:
@@ -139,82 +40,24 @@ def parse_json_dict(text: str) -> Dict[str, object]:
     return {}
 
 
-def _score_totals(scores: Dict[str, float]) -> Dict[str, float]:
-    sensing = float(scores.get("Se", 0.0)) + float(scores.get("Si", 0.0))
-    intuition = float(scores.get("Ne", 0.0)) + float(scores.get("Ni", 0.0))
-    thinking = float(scores.get("Te", 0.0)) + float(scores.get("Ti", 0.0))
-    feeling = float(scores.get("Fe", 0.0)) + float(scores.get("Fi", 0.0))
-    extraverted = float(scores.get("Se", 0.0)) + float(scores.get("Ne", 0.0)) + float(scores.get("Te", 0.0)) + float(scores.get("Fe", 0.0))
-    introverted = float(scores.get("Si", 0.0)) + float(scores.get("Ni", 0.0)) + float(scores.get("Ti", 0.0)) + float(scores.get("Fi", 0.0))
-    judging = float(scores.get("Te", 0.0)) + float(scores.get("Ti", 0.0)) + float(scores.get("Fe", 0.0)) + float(scores.get("Fi", 0.0))
-    perceiving = float(scores.get("Se", 0.0)) + float(scores.get("Si", 0.0)) + float(scores.get("Ne", 0.0)) + float(scores.get("Ni", 0.0))
-    return {
-        "S": sensing,
-        "N": intuition,
-        "T": thinking,
-        "F": feeling,
-        "E": extraverted,
-        "I": introverted,
-        "J": judging,
-        "P": perceiving,
-    }
+def normalize_scores(raw: Optional[Dict[str, object]]) -> Dict[str, float]:
+    scores = empty_score_map()
+    for key in SCORE_KEYS:
+        try:
+            scores[key] = round(float((raw or {}).get(key, 0.0) or 0.0), 4)
+        except Exception:
+            scores[key] = 0.0
+    return scores
 
 
-def dominant_stack(scores: Dict[str, float], count: int = 4) -> List[str]:
-    ranked = sorted(SCORE_KEYS, key=lambda key: (float(scores.get(key, 0.0)), key), reverse=True)
-    return ranked[:count]
-
-
-def derive_type_code(scores: Dict[str, float]) -> str:
-    totals = _score_totals(scores)
-    letters = [
-        "E" if totals["E"] >= totals["I"] else "I",
-        "N" if totals["N"] >= totals["S"] else "S",
-        "T" if totals["T"] >= totals["F"] else "F",
-        "J" if totals["J"] >= totals["P"] else "P",
-    ]
-    return "".join(letters)
-
-
-def summarize_profile(scores: Dict[str, float]) -> Dict[str, object]:
-    stack = dominant_stack(scores)
-    mapped_type = derive_type_code(scores)
-    dominant = stack[0] if stack else ""
-    auxiliary = stack[1] if len(stack) > 1 else ""
-    dominant_labels = {
-        "Ni": "更擅长先抓主线、趋势和长期含义",
-        "Ne": "更容易从一个点发散出多条可能路线",
-        "Si": "更依赖亲身验证过的经验、节奏和稳定感",
-        "Se": "更容易直接感知当下并迅速进入行动",
-        "Ti": "更在意逻辑是否严密、自洽和说得通",
-        "Te": "更重视标准、效率、步骤和结果落地",
-        "Fi": "更在意是否符合自己真实认同的价值",
-        "Fe": "更关注关系气氛和对方是否能被好好接住",
-    }
-    auxiliary_labels = {
-        "Ni": "解释时先给主线，再落到执行。",
-        "Ne": "适合保留一点探索空间，不要一上来就封死选项。",
-        "Si": "先给稳定参照和可复用做法，会更容易进入状态。",
-        "Se": "多用具体例子和直接反馈，比抽象空谈更有效。",
-        "Ti": "结论后面最好补一层逻辑依据。",
-        "Te": "给到明确步骤、时点和可执行动作会更顺手。",
-        "Fi": "先确认个人感受和边界，再谈建议更容易被接受。",
-        "Fe": "先接住情绪和关系氛围，再推进问题更合适。",
-    }
-    summary_parts = []
-    if dominant:
-        summary_parts.append(f"主导功能偏 {dominant}，{dominant_labels.get(dominant, '')}".strip("，"))
-    if auxiliary:
-        summary_parts.append(auxiliary_labels.get(auxiliary, f"辅助功能偏 {auxiliary}。"))
-    summary_parts.append(f"兼容映射类型为 {mapped_type}。")
-    return {
-        "mapped_type_code": mapped_type,
-        "type_code": mapped_type,
-        "dominant_stack": stack,
-        "summary": " ".join(part for part in summary_parts if part).strip(),
-        "response_style": "先给主线判断，再补最小可执行步骤；避免一次灌太多信息。",
-        "care_style": "先承接情绪，再给一个轻量建议；最多追问一个关键问题。",
-    }
+def normalize_confidence(raw: Optional[Dict[str, object]]) -> Dict[str, float]:
+    confidence = empty_pair_confidence()
+    for key in SCORE_KEYS:
+        try:
+            confidence[key] = max(0.0, min(1.0, float((raw or {}).get(key, 0.0) or 0.0)))
+        except Exception:
+            confidence[key] = 0.0
+    return confidence
 
 
 def compute_dimension_confidence(
@@ -222,64 +65,205 @@ def compute_dimension_confidence(
     pair_evidence_counts: Optional[Dict[str, object]],
     effective_turn_count: int,
 ) -> Dict[str, float]:
-    evidence_counts = pair_evidence_counts or {}
-    confidence = empty_pair_confidence()
-    peak = max(max(abs(float(scores.get(key, 0.0))) for key in SCORE_KEYS), 1.0)
-    for key in SCORE_KEYS:
-        evidence = max(0, int(evidence_counts.get(key, 0) or 0))
-        score_strength = abs(float(scores.get(key, 0.0))) / peak
-        evidence_term = min(0.55, evidence * 0.12)
-        turn_term = min(0.18, max(0, effective_turn_count - 2) * 0.012)
-        confidence[key] = max(0.0, min(0.98, 0.08 + evidence_term + turn_term + score_strength * 0.25))
-    return confidence
+    del scores, pair_evidence_counts, effective_turn_count
+    return empty_pair_confidence()
 
 
-def select_next_pair(scores: Dict[str, float], asked_ids: List[str], confidence: Dict[str, float]) -> str:
-    asked = set(asked_ids)
-    available = [item for item in FUNCTION_BANK if str(item["id"]) not in asked]
-    if not available:
-        return min(SCORE_KEYS, key=lambda key: (float(confidence.get(key, 0.0)), -abs(float(scores.get(key, 0.0)))))
-    return min(
-        [str(item["pair"]) for item in available],
-        key=lambda key: (float(confidence.get(key, 0.0)), -abs(float(scores.get(key, 0.0)))),
-    )
+def derive_type_code(scores: Dict[str, float]) -> str:
+    del scores
+    return ""
+
+
+def build_initial_session(now_ms: int) -> Dict[str, object]:
+    return {
+        "status": "active",
+        "started_at_ms": int(now_ms),
+        "updated_at_ms": int(now_ms),
+        "completed_at_ms": None,
+        "turn_count": 0,
+        "effective_turn_count": 0,
+        "conversation_count": 0,
+        "scores": empty_score_map(),
+        "cognitive_scores": empty_score_map(),
+        "dimension_confidence": empty_pair_confidence(),
+        "function_confidence": empty_pair_confidence(),
+        "question_history": [],
+        "transcript_history": [],
+        "dialogue_turns": [],
+        "latest_question": "",
+        "latest_transcript": "",
+        "last_question_id": "",
+        "question_source": "ai_required",
+        "scoring_source": "pending",
+        "question_pair": "",
+        "current_focus": "",
+        "voice_mode": "idle",
+        "voice_session_active": False,
+        "assessment_ready": False,
+        "ai_required": True,
+        "blocking_reason": "",
+        "finish_reason": "",
+        "required_min_turns": 4,
+        "max_turns": 12,
+        "summary": "",
+        "interaction_preferences": [],
+        "decision_style": "",
+        "stress_response": "",
+        "comfort_preferences": [],
+        "avoid_patterns": [],
+        "care_guidance": "",
+        "confidence": 0.0,
+        "evidence_summary": {"highlights": [], "notes": ""},
+        "profile_preview": {},
+    }
+
+
+def _listify(value: object) -> List[str]:
+    if isinstance(value, list):
+        return [str(item).strip() for item in value if str(item).strip()]
+    if isinstance(value, str):
+        text = value.strip()
+        return [text] if text else []
+    return []
+
+
+def _merge_unique(left: List[str], right: List[str]) -> List[str]:
+    merged: List[str] = []
+    seen: set[str] = set()
+    for item in [*left, *right]:
+        normalized = str(item).strip()
+        if not normalized:
+            continue
+        key = normalized.casefold()
+        if key in seen:
+            continue
+        seen.add(key)
+        merged.append(normalized)
+    return merged
+
+
+def _normalize_profile_updates(raw: Optional[Dict[str, object]]) -> Dict[str, object]:
+    data = dict(raw or {})
+    normalized: Dict[str, object] = {}
+    for key in PROFILE_LIST_KEYS:
+        normalized[key] = _listify(data.get(key))
+    for key in PROFILE_TEXT_KEYS:
+        normalized[key] = str(data.get(key) or "").strip()
+    return normalized
+
+
+def _merge_profile_preview(base: Dict[str, object], updates: Dict[str, object]) -> Dict[str, object]:
+    merged = {
+        "summary": str(base.get("summary") or "").strip(),
+        "interaction_preferences": _listify(base.get("interaction_preferences")),
+        "decision_style": str(base.get("decision_style") or "").strip(),
+        "stress_response": str(base.get("stress_response") or "").strip(),
+        "comfort_preferences": _listify(base.get("comfort_preferences")),
+        "avoid_patterns": _listify(base.get("avoid_patterns")),
+        "care_guidance": str(base.get("care_guidance") or "").strip(),
+    }
+    normalized = _normalize_profile_updates(updates)
+    for key in PROFILE_LIST_KEYS:
+        merged[key] = _merge_unique(list(merged[key]), list(normalized.get(key) or []))
+    for key in PROFILE_TEXT_KEYS:
+        if str(normalized.get(key) or "").strip():
+            merged[key] = str(normalized.get(key) or "").strip()
+    return merged
+
+
+def _append_dialogue_turn(dialogue_turns: List[Dict[str, object]], role: str, text: str, timestamp_ms: int) -> List[Dict[str, object]]:
+    clean = str(text or "").strip()
+    if not clean:
+        return dialogue_turns
+    if dialogue_turns:
+        last = dialogue_turns[-1]
+        if str(last.get("role") or "") == role and str(last.get("text") or "").strip() == clean:
+            return dialogue_turns
+    next_turns = list(dialogue_turns)
+    next_turns.append({"role": role, "text": clean, "timestamp_ms": int(timestamp_ms)})
+    return next_turns[-40:]
+
+
+def extract_next_question_from_model(text: str) -> Dict[str, object]:
+    parsed = parse_json_dict(text)
+    question = str(parsed.get("question") or parsed.get("next_question") or "").strip()
+    focus = str(parsed.get("next_focus") or parsed.get("target_area") or parsed.get("target_function") or "").strip()
+    question_id = str(parsed.get("question_id") or parsed.get("id") or f"dialogue-{abs(hash(question or text)) % 100000}").strip()
+    if not question:
+        return {}
+    return {
+        "id": question_id or "dialogue-next",
+        "prompt": question,
+        "pair": focus,
+        "focus": focus,
+        "rationale": str(parsed.get("rationale") or "").strip(),
+    }
+
+
+def extract_scoring_from_model(text: str) -> Dict[str, object]:
+    parsed = parse_json_dict(text)
+    updates = _normalize_profile_updates(parsed.get("profile_updates") if isinstance(parsed.get("profile_updates"), dict) else parsed)
+    evidence = _listify(parsed.get("evidence_summary") or parsed.get("evidence"))
+    try:
+        confidence = max(0.0, min(1.0, float(parsed.get("confidence", 0.0) or 0.0)))
+    except Exception:
+        confidence = 0.0
+    return {
+        "effective": bool(parsed.get("effective", True)),
+        "profile_updates": updates,
+        "evidence_summary": evidence[:6],
+        "reasoning": str(parsed.get("reasoning") or "").strip(),
+        "next_focus": str(parsed.get("next_focus") or parsed.get("missing_area") or "").strip(),
+        "stable_enough": bool(parsed.get("stable_enough", False)),
+        "confidence": confidence,
+        "summary_hint": str(parsed.get("summary_hint") or "").strip(),
+    }
+
+
+def extract_termination_from_model(text: str) -> Dict[str, object]:
+    parsed = parse_json_dict(text)
+    try:
+        confidence = max(0.0, min(1.0, float(parsed.get("confidence", 0.0) or 0.0)))
+    except Exception:
+        confidence = 0.0
+    return {
+        "should_finish": bool(parsed.get("should_finish", False)),
+        "reason": str(parsed.get("reason") or "").strip() or "need_more_signal",
+        "missing_area": str(parsed.get("missing_area") or parsed.get("missing_function") or "").strip(),
+        "confidence": confidence,
+    }
 
 
 def select_next_question(scores: Dict[str, float], asked_ids: List[str], confidence: Dict[str, float]) -> Dict[str, object]:
-    target = select_next_pair(scores, asked_ids, confidence)
-    for item in FUNCTION_BANK:
-        if str(item["pair"]) == target and str(item["id"]) not in set(asked_ids):
-            return item
-    for item in FUNCTION_BANK:
-        if str(item["pair"]) == target:
-            return item
-    return FUNCTION_BANK[0]
+    del scores, asked_ids, confidence
+    return {}
 
 
 def score_answer_heuristic(question: Dict[str, object], answer: str) -> Dict[str, object]:
+    del question, answer
     return {
-        "scores_delta": empty_score_map(),
-        "function_confidence_delta": empty_pair_confidence(),
-        "pair": str(question.get("pair") or ""),
-        "target_function": str(question.get("pair") or ""),
-        "evidence_tags": [],
         "effective": False,
+        "profile_updates": {},
+        "evidence_summary": [],
         "reasoning": "heuristic_disabled",
-        "next_gap": str(question.get("pair") or ""),
+        "next_focus": "",
+        "stable_enough": False,
+        "confidence": 0.0,
+        "summary_hint": "",
     }
 
 
 def should_finish(session: Dict[str, object]) -> Tuple[bool, str]:
     effective_turn_count = int(session.get("effective_turn_count", 0) or 0)
-    max_turns = int(session.get("max_turns", 28) or 28)
-    min_turns = int(session.get("required_min_turns", 12) or 12)
-    confidence = normalize_confidence(session.get("function_confidence") or session.get("dimension_confidence"))
+    min_turns = int(session.get("required_min_turns", 4) or 4)
+    max_turns = int(session.get("max_turns", 12) or 12)
+    confidence = float(session.get("confidence") or 0.0)
     if effective_turn_count < min_turns:
         return False, "min_turns"
-    if min(confidence.values() or [0.0]) >= 0.72:
-        return True, "function_confidence_met"
+    if bool(session.get("assessment_ready")) or confidence >= 0.82:
+        return True, "stable_enough"
     if effective_turn_count >= max_turns:
-        return False, "insufficient_signal_at_cap"
+        return False, "needs_follow_up"
     return False, "need_more_signal"
 
 
@@ -290,204 +274,133 @@ def merge_scoring(
     scoring: Dict[str, object],
     now_ms: int,
 ) -> Dict[str, object]:
-    scores = normalize_scores(session.get("scores") or session.get("cognitive_scores"))
-    delta_scores = normalize_scores(scoring.get("scores_delta") or scoring.get("cognitive_scores"))
-    for key in SCORE_KEYS:
-        scores[key] = round(scores[key] + float(delta_scores.get(key, 0.0)), 4)
-
-    evidence_counts = dict(session.get("pair_evidence_counts") or {})
-    target_function = str(scoring.get("target_function") or scoring.get("pair") or question.get("pair") or "")
-    if scoring.get("effective") and target_function in SCORE_KEYS:
-        evidence_counts[target_function] = int(evidence_counts.get(target_function, 0) or 0) + 1
-
-    function_confidence = compute_dimension_confidence(
-        scores,
-        evidence_counts,
-        int(session.get("effective_turn_count", 0) or 0) + (1 if scoring.get("effective") else 0),
-    )
-    previous_confidence = normalize_confidence(session.get("function_confidence") or session.get("dimension_confidence"))
-    manual_confidence = normalize_confidence(scoring.get("function_confidence_delta"))
-    for key in SCORE_KEYS:
-        if float(manual_confidence.get(key, 0.0)) > 0:
-            function_confidence[key] = min(
-                0.98,
-                max(function_confidence[key], float(previous_confidence.get(key, 0.0)) + float(manual_confidence[key])),
-            )
-        else:
-            function_confidence[key] = max(function_confidence[key], float(previous_confidence.get(key, 0.0)))
-
-    evidence_summary = [str(item) for item in session.get("evidence_summary") or [] if str(item).strip()]
-    for item in scoring.get("evidence_tags") or []:
-        text = str(item).strip()
-        if text and text not in evidence_summary:
-            evidence_summary.append(text)
-
-    asked_ids = [str(item) for item in session.get("asked_question_ids") or [] if str(item).strip()]
-    question_id = str(question.get("id") or "")
-    if question_id and question_id not in asked_ids:
-        asked_ids.append(question_id)
-
-    question_history = [dict(item) for item in session.get("question_history") or [] if isinstance(item, dict)]
-    question_history.append(
-        {
-            "question_id": question_id,
-            "question": str(question.get("prompt") or ""),
-            "answer": str(answer or "").strip(),
-            "target_function": target_function,
-            "timestamp_ms": int(now_ms),
-        }
-    )
-    transcript_history = [dict(item) for item in session.get("transcript_history") or [] if isinstance(item, dict)]
-    transcript_history.append({"role": "user", "text": str(answer or "").strip(), "timestamp_ms": int(now_ms)})
-
-    preview = summarize_profile(scores)
-    done, reason = should_finish(
-        {
-            **session,
-            "scores": scores,
-            "function_confidence": function_confidence,
-            "effective_turn_count": int(session.get("effective_turn_count", 0) or 0) + (1 if scoring.get("effective") else 0),
-            "required_min_turns": int(session.get("required_min_turns", 12) or 12),
-            "max_turns": int(session.get("max_turns", 28) or 28),
-        }
-    )
     merged = dict(session)
-    merged.update(
+    merged["updated_at_ms"] = int(now_ms)
+    merged["turn_count"] = int(session.get("turn_count", 0) or 0) + 1
+    merged["effective_turn_count"] = int(session.get("effective_turn_count", 0) or 0) + (1 if scoring.get("effective") else 0)
+    merged["conversation_count"] = int(merged["effective_turn_count"])
+    merged["latest_transcript"] = str(answer or "").strip()
+    merged["transcript_history"] = [
+        *[dict(item) for item in session.get("transcript_history") or [] if isinstance(item, dict)],
+        {"role": "user", "text": str(answer or "").strip(), "timestamp_ms": int(now_ms)},
+    ][-40:]
+    merged["question_history"] = [
+        *[dict(item) for item in session.get("question_history") or [] if isinstance(item, dict)],
         {
-            "updated_at_ms": int(now_ms),
-            "turn_count": int(session.get("turn_count", 0) or 0) + 1,
-            "effective_turn_count": int(session.get("effective_turn_count", 0) or 0) + (1 if scoring.get("effective") else 0),
-            "scores": scores,
-            "cognitive_scores": scores,
-            "dimension_confidence": function_confidence,
-            "function_confidence": function_confidence,
-            "pair_evidence_counts": evidence_counts,
-            "asked_question_ids": asked_ids,
-            "question_history": question_history[-40:],
-            "transcript_history": transcript_history[-40:],
-            "evidence_summary": evidence_summary[-24:],
-            "latest_transcript": str(answer or "").strip(),
-            "type_code": str(preview.get("mapped_type_code") or ""),
-            "mapped_type_code": str(preview.get("mapped_type_code") or ""),
-            "dominant_stack": list(preview.get("dominant_stack") or []),
-            "profile_preview": preview,
-            "assessment_ready": done and reason == "function_confidence_met",
-            "finish_reason": reason,
-            "blocking_reason": "",
-        }
+            "question_id": str(question.get("id") or "").strip(),
+            "question": str(question.get("prompt") or "").strip(),
+            "answer": str(answer or "").strip(),
+            "timestamp_ms": int(now_ms),
+        },
+    ][-40:]
+    dialogue_turns = [dict(item) for item in session.get("dialogue_turns") or [] if isinstance(item, dict)]
+    dialogue_turns = _append_dialogue_turn(
+        dialogue_turns,
+        "assistant",
+        str(question.get("prompt") or "").strip(),
+        int(now_ms),
     )
+    dialogue_turns = _append_dialogue_turn(
+        dialogue_turns,
+        "user",
+        str(answer or "").strip(),
+        int(now_ms),
+    )
+    merged["dialogue_turns"] = dialogue_turns
+    preview = _merge_profile_preview(
+        dict(session.get("profile_preview") or {}),
+        dict(scoring.get("profile_updates") or {}),
+    )
+    if not str(preview.get("summary") or "").strip():
+        preview["summary"] = str(scoring.get("summary_hint") or "").strip()
+    merged["profile_preview"] = preview
+    merged["summary"] = str(preview.get("summary") or "").strip()
+    merged["interaction_preferences"] = _listify(preview.get("interaction_preferences"))
+    merged["decision_style"] = str(preview.get("decision_style") or "").strip()
+    merged["stress_response"] = str(preview.get("stress_response") or "").strip()
+    merged["comfort_preferences"] = _listify(preview.get("comfort_preferences"))
+    merged["avoid_patterns"] = _listify(preview.get("avoid_patterns"))
+    merged["care_guidance"] = str(preview.get("care_guidance") or "").strip()
+    merged["response_style"] = merged["decision_style"]
+    merged["care_style"] = merged["care_guidance"]
+    merged["confidence"] = max(float(session.get("confidence") or 0.0), float(scoring.get("confidence") or 0.0))
+    highlights = _merge_unique(
+        _listify((session.get("evidence_summary") or {}).get("highlights") if isinstance(session.get("evidence_summary"), dict) else session.get("evidence_summary")),
+        _listify(scoring.get("evidence_summary")),
+    )
+    merged["evidence_summary"] = {
+        "highlights": highlights[:8],
+        "notes": str(scoring.get("reasoning") or "").strip() or str(preview.get("summary") or "").strip(),
+    }
+    merged["current_focus"] = str(scoring.get("next_focus") or session.get("current_focus") or "").strip()
+    merged["assessment_ready"] = bool(scoring.get("stable_enough")) and int(merged["effective_turn_count"]) >= int(
+        session.get("required_min_turns", 4) or 4
+    )
+    merged["finish_reason"] = "stable_enough" if merged["assessment_ready"] else ""
+    merged["blocking_reason"] = ""
+    merged["question_source"] = "ai"
+    merged["scoring_source"] = "ai"
+    merged["ai_required"] = True
+    merged["type_code"] = ""
+    merged["mapped_type_code"] = ""
+    merged["dominant_stack"] = []
     return merged
 
 
 def build_final_profile(session: Dict[str, object]) -> Dict[str, object]:
-    scores = normalize_scores(session.get("scores") or session.get("cognitive_scores"))
-    function_confidence = normalize_confidence(session.get("function_confidence") or session.get("dimension_confidence"))
-    preview = summarize_profile(scores)
-    evidence_items = [str(item) for item in session.get("evidence_summary") or [] if str(item).strip()]
-    completion_reason = str(session.get("finish_reason") or "")
-    ready, computed_reason = should_finish(session)
-    min_turns = int(session.get("required_min_turns", 12) or 12)
-    effective_turn_count = int(session.get("effective_turn_count", 0) or 0)
-    assessment_ready = bool(session.get("assessment_ready")) or ready
-    if not completion_reason:
-        completion_reason = computed_reason
-    if not assessment_ready and completion_reason == "function_confidence_met" and effective_turn_count >= min_turns:
-        assessment_ready = True
-    return {
-        "cognitive_scores": {key: round(float(scores.get(key, 0.0)), 3) for key in SCORE_KEYS},
-        "scores": {key: round(float(scores.get(key, 0.0)), 3) for key in SCORE_KEYS},
-        "function_confidence": {key: round(float(function_confidence.get(key, 0.0)), 3) for key in SCORE_KEYS},
-        "dimension_confidence": {key: round(float(function_confidence.get(key, 0.0)), 3) for key in SCORE_KEYS},
-        "dominant_stack": list(preview.get("dominant_stack") or []),
-        "mapped_type_code": str(preview.get("mapped_type_code") or derive_type_code(scores)),
-        "type_code": str(preview.get("mapped_type_code") or derive_type_code(scores)),
-        "evidence_summary": {
-            "highlights": evidence_items[:8],
-            "notes": str(preview.get("summary") or ""),
+    preview = _merge_profile_preview(
+        {
+            "summary": str(session.get("summary") or "").strip(),
+            "interaction_preferences": session.get("interaction_preferences") or [],
+            "decision_style": str(session.get("decision_style") or "").strip(),
+            "stress_response": str(session.get("stress_response") or "").strip(),
+            "comfort_preferences": session.get("comfort_preferences") or [],
+            "avoid_patterns": session.get("avoid_patterns") or [],
+            "care_guidance": str(session.get("care_guidance") or "").strip(),
         },
+        dict(session.get("profile_preview") or {}),
+    )
+    ready, reason = should_finish(session)
+    confidence = max(float(session.get("confidence") or 0.0), 0.35 if ready else 0.0)
+    return {
+        "summary": str(preview.get("summary") or "").strip(),
+        "interaction_preferences": _listify(preview.get("interaction_preferences")),
+        "decision_style": str(preview.get("decision_style") or "").strip(),
+        "stress_response": str(preview.get("stress_response") or "").strip(),
+        "comfort_preferences": _listify(preview.get("comfort_preferences")),
+        "avoid_patterns": _listify(preview.get("avoid_patterns")),
+        "care_guidance": str(preview.get("care_guidance") or "").strip(),
+        "confidence": round(confidence, 3),
         "conversation_count": int(session.get("effective_turn_count", 0) or 0),
-        "completed_at_ms": int(session.get("completed_at_ms", 0) or 0),
-        "response_style": str(preview.get("response_style") or ""),
-        "care_style": str(preview.get("care_style") or ""),
-        "summary": str(preview.get("summary") or ""),
-        "completion_reason": completion_reason,
-        "assessment_ready": bool(assessment_ready and completion_reason != "insufficient_signal_at_cap"),
+        "completed_at_ms": int(session.get("completed_at_ms") or 0) or None,
+        "response_style": str(preview.get("decision_style") or "").strip(),
+        "care_style": str(preview.get("care_guidance") or "").strip(),
+        "evidence_summary": session.get("evidence_summary") if isinstance(session.get("evidence_summary"), dict) else {"highlights": [], "notes": ""},
+        "completion_reason": str(session.get("finish_reason") or reason or "").strip(),
+        "assessment_ready": bool(ready or session.get("assessment_ready")),
         "ai_required": True,
-        "inference_version": "assessment-v2-jung8",
+        "inference_version": "activation-dialogue-v5",
+        "type_code": "",
+        "mapped_type_code": "",
+        "cognitive_scores": empty_score_map(),
+        "scores": empty_score_map(),
+        "function_confidence": empty_pair_confidence(),
+        "dimension_confidence": empty_pair_confidence(),
+        "dominant_stack": [],
     }
 
 
 def build_memory_summary(profile: Dict[str, object], preferred_name: str = "") -> str:
-    scores = normalize_scores(profile.get("cognitive_scores") or profile.get("scores"))
-    confidence = normalize_confidence(profile.get("function_confidence") or profile.get("dimension_confidence"))
-    stack = [str(item) for item in profile.get("dominant_stack") or [] if str(item).strip()]
-    person = preferred_name or "该用户"
-    machine_line = " | ".join(
-        [
-            f"mapped_type={str(profile.get('mapped_type_code') or profile.get('type_code') or '').strip()}",
-            "functions=" + ",".join(f"{key}:{scores[key]:.2f}" for key in SCORE_KEYS),
-            "confidence=" + ",".join(f"{key}:{confidence[key]:.2f}" for key in SCORE_KEYS),
-            "stack=" + ",".join(stack),
-        ]
-    )
-    ai_line = (
-        f"{person} 的互动风格摘要：主导功能偏 {stack[0] if stack else 'unknown'}，"
-        f"兼容类型 {str(profile.get('mapped_type_code') or '').strip()}；"
-        f"后续陪伴时先给主线和一条可执行建议，再根据情绪承接程度继续追问。"
-    )
-    return f"[psychometric_index]\n{machine_line}\n[companion_hint]\n{ai_line}"
-
-
-def extract_scoring_from_model(raw: str) -> Dict[str, object]:
-    parsed = parse_json_dict(raw)
-    if not parsed:
-        return {}
-    score_payload = parsed.get("cognitive_scores")
-    if not isinstance(score_payload, dict):
-        score_payload = parsed.get("scores_delta")
-    confidence_payload = parsed.get("function_confidence")
-    if not isinstance(confidence_payload, dict):
-        confidence_payload = parsed.get("function_confidence_delta")
-    target_function = str(parsed.get("target_function") or parsed.get("pair") or "").strip()
-    if target_function not in SCORE_KEYS:
-        target_function = ""
-    evidence_tags = []
-    for item in parsed.get("evidence_summary") or parsed.get("evidence_tags") or []:
-        text = str(item).strip()
-        if text:
-            evidence_tags.append(text)
-    return {
-        "scores_delta": normalize_scores(score_payload),
-        "function_confidence_delta": normalize_confidence(confidence_payload),
-        "pair": target_function,
-        "target_function": target_function,
-        "evidence_tags": evidence_tags[:4],
-        "effective": bool(parsed.get("effective", True)),
-        "reasoning": str(parsed.get("reasoning") or "").strip(),
-        "next_gap": str(parsed.get("next_gap") or "").strip(),
-    }
-
-
-def extract_next_question_from_model(raw: str) -> Dict[str, object]:
-    parsed = parse_json_dict(raw)
-    question = str(parsed.get("question") or "").strip()
-    target_function = str(parsed.get("target_function") or parsed.get("pair") or "").strip()
-    if target_function not in SCORE_KEYS or not question:
-        return {}
-    return {
-        "id": str(parsed.get("question_id") or f"model-{target_function.lower()}-{abs(hash(question)) % 100000}"),
-        "pair": target_function,
-        "prompt": question,
-    }
-
-
-def extract_termination_from_model(raw: str) -> Dict[str, object]:
-    parsed = parse_json_dict(raw)
-    missing_function = str(parsed.get("missing_function") or parsed.get("missing_pair") or "").strip()
-    if missing_function not in SCORE_KEYS:
-        missing_function = ""
-    return {
-        "should_finish": bool(parsed.get("should_finish", False)),
-        "reason": str(parsed.get("reason") or parsed.get("completion_reason") or "").strip(),
-        "missing_pair": missing_function,
-    }
+    lines = [
+        f"name={str(preferred_name or '').strip()}",
+        f"summary={str(profile.get('summary') or '').strip()}",
+        f"interaction_preferences={json.dumps(_listify(profile.get('interaction_preferences')), ensure_ascii=False)}",
+        f"decision_style={str(profile.get('decision_style') or '').strip()}",
+        f"stress_response={str(profile.get('stress_response') or '').strip()}",
+        f"comfort_preferences={json.dumps(_listify(profile.get('comfort_preferences')), ensure_ascii=False)}",
+        f"avoid_patterns={json.dumps(_listify(profile.get('avoid_patterns')), ensure_ascii=False)}",
+        f"care_guidance={str(profile.get('care_guidance') or '').strip()}",
+        f"confidence={float(profile.get('confidence') or 0.0):.2f}",
+        "source=activation_dialogue",
+    ]
+    return "\n".join(lines)

@@ -41,11 +41,11 @@ def _bootstrap_configured_user(tmp_path, monkeypatch):
                 "owner",
                 "primary_user",
                 "",
-                "京亮是机器人的主人。",
+                "京亮是当前机器人的主人。",
                 "",
-                "我叫京亮。",
+                "我是京亮。",
                 "{}",
-                "activation-ai-only-v2",
+                "activation-dialogue-v4",
                 now_ms,
                 now_ms,
                 now_ms,
@@ -77,10 +77,11 @@ def test_assessment_blocks_when_ai_unavailable(tmp_path, monkeypatch):
         payload = response.json()
         assert payload["status"] == "blocked"
         assert payload["assessment_ready"] is False
+        assert payload["question_source"] == "ai_required"
         assert "gateway" in payload["blocking_reason"]
 
 
-def test_assessment_ai_flow_persists_jung8_profile_and_memory(tmp_path, monkeypatch):
+def test_assessment_ai_flow_persists_dialogue_profile_and_memory(tmp_path, monkeypatch):
     headers, workspace_dir = _bootstrap_configured_user(tmp_path, monkeypatch)
     monkeypatch.setattr(
         main.assistant_service,
@@ -93,101 +94,124 @@ def test_assessment_ai_flow_persists_jung8_profile_and_memory(tmp_path, monkeypa
         },
     )
 
-    turn_state = {"count": 0}
+    state = {"count": 0}
+    questions = [
+        "你在被提醒做事时，更喜欢对方直接一点还是先给你缓冲？",
+        "当你压力上来时，你通常会先沉默、先整理，还是想立刻说出来？",
+        "别人安抚你时，什么方式最容易让你真正放松下来？",
+        "如果有人连续打断你，你更容易烦躁、退开，还是继续配合？",
+    ]
 
     async def fake_send_message(session_key: str, text: str) -> str:
         if ":assessment:conductor:" in session_key:
+            index = min(state["count"], len(questions) - 1)
             return json.dumps(
                 {
-                    "question_id": f"ni-q-{turn_state['count']}",
-                    "target_function": "Ni",
-                    "question": "面对复杂事情时，你会先抓主线和长期趋势，还是先看眼前细节？",
+                    "question_id": f"care-q-{index + 1}",
+                    "target_area": "care_style",
+                    "question": questions[index],
+                    "rationale": "补足被关怀和被提醒场景下的稳定反应。",
                 },
                 ensure_ascii=False,
             )
         if ":assessment:scorer:" in session_key:
-            turn_state["count"] += 1
+            state["count"] += 1
             return json.dumps(
                 {
-                    "target_function": "Ni",
-                    "cognitive_scores": {
-                        "Se": 0.1,
-                        "Si": 0.0,
-                        "Ne": 0.6,
-                        "Ni": 1.4,
-                        "Te": 0.9,
-                        "Ti": 0.8,
-                        "Fe": 0.2,
-                        "Fi": 0.4,
-                    },
-                    "function_confidence": {
-                        "Se": 0.05,
-                        "Si": 0.02,
-                        "Ne": 0.18,
-                        "Ni": 0.24,
-                        "Te": 0.18,
-                        "Ti": 0.16,
-                        "Fe": 0.05,
-                        "Fi": 0.08,
-                    },
                     "effective": True,
-                    "evidence_summary": [f"ni-evidence-{turn_state['count']}"],
-                    "reasoning": "clear long-range and structured signal",
-                    "next_gap": "Fi",
+                    "profile_updates": {
+                        "summary": "对提醒和安抚方式较敏感，更偏好先被理解、再给具体建议。",
+                        "interaction_preferences": ["先共情再建议", "提醒前给缓冲"],
+                        "decision_style": "遇事先判断主次，再决定是否马上执行。",
+                        "stress_response": "压力上来时会先收一收，不喜欢被连续追问。",
+                        "comfort_preferences": ["语气放缓", "先确认感受", "建议要具体"],
+                        "avoid_patterns": ["连续催促", "高压命令式提醒"],
+                        "care_guidance": "主动关怀时先确认状态，再给一条最小可执行建议。",
+                    },
+                    "evidence_summary": [f"evidence-{state['count']}"],
+                    "reasoning": "已获得一条稳定偏好信号。",
+                    "next_focus": "stress_response",
+                    "stable_enough": state["count"] >= 4,
+                    "confidence": 0.88 if state["count"] >= 4 else 0.45,
+                    "summary_hint": "倾向先被理解，再接受具体建议。",
                 },
                 ensure_ascii=False,
             )
         if ":assessment:terminator:" in session_key:
             return json.dumps(
                 {
-                    "should_finish": turn_state["count"] >= 12,
-                    "reason": "function_confidence_met" if turn_state["count"] >= 12 else "need_more_signal",
-                    "missing_function": "" if turn_state["count"] >= 12 else "Fi",
+                    "should_finish": state["count"] >= 4,
+                    "reason": "stable_dialogue_profile" if state["count"] >= 4 else "need_more_signal",
+                    "missing_area": "" if state["count"] >= 4 else "comfort_preferences",
+                    "confidence": 0.9 if state["count"] >= 4 else 0.52,
                 },
                 ensure_ascii=False,
             )
         if ":assessment:memory:" in session_key:
             return json.dumps(
                 {
-                    "memory_title": "psychometric_profile",
-                    "machine_readable": "mapped_type=INTJ | functions=Ni:16.8,Te:10.8,Ti:9.6,Ne:7.2,Fi:4.8,Se:1.2,Fe:2.4,Si:0.0 | stack=Ni,Te,Ti,Ne",
-                    "ai_readable": "后续互动先给主线判断，再补一条可执行步骤；先讲逻辑，再轻量承接情绪。",
+                    "memory_title": "activation_dialogue_profile",
+                    "machine_readable": "name=京亮 | preference_profile=先共情再建议,提醒前给缓冲 | response_profile=压力时先收一收 | source=activation_dialogue",
+                    "ai_readable": "后续陪伴时先缓和接住情绪，再给一条可执行建议，避免连续催促。",
                 },
                 ensure_ascii=False,
             )
-        return "{}"
+        raise AssertionError(f"unexpected session key: {session_key}")
 
     monkeypatch.setattr(main.assistant_service.gateway, "send_message", fake_send_message)
 
     with TestClient(main.app) as client:
-        started = client.post("/api/activation/assessment/start", headers=headers, json={"surface": "desktop", "voice_mode": "text"})
+        started = client.post(
+            "/api/activation/assessment/start",
+            headers=headers,
+            json={"surface": "desktop", "voice_mode": "text", "reset": True},
+        )
         assert started.status_code == 200
-        assert started.json()["question_source"] == "ai"
+        start_payload = started.json()
+        assert start_payload["status"] == "active"
+        assert start_payload["question_source"] == "ai"
+        assert start_payload["latest_question"] == questions[0]
+        assert start_payload["dialogue_turns"] == []
 
-        for index in range(12):
+        latest = start_payload
+        for index in range(4):
             response = client.post(
                 "/api/activation/assessment/turn",
                 headers=headers,
-                json={"answer": f"第 {index + 1} 轮回答：我会先抓主线，再按逻辑拆步骤。", "surface": "desktop"},
+                json={
+                    "answer": f"第 {index + 1} 轮回答：我更喜欢先被理解，再听具体建议。",
+                    "surface": "desktop",
+                    "voice_mode": "text",
+                },
             )
             assert response.status_code == 200
+            latest = response.json()
+            if index == 0:
+                roles = [item["role"] for item in latest["dialogue_turns"]]
+                assert roles == ["assistant", "user"]
+                assert latest["latest_question"] == questions[1]
 
-        payload = response.json()
-        assert payload["status"] == "completed"
-        assert payload["assessment_ready"] is True
-        assert payload["mapped_type_code"] == "INTJ"
-        assert payload["dominant_stack"][:2] == ["Ni", "Te"]
-        assert payload["cognitive_scores"]["Ni"] > payload["cognitive_scores"]["Se"]
-        assert payload["function_confidence"]["Ni"] >= 0.72
+        assert latest["status"] == "completed"
+        assert latest["assessment_ready"] is True
+        assert latest["summary"]
+        assert latest["interaction_preferences"] == ["先共情再建议", "提醒前给缓冲"]
+        assert latest["decision_style"] == "遇事先判断主次，再决定是否马上执行。"
+        assert latest["stress_response"] == "压力上来时会先收一收，不喜欢被连续追问。"
+        assert latest["comfort_preferences"] == ["语气放缓", "先确认感受", "建议要具体"]
+        assert latest["avoid_patterns"] == ["连续催促", "高压命令式提醒"]
+        assert latest["care_guidance"] == "主动关怀时先确认状态，再给一条最小可执行建议。"
+        assert latest["conversation_count"] == 4
+        assert latest["latest_question"] == ""
+        assert latest["dialogue_turns"][-1]["role"] == "user"
 
-        finish = client.post("/api/activation/assessment/finish", headers=headers, json={})
-        assert finish.status_code == 200
-        finish_payload = finish.json()
-        assert finish_payload["assessment_ready"] is True
-        assert finish_payload["mapped_type_code"] == "INTJ"
+        state_response = client.get("/api/activation/assessment/state", headers=headers)
+        assert state_response.status_code == 200
+        state_payload = state_response.json()
+        assert state_payload["assessment_ready"] is True
+        assert state_payload["summary"] == latest["summary"]
 
     memory_path = workspace_dir / "assistant_data" / "users" / "1" / "memory.md"
     text = memory_path.read_text(encoding="utf-8")
-    assert "mapped_type=INTJ" in text
-    assert "先给主线判断" in text
+    assert "source=activation_dialogue" in text
+    assert "后续陪伴时先缓和接住情绪" in text
     assert "第 1 轮回答" not in text

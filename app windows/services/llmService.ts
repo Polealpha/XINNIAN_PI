@@ -19,16 +19,16 @@ interface AssistantRequestOptions {
   errorFallbackText?: string;
 }
 
-const ASSISTANT_FALLBACK_TEXT = "我在。你可以继续说下去，我会接着这一句往下帮你分析。";
-const ASSISTANT_ERROR_FALLBACK_TEXT = "刚刚这一句没有顺利发出去。你可以再说一次，我继续接。";
-const CARE_FALLBACK_TEXT = "我在这里陪着你。如果你愿意，可以继续告诉我现在最卡的是哪一点。";
-const CARE_ERROR_FALLBACK_TEXT = "我在，先慢一点。你可以先说一句最想解决的事，我们一步一步来。";
+const ASSISTANT_FALLBACK_TEXT = "OpenClaw 当前没有返回有效内容。";
+const ASSISTANT_ERROR_FALLBACK_TEXT = "OpenClaw 当前未连接，暂时无法生成真实回答。";
+const CARE_FALLBACK_TEXT = "OpenClaw 当前没有返回有效的主动关怀内容。";
+const CARE_ERROR_FALLBACK_TEXT = "OpenClaw 当前未连接，暂时无法生成真实主动关怀回答。";
 
 const buildAssistantUnavailableText = (error: unknown, mode: "chat" | "proactive_care") => {
   const detail = String((error as Error)?.message || "").trim();
   const core = detail || "本地 OpenClaw / 助手运行时未就绪";
   if (mode === "proactive_care") {
-    return `OpenClaw 当前未连接，这不是 AI 的真实回答。请先恢复本地助手运行时。详情：${core}`;
+    return `OpenClaw 当前未连接，这不是 AI 的真实主动关怀回复。详情：${core}`;
   }
   return `OpenClaw 当前未连接，无法生成真实回答。详情：${core}`;
 };
@@ -94,14 +94,20 @@ export const generateAssistantMessage = async (
       ),
       true
     );
-    return response.text || fallbackText;
+    return String(response?.text || "").trim() || fallbackText;
   } catch (error) {
     console.error("Assistant request error:", error);
     const message = String((error as Error)?.message || "");
-    if (message.includes("/api/assistant/send") || message.includes("OpenClaw")) {
+    if (
+      message.includes("/api/assistant/send") ||
+      message.includes("OpenClaw") ||
+      message.includes("Failed to fetch") ||
+      message.includes("NetworkError") ||
+      message.includes("fetch")
+    ) {
       return buildAssistantUnavailableText(error, mode);
     }
-    return errorFallbackText;
+    return buildAssistantUnavailableText(error, mode) || errorFallbackText;
   }
 };
 
@@ -224,9 +230,9 @@ export const generateDailySummary = async (events: EmotionEvent[]): Promise<stri
       })),
     };
     const response = await apiPost("/api/llm/daily_summary", payload, true);
-    return response.summary || "今天辛苦了，记得给自己一点休息时间。";
+    return response.summary || "今天的数据摘要暂时还没生成出来。";
   } catch (error) {
     console.error("LLM API Error:", error);
-    return "今天的数据同步有波动，但我一直在。晚点也可以再一起复盘。";
+    return "今日摘要暂时不可用，稍后可以再试一次。";
   }
 };

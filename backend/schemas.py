@@ -568,26 +568,10 @@ class ActivationRuntimeStatusResponse(BaseModel):
     preferred_device_id: str = ""
 
 
-class CognitiveFunctionScores(BaseModel):
-    Se: float = 0.0
-    Si: float = 0.0
-    Ne: float = 0.0
-    Ni: float = 0.0
-    Te: float = 0.0
-    Ti: float = 0.0
-    Fe: float = 0.0
-    Fi: float = 0.0
-
-
-class CognitiveFunctionConfidence(BaseModel):
-    Se: float = 0.0
-    Si: float = 0.0
-    Ne: float = 0.0
-    Ni: float = 0.0
-    Te: float = 0.0
-    Ti: float = 0.0
-    Fe: float = 0.0
-    Fi: float = 0.0
+class ActivationDialogueTurn(BaseModel):
+    role: str
+    text: str
+    timestamp_ms: Optional[int] = None
 
 
 class PsychometricEvidenceSummary(BaseModel):
@@ -630,34 +614,35 @@ class ActivationAssessmentStateResponse(BaseModel):
     completed_at_ms: Optional[int] = None
     turn_count: int = 0
     effective_turn_count: int = 0
+    conversation_count: int = 0
     latest_question: str = ""
     latest_transcript: str = ""
     last_question_id: str = ""
-    type_code: str = ""
-    mapped_type_code: str = ""
-    cognitive_scores: CognitiveFunctionScores = Field(default_factory=CognitiveFunctionScores)
-    function_confidence: CognitiveFunctionConfidence = Field(default_factory=CognitiveFunctionConfidence)
     evidence_summary: PsychometricEvidenceSummary = Field(default_factory=PsychometricEvidenceSummary)
-    dominant_stack: list[str] = Field(default_factory=list)
-    conversation_count: int = 0
     finish_reason: str = ""
     voice_mode: str = "idle"
     voice_session_active: bool = False
     device_online: bool = False
     summary: str = ""
-    response_style: str = ""
-    care_style: str = ""
-    inference_version: str = "assessment-v1"
-    required_min_turns: int = 12
-    max_turns: int = 28
+    inference_version: str = "activation-dialogue-v4"
+    required_min_turns: int = 4
+    max_turns: int = 12
     question_source: str = "ai_required"
     scoring_source: str = "pending"
-    question_pair: str = ""
+    current_focus: str = ""
     mode_hint: str = ""
     can_submit_text: bool = True
     assessment_ready: bool = False
     ai_required: bool = True
     blocking_reason: str = ""
+    dialogue_turns: list[ActivationDialogueTurn] = Field(default_factory=list)
+    interaction_preferences: list[str] = Field(default_factory=list)
+    decision_style: str = ""
+    stress_response: str = ""
+    comfort_preferences: list[str] = Field(default_factory=list)
+    avoid_patterns: list[str] = Field(default_factory=list)
+    care_guidance: str = ""
+    confidence: float = 0.0
 
 
 class ActivationAssessmentTurnResponse(ActivationAssessmentStateResponse):

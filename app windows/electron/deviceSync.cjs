@@ -2,6 +2,7 @@ const os = require("os");
 const path = require("path");
 const fs = require("fs");
 const { spawn, spawnSync, execFile } = require("child_process");
+const { app } = require("electron");
 
 const DEFAULT_API_BASE = "http://39.97.33.236:8000";
 const POLL_INTERVAL_MS = 15000;
@@ -20,7 +21,7 @@ const resolveRuntimeRoot = () => {
   if (process.env.EMOTION_BRIDGE_ROOT) {
     return process.env.EMOTION_BRIDGE_ROOT;
   }
-  if (process.env.NODE_ENV !== "production" && !process.resourcesPath.includes("app.asar")) {
+  if (!app.isPackaged) {
     return path.resolve(__dirname, "..", "..");
   }
   return path.join(process.resourcesPath, "bridge-runtime");

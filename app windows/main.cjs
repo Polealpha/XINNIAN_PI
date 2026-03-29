@@ -28,7 +28,7 @@ const resolveRuntimeRoot = () => {
   if (process.env.EMOTION_BRIDGE_ROOT) {
     return process.env.EMOTION_BRIDGE_ROOT;
   }
-  if (process.env.NODE_ENV !== "production" && !process.resourcesPath.includes("app.asar")) {
+  if (!app.isPackaged) {
     return path.resolve(__dirname, "..", "..");
   }
   return path.join(process.resourcesPath, "bridge-runtime");

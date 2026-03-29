@@ -2,6 +2,7 @@ const path = require("path");
 const fs = require("fs");
 const os = require("os");
 const { spawn, spawnSync } = require("child_process");
+const net = require("net");
 const { app, BrowserWindow, shell, ipcMain, Tray, Menu, nativeImage, screen, Notification } = require("electron");
 const { DeviceSyncManager } = require("./deviceSync.cjs");
 
@@ -27,11 +28,52 @@ const deviceSyncManager = new DeviceSyncManager({
 
 const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
+const probeTcpPort = (host, port, timeoutMs = 500) =>
+  new Promise((resolve) => {
+    const socket = new net.Socket();
+    let settled = false;
+    const finish = (value) => {
+      if (settled) return;
+      settled = true;
+      try {
+        socket.destroy();
+      } catch {}
+      resolve(value);
+    };
+    socket.setTimeout(timeoutMs);
+    socket.once("connect", () => finish(true));
+    socket.once("timeout", () => finish(false));
+    socket.once("error", () => finish(false));
+    try {
+      socket.connect(port, host);
+    } catch {
+      finish(false);
+    }
+  });
+
+const getStartupLogPath = () => {
+  try {
+    const base = app?.getPath ? app.getPath("userData") : path.join(os.homedir(), "AppData", "Roaming", "emoresonance---dual-robot-companion");
+    const logsDir = path.join(base, "logs");
+    fs.mkdirSync(logsDir, { recursive: true });
+    return path.join(logsDir, "bridge-startup.log");
+  } catch {
+    return path.join(os.tmpdir(), "emoresonance-bridge-startup.log");
+  }
+};
+
+const appendStartupLog = (message) => {
+  const line = `[${new Date().toISOString()}] ${message}\n`;
+  try {
+    fs.appendFileSync(getStartupLogPath(), line, "utf8");
+  } catch {}
+};
+
 const resolveRuntimeRoot = () => {
   if (process.env.EMOTION_BRIDGE_ROOT) {
     return process.env.EMOTION_BRIDGE_ROOT;
   }
-  if (process.env.NODE_ENV !== "production" && !process.resourcesPath.includes("app.asar")) {
+  if (!app.isPackaged) {
     return path.resolve(__dirname, "..", "..");
   }
   return path.join(process.resourcesPath, "bridge-runtime");
@@ -237,25 +279,52 @@ const isLocalBackendHealthy = async () => {
   }
 };
 
+const isLocalOpenClawGatewayHealthy = async () =>
+  probeTcpPort("127.0.0.1", LOCAL_OPENCLAW_GATEWAY_PORT, 500);
+
+const waitForLocalOpenClawGateway = async (maxAttempts = 90) => {
+  for (let i = 0; i < maxAttempts; i += 1) {
+    if (await isLocalOpenClawGatewayHealthy()) {
+      appendStartupLog(`waitForLocalOpenClawGateway ready attempts=${i + 1}`);
+      return true;
+    }
+    if (!openClawGatewayProc && i >= 4) {
+      appendStartupLog(`waitForLocalOpenClawGateway aborted attempts=${i + 1} reason=process-exited`);
+      return false;
+    }
+    await delay(500);
+  }
+  appendStartupLog(`waitForLocalOpenClawGateway timeout attempts=${maxAttempts}`);
+  return false;
+};
+
 const startLocalBackend = () => {
   if (backendProc) return;
   const runtimeRoot = resolveRuntimeRoot();
   const openClawRepo = resolveOpenClawRepo(runtimeRoot);
+  const workspaceDir = resolveOpenClawWorkspace(runtimeRoot);
+  const stateDir = resolveOpenClawStateDir(runtimeRoot);
+  appendStartupLog(`startLocalBackend runtimeRoot=${runtimeRoot}`);
+  ensureOpenClawWorkspace(workspaceDir);
+  ensureOpenClawState(stateDir);
   const codexHome = ensureOpenClawCodexHome(
     runtimeRoot,
-    resolveOpenClawWorkspace(runtimeRoot),
+    workspaceDir,
     openClawRepo
   );
   const backendEntry = path.join(runtimeRoot, "backend", "main.py");
   if (!fs.existsSync(backendEntry)) {
+    appendStartupLog(`startLocalBackend missing backendEntry=${backendEntry}`);
     console.error(`[main] backend bundle missing: ${backendEntry}`);
     return;
   }
   const python = resolvePythonCommand(runtimeRoot);
   if (!python) {
+    appendStartupLog("startLocalBackend no python resolved");
     console.error("[main] no Python runtime available for local backend");
     return;
   }
+  appendStartupLog(`startLocalBackend spawn python=${python.command} args=${python.args.join(" ")}`);
   backendProc = spawn(
     python.command,
     [...python.args, "-m", "uvicorn", "backend.main:app", "--host", "127.0.0.1", "--port", "8000"],
@@ -265,8 +334,8 @@ const startLocalBackend = () => {
         ...process.env,
         ...buildOpenClawProxyEnv(),
         PYTHONPATH: runtimeRoot,
-        OPENCLAW_WORKSPACE_DIR: resolveOpenClawWorkspace(runtimeRoot),
-        OPENCLAW_STATE_DIR: resolveOpenClawStateDir(runtimeRoot),
+        OPENCLAW_WORKSPACE_DIR: workspaceDir,
+        OPENCLAW_STATE_DIR: stateDir,
         OPENCLAW_GATEWAY_URL: `ws://127.0.0.1:${LOCAL_OPENCLAW_GATEWAY_PORT}`,
         OPENCLAW_GATEWAY_ORIGIN: `http://127.0.0.1:${LOCAL_OPENCLAW_GATEWAY_PORT}`,
         OPENCLAW_CODEX_HOME: process.env.OPENCLAW_CODEX_HOME || codexHome,
@@ -283,13 +352,16 @@ const startLocalBackend = () => {
   );
   backendProc.stdout?.on("data", (chunk) => {
     const textOut = String(chunk || "").trim();
+    if (textOut) appendStartupLog(`[local-backend][stdout] ${textOut}`);
     if (textOut) console.log(`[local-backend] ${textOut}`);
   });
   backendProc.stderr?.on("data", (chunk) => {
     const textErr = String(chunk || "").trim();
+    if (textErr) appendStartupLog(`[local-backend][stderr] ${textErr}`);
     if (textErr) console.error(`[local-backend] ${textErr}`);
   });
   backendProc.on("exit", (code, signal) => {
+    appendStartupLog(`startLocalBackend exited code=${code} signal=${signal}`);
     console.error(`[main] local backend exited code=${code} signal=${signal}`);
     backendProc = null;
   });
@@ -300,7 +372,9 @@ const startLocalOpenClawGateway = () => {
   const runtimeRoot = resolveRuntimeRoot();
   const openClawRepo = resolveOpenClawRepo(runtimeRoot);
   const gatewayEntry = path.join(openClawRepo, "openclaw.mjs");
+  appendStartupLog(`startLocalOpenClawGateway repo=${openClawRepo}`);
   if (!fs.existsSync(gatewayEntry)) {
+    appendStartupLog(`startLocalOpenClawGateway missing gatewayEntry=${gatewayEntry}`);
     console.error(`[main] OpenClaw repo missing: ${gatewayEntry}`);
     return;
   }
@@ -309,6 +383,7 @@ const startLocalOpenClawGateway = () => {
   const codexHome = ensureOpenClawCodexHome(runtimeRoot, workspaceDir, openClawRepo);
   ensureOpenClawWorkspace(workspaceDir);
   ensureOpenClawState(stateDir);
+  appendStartupLog(`startLocalOpenClawGateway spawn entry=${gatewayEntry}`);
   openClawGatewayProc = spawn(
     "node",
     [
@@ -344,27 +419,54 @@ const startLocalOpenClawGateway = () => {
   );
   openClawGatewayProc.stdout?.on("data", (chunk) => {
     const textOut = String(chunk || "").trim();
+    if (textOut) appendStartupLog(`[openclaw-gateway][stdout] ${textOut}`);
     if (textOut) console.log(`[openclaw-gateway] ${textOut}`);
   });
   openClawGatewayProc.stderr?.on("data", (chunk) => {
     const textErr = String(chunk || "").trim();
+    if (textErr) appendStartupLog(`[openclaw-gateway][stderr] ${textErr}`);
     if (textErr) console.error(`[openclaw-gateway] ${textErr}`);
   });
   openClawGatewayProc.on("exit", (code, signal) => {
+    appendStartupLog(`startLocalOpenClawGateway exited code=${code} signal=${signal}`);
     console.error(`[main] openclaw gateway exited code=${code} signal=${signal}`);
     openClawGatewayProc = null;
   });
 };
 
 const ensureLocalBackend = async () => {
-  if (await isLocalBackendHealthy()) return true;
-  startLocalOpenClawGateway();
-  startLocalBackend();
-  for (let i = 0; i < 20; i += 1) {
-    await delay(500);
-    if (await isLocalBackendHealthy()) return true;
+  appendStartupLog("ensureLocalBackend begin");
+  const runtimeRoot = resolveRuntimeRoot();
+  const openClawRepo = resolveOpenClawRepo(runtimeRoot);
+  const gatewayEntry = path.join(openClawRepo, "openclaw.mjs");
+  const shouldWaitForGateway = fs.existsSync(gatewayEntry);
+
+  let backendHealthy = await isLocalBackendHealthy();
+  if (!backendHealthy) {
+    startLocalOpenClawGateway();
+    startLocalBackend();
+    for (let i = 0; i < 20; i += 1) {
+      await delay(500);
+      if (await isLocalBackendHealthy()) {
+        backendHealthy = true;
+        break;
+      }
+    }
+  } else if (shouldWaitForGateway && !(await isLocalOpenClawGatewayHealthy())) {
+    startLocalOpenClawGateway();
   }
-  return false;
+
+  if (!backendHealthy) {
+    appendStartupLog("ensureLocalBackend timeout");
+    return false;
+  }
+
+  if (shouldWaitForGateway && !(await isLocalOpenClawGatewayHealthy())) {
+    appendStartupLog("ensureLocalBackend waiting for OpenClaw gateway");
+    await waitForLocalOpenClawGateway();
+  }
+
+  return true;
 };
 
 const stopLocalBackend = () => {
