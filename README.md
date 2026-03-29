@@ -11,6 +11,31 @@ This repository is the Raspberry Pi Zero 2 W adaptation of the original "共感�
 - `config/`: Pi-oriented runtime configs, including headless and PCA9685 reference files
 - `app windows/`: Electron + React desktop app with native login, activation and assessment flow
 
+## Desktop clone bootstrap
+
+If you clone this repository on a new Windows machine and want the desktop app to be fully runnable with bundled OpenClaw and Python runtime, do not guess the preparation order. Use the bootstrap entry:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\bootstrap_desktop_runtime.ps1
+```
+
+The script will:
+
+- ensure Git LFS payloads are pulled
+- install desktop npm dependencies if needed
+- materialize the bundled Python runtime into `app windows/vendor/python-runtime`
+- materialize the vendored Python site-packages into `app windows/vendor/python-site-packages`
+- materialize the OpenClaw runtime into `app windows/vendor/openclaw-runtime`
+
+After that, package the desktop app with:
+
+```powershell
+cd "app windows"
+npm run electron:dist
+```
+
+If you use GitHub Desktop, make sure Git LFS is enabled before cloning. Downloading the repository as a ZIP file will not fetch the LFS runtime payloads.
+
 ## What was removed
 
 - Old Android/Capacitor app

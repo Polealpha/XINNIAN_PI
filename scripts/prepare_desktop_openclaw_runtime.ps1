@@ -232,7 +232,6 @@ function Bootstrap-OpenClawRuntimeFromRegistry([string]$TargetDir, [string]$Vers
 $sourcePath = Resolve-FullPath $Source
 $targetPath = Resolve-FullPath $Target
 
-$pnpm = Get-Command pnpm -ErrorAction Stop
 $targetParent = Split-Path -Parent $targetPath
 
 if ($targetParent -and -not (Test-Path $targetParent)) {
@@ -254,6 +253,7 @@ if (Test-Path $targetPath) {
 Initialize-ProxyEnvironment
 
 if (Test-Path $sourcePath) {
+    $pnpm = Get-Command pnpm -ErrorAction Stop
     Write-Host "Preparing OpenClaw runtime from local source $sourcePath to $targetPath"
     Push-Location $sourcePath
     try {
