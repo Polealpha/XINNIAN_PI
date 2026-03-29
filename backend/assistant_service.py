@@ -354,12 +354,16 @@ class AssistantService:
             "state_dir": resolved_state_dir,
             "workspace_dir": str(self.workspace_dir),
             "desktop_tools": [
-                "desktop.launch_app",
-                "desktop.open_url",
-                "desktop.web_search",
-                "desktop.play_music",
-                "desktop.todo_create",
-                "desktop.write_note",
+            "desktop.launch_app",
+            "desktop.open_url",
+            "desktop.web_search",
+            "desktop.play_music",
+            "desktop.music_pause",
+            "desktop.music_play_pause",
+            "desktop.music_next",
+            "desktop.music_previous",
+            "desktop.todo_create",
+            "desktop.write_note",
                 "robot.get_status",
                 "robot.speak",
                 "robot.pan_tilt",
@@ -417,14 +421,23 @@ class AssistantService:
     ) -> str:
         lines = []
         care_channel = ""
+        memory_summary = ""
         if isinstance(metadata, dict):
             care_channel = str(metadata.get("care_channel") or "").strip().lower()
+            memory_summary = str(metadata.get("memory_summary") or "").strip()
         if str(assistant_mode or "").strip().lower() == "agent":
             lines.append("[assistant_mode=agent]")
             lines.append(f"[assistant_native_control={str(bool(native_control_enabled)).lower()}]")
             lines.append(
                 "Agent mode is enabled. Prefer native OpenClaw execution first. "
+                "You may use desktop/browser/system tools and robot actions directly when the user clearly asks. "
                 "Do not mention workspace files, prompts, bootstrap, logs, or internal setup."
+            )
+            lines.append(
+                "Available tools: desktop.launch_app, desktop.open_url, desktop.web_search, "
+                "desktop.play_music, desktop.music_pause, desktop.music_play_pause, desktop.music_next, "
+                "desktop.music_previous, desktop.todo_create, desktop.write_note, robot.get_status, "
+                "robot.speak, robot.pan_tilt, robot.start_owner_enrollment, robot.get_preview."
             )
         elif care_channel == "proactive_care":
             lines.extend(self._compose_proactive_care_block(text, metadata))
@@ -438,6 +451,9 @@ class AssistantService:
             )
         for item in tool_results:
             lines.append(f"Tool result [{item.name}] ok={str(item.ok).lower()}: {item.detail}")
+        if memory_summary and care_channel != "proactive_care":
+            lines.append("Long-term memory summary:")
+            lines.append(memory_summary)
         if attachments:
             lines.append(f"Attachments: {json.dumps(attachments, ensure_ascii=False)}")
         if metadata and care_channel != "proactive_care":

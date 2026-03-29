@@ -17,7 +17,23 @@ interface AssistantRequestOptions {
   mode?: "chat" | "proactive_care";
   fallbackText?: string;
   errorFallbackText?: string;
+  assistantMode?: "product" | "agent";
+  nativeControlEnabled?: boolean;
 }
+
+const readAssistantRuntimePrefs = (options: AssistantRequestOptions = {}) => {
+  const assistantMode =
+    options.assistantMode ||
+    ((localStorage.getItem("assistant_mode") as "product" | "agent" | null) || "agent");
+  const nativeControlEnabled =
+    typeof options.nativeControlEnabled === "boolean"
+      ? options.nativeControlEnabled
+      : localStorage.getItem("assistant_native_control") !== "false";
+  return {
+    assistantMode: assistantMode === "product" ? "product" : "agent",
+    nativeControlEnabled,
+  };
+};
 
 const ASSISTANT_FALLBACK_TEXT = "OpenClaw 当前没有返回有效内容。";
 const ASSISTANT_ERROR_FALLBACK_TEXT = "OpenClaw 当前未连接，暂时无法生成真实回答。";
@@ -43,15 +59,17 @@ const buildAssistantPayload = (
   expressionConfidence?: number,
   attachments: ChatAttachment[] = [],
   options: AssistantRequestOptions = {}
-) => ({
+) => {
+  const prefs = readAssistantRuntimePrefs(options);
+  return ({
   text: context,
   surface: "desktop",
   attachments,
   metadata: {
     entrypoint: options.mode === "proactive_care" ? "llm_care" : "desktop_chat",
     care_channel: options.mode === "proactive_care" ? "proactive_care" : "",
-    assistant_mode: "product",
-    assistant_native_control: false,
+    assistant_mode: prefs.assistantMode,
+    assistant_native_control: prefs.nativeControlEnabled,
     current_emotion: currentEmotion,
     current_ts_ms: currentTsMs,
     history: history.slice(-6),
@@ -62,7 +80,8 @@ const buildAssistantPayload = (
         ? expressionConfidence
         : 0,
   },
-});
+  });
+};
 
 export const generateAssistantMessage = async (
   currentEmotion: EmotionType,
