@@ -252,6 +252,9 @@ class EventManager:
 event_manager = EventManager()
 assistant_service = AssistantService()
 desktop_speech_service = DesktopSpeechService()
+
+ACTIVATION_ASSESSMENT_MODEL_TIMEOUT_MS = 35_000
+ACTIVATION_ASSESSMENT_MEMORY_TIMEOUT_MS = 30_000
 _ENGINE_CONFIG_PATH = Path(__file__).resolve().parent.parent / "config" / "engine_config.json"
 
 
@@ -1356,36 +1359,64 @@ def _assessment_sync_voice_prompt(
     return session_payload, True, "prompt_spoken"
 
 
+async def _gateway_send_message_with_timeout(session_key: str, prompt: str, timeout_ms: int) -> str:
+    try:
+        return await assistant_service.gateway.send_message(session_key, prompt, timeout_ms=timeout_ms)
+    except TypeError:
+        return await assistant_service.gateway.send_message(session_key, prompt)
+
+
 async def _assessment_pick_model_question(
     user_id: int,
     activation_profile: Dict[str, object],
     session_payload: Dict[str, object],
 ) -> Dict[str, object]:
+    def _trim_text(value: object, limit: int = 140) -> str:
+        text = str(value or "").strip()
+        if len(text) <= limit:
+            return text
+        return text[: limit - 1].rstrip() + "…"
+
+    def _compact_profile_preview(raw: Dict[str, object]) -> Dict[str, object]:
+        return {
+            "summary": _trim_text(raw.get("summary"), 120),
+            "interaction_preferences": [str(item).strip() for item in (raw.get("interaction_preferences") or []) if str(item).strip()][:3],
+            "decision_style": _trim_text(raw.get("decision_style"), 96),
+            "stress_response": _trim_text(raw.get("stress_response"), 96),
+            "comfort_preferences": [str(item).strip() for item in (raw.get("comfort_preferences") or []) if str(item).strip()][:3],
+            "avoid_patterns": [str(item).strip() for item in (raw.get("avoid_patterns") or []) if str(item).strip()][:3],
+            "care_guidance": _trim_text(raw.get("care_guidance"), 120),
+        }
+
     compact_session = {
         "conversation_count": int(session_payload.get("conversation_count") or 0),
         "effective_turn_count": int(session_payload.get("effective_turn_count") or 0),
         "current_focus": str(session_payload.get("current_focus") or "").strip(),
-        "profile_preview": dict(session_payload.get("profile_preview") or {}),
+        "profile_preview": _compact_profile_preview(dict(session_payload.get("profile_preview") or {})),
         "dialogue_turns": [
             {
                 "role": str(item.get("role") or "").strip(),
-                "text": str(item.get("text") or "").strip(),
+                "text": _trim_text(item.get("text"), 180),
             }
-            for item in (session_payload.get("dialogue_turns") or [])[-6:]
+            for item in (session_payload.get("dialogue_turns") or [])[-3:]
             if isinstance(item, dict) and str(item.get("text") or "").strip()
         ],
     }
     compact_identity = {
         "preferred_name": str(activation_profile.get("preferred_name") or "").strip(),
-        "identity_summary": str(activation_profile.get("identity_summary") or "").strip(),
-        "voice_intro_summary": str(activation_profile.get("voice_intro_summary") or "").strip(),
+        "identity_summary": _trim_text(activation_profile.get("identity_summary"), 120),
+        "voice_intro_summary": _trim_text(activation_profile.get("voice_intro_summary"), 120),
     }
     prompt = (
         f"{ASSESSMENT_CONDUCTOR_PROMPT}\n\n"
         f"输入数据：{json.dumps({'user_id': user_id, 'identity': compact_identity, 'session': compact_session}, ensure_ascii=False)}"
     )
     session_key = f"activation:{int(user_id)}:assessment:conductor:{int(time.time() * 1000)}"
-    raw = await assistant_service.gateway.send_message(session_key, prompt)
+    raw = await _gateway_send_message_with_timeout(
+        session_key,
+        prompt,
+        timeout_ms=ACTIVATION_ASSESSMENT_MODEL_TIMEOUT_MS,
+    )
     return extract_next_question_from_model(raw)
 
 
@@ -1395,27 +1426,48 @@ async def _assessment_analyze_turn_model(
     session_payload: Dict[str, object],
     answer: str,
 ) -> Dict[str, object]:
+    def _trim_text(value: object, limit: int = 140) -> str:
+        text = str(value or "").strip()
+        if len(text) <= limit:
+            return text
+        return text[: limit - 1].rstrip() + "…"
+
+    def _compact_profile_preview(raw: Dict[str, object]) -> Dict[str, object]:
+        return {
+            "summary": _trim_text(raw.get("summary"), 120),
+            "interaction_preferences": [str(item).strip() for item in (raw.get("interaction_preferences") or []) if str(item).strip()][:3],
+            "decision_style": _trim_text(raw.get("decision_style"), 96),
+            "stress_response": _trim_text(raw.get("stress_response"), 96),
+            "comfort_preferences": [str(item).strip() for item in (raw.get("comfort_preferences") or []) if str(item).strip()][:3],
+            "avoid_patterns": [str(item).strip() for item in (raw.get("avoid_patterns") or []) if str(item).strip()][:3],
+            "care_guidance": _trim_text(raw.get("care_guidance"), 120),
+        }
+
     compact_session = {
         "conversation_count": int(session_payload.get("conversation_count") or 0),
         "effective_turn_count": int(session_payload.get("effective_turn_count") or 0),
         "required_min_turns": int(session_payload.get("required_min_turns") or 4),
         "current_focus": str(session_payload.get("current_focus") or session_payload.get("question_pair") or "").strip(),
-        "profile_preview": dict(session_payload.get("profile_preview") or {}),
+        "profile_preview": _compact_profile_preview(dict(session_payload.get("profile_preview") or {})),
         "dialogue_turns": [
             {
                 "role": str(item.get("role") or "").strip(),
-                "text": str(item.get("text") or "").strip(),
+                "text": _trim_text(item.get("text"), 120),
             }
-            for item in (session_payload.get("dialogue_turns") or [])[-6:]
+            for item in (session_payload.get("dialogue_turns") or [])[-2:]
             if isinstance(item, dict) and str(item.get("text") or "").strip()
         ],
     }
     prompt = (
         f"{ASSESSMENT_TURN_PROMPT}\n\n"
-        f"输入数据：{json.dumps({'question': question, 'session': compact_session, 'answer': answer}, ensure_ascii=False)}"
+        f"输入数据：{json.dumps({'question': {'id': question.get('id'), 'prompt': _trim_text(question.get('prompt'), 120), 'focus': question.get('focus') or question.get('pair')}, 'session': compact_session, 'answer': _trim_text(answer, 160)}, ensure_ascii=False)}"
     )
     session_key = f"activation:{int(user_id)}:assessment:turn:{int(time.time() * 1000)}"
-    raw = await assistant_service.gateway.send_message(session_key, prompt)
+    raw = await _gateway_send_message_with_timeout(
+        session_key,
+        prompt,
+        timeout_ms=ACTIVATION_ASSESSMENT_MODEL_TIMEOUT_MS,
+    )
     return extract_turn_analysis_from_model(raw)
 
 
@@ -1425,7 +1477,11 @@ async def _assessment_memory_writer_model(user_id: int, final_profile: Dict[str,
         f"输入数据：{json.dumps({'final_profile': final_profile, 'session': session_payload}, ensure_ascii=False)}"
     )
     session_key = f"activation:{int(user_id)}:assessment:memory:{int(time.time() * 1000)}"
-    raw = await assistant_service.gateway.send_message(session_key, prompt)
+    raw = await _gateway_send_message_with_timeout(
+        session_key,
+        prompt,
+        timeout_ms=ACTIVATION_ASSESSMENT_MEMORY_TIMEOUT_MS,
+    )
     parsed = parse_json_dict(raw)
     machine_readable = str(parsed.get("machine_readable") or "").strip()
     ai_readable = str(parsed.get("ai_readable") or "").strip()
@@ -3203,8 +3259,54 @@ def activation_runtime_status(
     )
 
 
+async def _assessment_bootstrap_first_question(
+    conn: Connection,
+    user_id: int,
+    *,
+    voice_mode: str = "text",
+) -> None:
+    session_id, existing = _load_assessment_session(conn, int(user_id), active_only=True)
+    if not existing or session_id is None:
+        latest_session_id, latest_payload = _load_assessment_session(conn, int(user_id), active_only=False)
+        latest_status = str(latest_payload.get("status") or "").strip()
+        if latest_payload and latest_session_id is not None and latest_status != "completed":
+            session_id, existing = latest_session_id, latest_payload
+    if existing and session_id is not None and str(existing.get("latest_question") or "").strip():
+        return
+    ai_snapshot = _activation_ai_runtime_snapshot()
+    if not bool(ai_snapshot["ai_ready"]):
+        blocked_payload = dict(existing or build_initial_session(int(time.time() * 1000)))
+        blocked_payload["status"] = "blocked"
+        blocked_payload["blocking_reason"] = str(ai_snapshot["blocking_reason"] or "AI 未就绪，正式建档已暂停。")
+        blocked_payload["assessment_ready"] = False
+        _save_assessment_session(conn, int(user_id), blocked_payload, session_id=int(session_id) if session_id is not None else None)
+        return
+    activation = _get_activation_profile(conn, int(user_id))
+    if existing and session_id is not None:
+        session_payload = dict(existing)
+        session_payload["status"] = "active"
+        session_payload["blocking_reason"] = ""
+        session_payload["voice_mode"] = str(voice_mode or session_payload.get("voice_mode") or "text").strip() or "text"
+    else:
+        now_ms = int(time.time() * 1000)
+        session_payload = build_initial_session(now_ms)
+        session_payload["voice_mode"] = str(voice_mode or "text").strip() or "text"
+        session_id = None
+    model_question = await _assessment_pick_model_question(int(user_id), activation, session_payload)
+    if not model_question:
+        session_payload["status"] = "blocked"
+        session_payload["blocking_reason"] = "AI 没有生成首个正式建档问题。"
+    else:
+        session_payload["last_question_id"] = str(model_question.get("id") or "")
+        session_payload["latest_question"] = str(model_question.get("prompt") or "")
+        session_payload["question_pair"] = str(model_question.get("pair") or "")
+        session_payload["current_focus"] = str(model_question.get("focus") or model_question.get("pair") or "")
+        session_payload["question_source"] = "ai"
+    _save_assessment_session(conn, int(user_id), session_payload, session_id=int(session_id) if session_id is not None else None)
+
+
 @app.post("/api/activation/complete", response_model=ActivationProfileResponse)
-def activation_complete(
+async def activation_complete(
     payload: ActivationCompleteRequest,
     request: Request,
     credentials: HTTPAuthorizationCredentials = Depends(bearer_scheme),
@@ -3747,7 +3849,7 @@ async def activation_personality_infer(
         "context": payload.context or {},
         "recent_history": recent_history,
     }
-    session_key = f"activation:{int(user['id'])}:personality:{int(time.time() * 1000)}"
+    session_key = f"activation-{int(user['id'])}-personality-{int(time.time() * 1000)}"
     prompt = (
         f"{PERSONALITY_SYSTEM_PROMPT}\n\n"
         f"{PERSONALITY_EXTRACTION_PROMPT}\n\n"

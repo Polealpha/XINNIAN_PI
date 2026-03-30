@@ -204,8 +204,7 @@ const readJsonIfExists = (pathname) => {
     if (!fs.existsSync(pathname)) {
       return null;
     }
-    const raw = fs.readFileSync(pathname, "utf8").replace(/^\uFEFF/, "");
-    return JSON.parse(raw);
+    return JSON.parse(fs.readFileSync(pathname, "utf8"));
   } catch {
     return null;
   }

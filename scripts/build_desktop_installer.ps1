@@ -48,7 +48,11 @@ function Copy-MaterializedTree([string]$SourceDir, [string]$DestinationDir) {
             "EmoResonance.exe",
             "resources\app.asar",
             "resources\openclaw\openclaw.mjs",
-            "resources\bridge-runtime\backend\main.py"
+            "resources\bridge-runtime\backend\main.py",
+            "resources\openclaw\docs\reference\templates\AGENTS.md",
+            "resources\openclaw\docs\reference\templates\IDENTITY.md",
+            "resources\openclaw\docs\reference\templates\SOUL.md",
+            "resources\openclaw\docs\reference\templates\USER.md"
         )
         $missingPaths = @(
             $requiredPaths | Where-Object {

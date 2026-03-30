@@ -100,7 +100,11 @@ const emptyDesktopVoice = (): DesktopVoiceStatus => ({
 const normalizeUiError = (value: unknown) => {
   const message = value instanceof Error ? value.message : String(value || "");
   const lowered = message.toLowerCase();
-  if (lowered.includes("signal is aborted without reason") || lowered.includes("aborterror") || lowered.includes("aborted")) {
+  if (
+    lowered.includes("signal is aborted without reason") ||
+    lowered.includes("aborterror") ||
+    lowered.includes("aborted")
+  ) {
     return "";
   }
   return message;
@@ -109,6 +113,7 @@ const normalizeUiError = (value: unknown) => {
 export function ActivationGate({ onActivated }: ActivationGateProps) {
   const [booting, setBooting] = useState(true);
   const [busy, setBusy] = useState(false);
+  const [startingQuestion, setStartingQuestion] = useState(false);
   const [desktopVoiceBusy, setDesktopVoiceBusy] = useState(false);
   const [desktopVoiceRecording, setDesktopVoiceRecording] = useState(false);
   const [finishing, setFinishing] = useState(false);
@@ -123,6 +128,39 @@ export function ActivationGate({ onActivated }: ActivationGateProps) {
   const [desktopVoiceStatus, setDesktopVoiceStatus] = useState<DesktopVoiceStatus>(emptyDesktopVoice);
   const [assessment, setAssessment] = useState<ActivationAssessmentState>(emptyAssessment);
   const recorderRef = useRef<{ stop: () => Promise<Blob> } | null>(null);
+  const questionRecoveryRef = useRef(false);
+  const typingAnswer = Boolean(answerDraft.trim());
+
+  const mergeAssessmentFromPoll = (nextState: ActivationAssessmentState) => {
+    const normalized = { ...emptyAssessment(), ...nextState };
+    setAssessment((current) => {
+      const hasCurrentQuestion = Boolean(String(current.latest_question || "").trim());
+      const nextQuestionBlank = !String(normalized.latest_question || "").trim();
+      const nextTurnNotAhead = Number(normalized.turn_count || 0) <= Number(current.turn_count || 0);
+
+      if (hasCurrentQuestion && !normalized.assessment_ready && normalized.status !== "completed") {
+        const preserveQuestion =
+          typingAnswer ||
+          busy ||
+          startingQuestion ||
+          questionRecoveryRef.current ||
+          (nextQuestionBlank && nextTurnNotAhead);
+
+        if (preserveQuestion) {
+          normalized.latest_question = String(current.latest_question || normalized.latest_question || "");
+          normalized.last_question_id = String(current.last_question_id || normalized.last_question_id || "");
+          normalized.current_focus = String(current.current_focus || normalized.current_focus || "");
+          normalized.question_source = String(current.question_source || normalized.question_source || "");
+        }
+      }
+
+      if ((normalized.dialogue_turns || []).length < (current.dialogue_turns || []).length) {
+        normalized.dialogue_turns = current.dialogue_turns;
+      }
+
+      return normalized;
+    });
+  };
 
   const dialogue = useMemo(
     () =>
@@ -155,12 +193,33 @@ export function ActivationGate({ onActivated }: ActivationGateProps) {
     ]);
 
     setIdentityReady(!activation.activation_required);
-    setProfileReady(Boolean(activation.psychometric_completed || assessmentState.assessment_ready || assessmentState.status === "completed"));
+    setProfileReady(
+      Boolean(activation.psychometric_completed || assessmentState.assessment_ready || assessmentState.status === "completed")
+    );
     setPreferredName((current) => current || String(activation.preferred_name || "").trim());
     setIntroTranscript((current) => current || String(activation.voice_intro_summary || "").trim());
     setRuntime(runtimeState);
     setDesktopVoiceStatus(desktopVoice);
-    setAssessment({ ...emptyAssessment(), ...assessmentState });
+    mergeAssessmentFromPoll(assessmentState);
+  };
+
+  const waitForFirstQuestion = async (reset: boolean) => {
+    const initial = await startAssessment({ surface: "desktop", voice_mode: "text", reset });
+    if (String(initial.latest_question || "").trim() || String(initial.blocking_reason || "").trim()) {
+      return initial;
+    }
+
+    let latest = initial;
+    for (let attempt = 0; attempt < 12; attempt += 1) {
+      await new Promise((resolve) => window.setTimeout(resolve, 500));
+      latest = await getAssessmentState();
+      if (String(latest.latest_question || "").trim() || String(latest.blocking_reason || "").trim()) {
+        return latest;
+      }
+    }
+
+    latest = await startAssessment({ surface: "desktop", voice_mode: "text", reset: false });
+    return latest;
   };
 
   useEffect(() => {
@@ -185,27 +244,72 @@ export function ActivationGate({ onActivated }: ActivationGateProps) {
     let cancelled = false;
     const timer = window.setInterval(() => {
       if (cancelled) return;
+      if (busy || startingQuestion || questionRecoveryRef.current) return;
       void applyState().catch((err) => {
         if (cancelled) return;
         const normalized = normalizeUiError(err);
         if (normalized) setError(normalized);
       });
-    }, 4000);
+    }, 1800);
     return () => {
       cancelled = true;
       window.clearInterval(timer);
     };
-  }, []);
+  }, [busy, startingQuestion]);
+
+  useEffect(() => {
+    if (booting || busy || startingQuestion || typingAnswer || questionRecoveryRef.current) {
+      return;
+    }
+    if (!identityReady || !runtime.ai_ready || profileReady) {
+      return;
+    }
+    if (String(assessment.latest_question || "").trim() || String(assessment.blocking_reason || "").trim()) {
+      return;
+    }
+    const status = String(assessment.status || "").trim();
+    if (!["idle", "active", "blocked"].includes(status)) {
+      return;
+    }
+    questionRecoveryRef.current = true;
+    void (async () => {
+      try {
+        const recovered = await waitForFirstQuestion(false);
+        setAssessment({ ...emptyAssessment(), ...recovered });
+        if (String(recovered.blocking_reason || "").trim()) {
+          setError(String(recovered.blocking_reason || ""));
+        }
+      } catch (err) {
+        const normalized = normalizeUiError(err);
+        if (normalized) setError(normalized);
+      } finally {
+        questionRecoveryRef.current = false;
+      }
+    })();
+  }, [
+    assessment.blocking_reason,
+    assessment.latest_question,
+    assessment.status,
+    booting,
+    busy,
+    identityReady,
+    profileReady,
+    runtime.ai_ready,
+    startingQuestion,
+    typingAnswer,
+  ]);
 
   const handleConfirmIdentity = async () => {
     const name = preferredName.trim();
     const intro = introTranscript.trim();
     if (!name) {
-      setError("先确认你的名字，再开始正式建档。");
+      setError("请先确认你的名字，再开始正式建档。");
       return;
     }
-    if (busy) return;
+    if (busy || startingQuestion) return;
+
     setBusy(true);
+    setStartingQuestion(true);
     setError("");
     setSuccess("");
     try {
@@ -214,7 +318,7 @@ export function ActivationGate({ onActivated }: ActivationGateProps) {
         role_label: "owner",
         relation_to_robot: "primary_user",
         voice_intro_summary: intro,
-        identity_summary: `${name} 是当前机器人的主要使用者，后续应按已确认身份持续服务。`,
+        identity_summary: `${name} 是当前机器人的主要使用者，后续服务应以这个身份为准。`,
         onboarding_notes: intro,
         profile: {
           identity_source: "manual_name_intro",
@@ -223,18 +327,21 @@ export function ActivationGate({ onActivated }: ActivationGateProps) {
         activation_version: "activation-dialogue-v5",
       });
       setIdentityReady(true);
-      const started = await startAssessment({ surface: "desktop", voice_mode: "text", reset: true });
+      const started = await waitForFirstQuestion(true);
       setAssessment({ ...emptyAssessment(), ...started });
       if (started.blocking_reason) {
         setError(started.blocking_reason);
+      } else if (!String(started.latest_question || "").trim()) {
+        setSuccess("身份已确认，正在生成第一题，请不要重复点击。");
       } else {
-        setSuccess("名字已确认。机器人会开始一问一答式正式建档。");
+        setSuccess("正式建档已开始，机器人会一次只问一个问题。");
       }
       await applyState();
     } catch (err) {
       const normalized = normalizeUiError(err);
       if (normalized) setError(normalized);
     } finally {
+      setStartingQuestion(false);
       setBusy(false);
     }
   };
@@ -242,10 +349,11 @@ export function ActivationGate({ onActivated }: ActivationGateProps) {
   const handleSubmitTurn = async () => {
     const answer = answerDraft.trim();
     if (!answer) {
-      setError("先输入这一轮回答。");
+      setError("请先输入这一轮回答。");
       return;
     }
-    if (busy) return;
+    if (busy || startingQuestion) return;
+
     setBusy(true);
     setError("");
     setSuccess("");
@@ -272,8 +380,10 @@ export function ActivationGate({ onActivated }: ActivationGateProps) {
           voice_mode: "text",
         });
       }
+
       setAssessment({ ...emptyAssessment(), ...result });
       setAnswerDraft("");
+
       if (result.blocking_reason) {
         setError(result.blocking_reason);
       } else if (result.just_completed || result.status === "completed" || result.assessment_ready) {
@@ -281,7 +391,7 @@ export function ActivationGate({ onActivated }: ActivationGateProps) {
         setSuccess("正式建档已完成，偏好与反应画像已写入本地长期记忆。");
         await applyState();
       } else {
-        setSuccess("这一轮回答已计入正式建档。");
+        setSuccess("这一轮回答已记入正式建档。");
       }
     } catch (err) {
       const normalized = normalizeUiError(err);
@@ -440,10 +550,10 @@ export function ActivationGate({ onActivated }: ActivationGateProps) {
               <button
                 type="button"
                 onClick={handleConfirmIdentity}
-                disabled={busy}
+                disabled={busy || startingQuestion}
                 className="w-full rounded-[24px] bg-fuchsia-600 px-6 py-4 text-[18px] font-bold text-white transition enabled:hover:bg-fuchsia-500 disabled:cursor-not-allowed disabled:opacity-50"
               >
-                确认名字并开始正式建档
+                {startingQuestion ? "正在生成第一题..." : "确认名字并开始正式建档"}
               </button>
             </div>
 
@@ -473,8 +583,12 @@ export function ActivationGate({ onActivated }: ActivationGateProps) {
               </div>
               <div className="mt-3 flex flex-wrap gap-3 text-sm">
                 <span className="rounded-full border border-white/30 px-4 py-1">当前评分：{assessment.scoring_source}</span>
-                <span className="rounded-full border border-white/30 px-4 py-1">当前缺口：{assessment.current_focus || "等待判断"}</span>
-                <span className="rounded-full border border-white/30 px-4 py-1">有效回答：{assessment.conversation_count}</span>
+                <span className="rounded-full border border-white/30 px-4 py-1">
+                  当前缺口：{assessment.current_focus || "等待判断"}
+                </span>
+                <span className="rounded-full border border-white/30 px-4 py-1">
+                  有效回答：{assessment.conversation_count}
+                </span>
               </div>
             </div>
 
@@ -496,6 +610,10 @@ export function ActivationGate({ onActivated }: ActivationGateProps) {
                   </div>
                 ))}
               </div>
+            ) : startingQuestion ? (
+              <div className="mt-6 rounded-[24px] border border-cyan-400/20 bg-cyan-500/10 p-6 text-[16px] leading-8 text-cyan-100">
+                正在生成第一题，请不要重复点击。当前仍在等待 OpenClaw / GLM 返回首个正式建档问题。
+              </div>
             ) : (
               <div className="mt-6 rounded-[24px] border border-white/10 bg-white/5 p-6 text-[16px] leading-8 text-slate-400">
                 确认名字后，这里会显示机器人正式建档的第一条问题。
@@ -514,8 +632,12 @@ export function ActivationGate({ onActivated }: ActivationGateProps) {
                 value={answerDraft}
                 onChange={(event) => setAnswerDraft(event.target.value)}
                 rows={4}
-                placeholder="直接像聊天一样回答这一题，越贴近日常反应越好。"
-                disabled={!runtime.ai_ready || busy}
+                placeholder={
+                  startingQuestion
+                    ? "第一题正在生成中，请稍候..."
+                    : "直接像聊天一样回答这一题，越贴近日常反应越好。"
+                }
+                disabled={!runtime.ai_ready || busy || startingQuestion}
                 className="w-full resize-none bg-transparent text-[18px] leading-8 text-white outline-none placeholder:text-slate-500 disabled:cursor-not-allowed disabled:opacity-60"
               />
             </div>
@@ -524,7 +646,7 @@ export function ActivationGate({ onActivated }: ActivationGateProps) {
               <button
                 type="button"
                 onClick={handleSubmitTurn}
-                disabled={!runtime.ai_ready || busy || !answerDraft.trim()}
+                disabled={!runtime.ai_ready || busy || startingQuestion || !answerDraft.trim()}
                 className="rounded-[22px] bg-white px-6 py-4 text-[18px] font-bold text-slate-950 transition enabled:hover:bg-slate-200 disabled:cursor-not-allowed disabled:opacity-50"
               >
                 提交这一轮回答
@@ -532,7 +654,7 @@ export function ActivationGate({ onActivated }: ActivationGateProps) {
               <button
                 type="button"
                 onClick={handleDesktopVoiceToggle}
-                disabled={desktopVoiceBusy}
+                disabled={desktopVoiceBusy || startingQuestion}
                 className="rounded-[22px] border border-cyan-400/35 bg-cyan-500/10 px-6 py-4 text-[17px] font-semibold text-cyan-100 transition enabled:hover:bg-cyan-500/15 disabled:cursor-not-allowed disabled:opacity-50"
               >
                 {desktopVoiceRecording ? (
@@ -569,7 +691,9 @@ export function ActivationGate({ onActivated }: ActivationGateProps) {
               <div className="mt-4 space-y-2 text-[15px] leading-8 text-slate-300">
                 <div>电脑麦克风：{desktopVoiceStatus.ready || desktopVoiceStatus.primary_ready || desktopVoiceStatus.fallback_ready ? "可用" : "未就绪"}</div>
                 <div>机器人语音：{runtime.robot_voice_ready ? "设备在线" : "设备离线或未绑定"}</div>
-                <div className="text-slate-400">{desktopVoiceStatus.primary_error || desktopVoiceStatus.fallback_error || runtime.desktop_voice_detail}</div>
+                <div className="text-slate-400">
+                  {desktopVoiceStatus.primary_error || desktopVoiceStatus.fallback_error || runtime.desktop_voice_detail}
+                </div>
               </div>
             </div>
 

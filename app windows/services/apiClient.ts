@@ -5,6 +5,7 @@ const REQUEST_TIMEOUT_MS = 8000;
 const ASSISTANT_SEND_TIMEOUT_MS = 4 * 60 * 1000;
 const DESKTOP_AUDIO_TIMEOUT_MS = 2 * 60 * 1000;
 const LOCAL_LLM_TIMEOUT_MS = 90 * 1000;
+const ACTIVATION_ASSESSMENT_TIMEOUT_MS = 75 * 1000;
 
 export const getApiBase = () => API_BASE;
 export const getDeviceSyncApiBase = () => DEVICE_SYNC_API_BASE;
@@ -55,6 +56,13 @@ const resolveTimeoutForPath = (path: string, overrideTimeoutMs?: number) => {
   }
   if (path === "/api/desktop/voice/transcribe") {
     return DESKTOP_AUDIO_TIMEOUT_MS;
+  }
+  if (
+    path === "/api/activation/assessment/start" ||
+    path === "/api/activation/assessment/turn" ||
+    path === "/api/activation/assessment/finish"
+  ) {
+    return ACTIVATION_ASSESSMENT_TIMEOUT_MS;
   }
   if (path.startsWith("/api/llm/")) {
     return LOCAL_LLM_TIMEOUT_MS;

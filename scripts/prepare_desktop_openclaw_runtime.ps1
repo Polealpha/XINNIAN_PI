@@ -22,6 +22,10 @@ function Test-OpenClawRuntimeReady([string]$RuntimeRoot) {
         (Join-Path $RuntimeRoot "package.json"),
         (Join-Path $RuntimeRoot "dist\entry.js"),
         (Join-Path $RuntimeRoot "dist\index.js"),
+        (Join-Path $RuntimeRoot "docs\reference\templates\AGENTS.md"),
+        (Join-Path $RuntimeRoot "docs\reference\templates\IDENTITY.md"),
+        (Join-Path $RuntimeRoot "docs\reference\templates\SOUL.md"),
+        (Join-Path $RuntimeRoot "docs\reference\templates\USER.md"),
         (Join-Path $RuntimeRoot "node_modules"),
         (Join-Path $RuntimeRoot "node_modules\yaml\dist\doc\directives.js"),
         (Join-Path $RuntimeRoot "node_modules\chalk\package.json"),
@@ -143,6 +147,13 @@ function Prune-OpenClawRuntime([string]$RuntimeRoot) {
         return
     }
 
+    $preservedTemplatesSource = Join-Path $RuntimeRoot "docs\reference\templates"
+    $preservedTemplatesTemp = $null
+    if (Test-Path $preservedTemplatesSource) {
+        $preservedTemplatesTemp = Join-Path ([System.IO.Path]::GetTempPath()) ("openclaw-templates-" + [System.Guid]::NewGuid().ToString("N"))
+        Copy-Tree $preservedTemplatesSource $preservedTemplatesTemp
+    }
+
     Get-ChildItem $pnpmRoot -Directory -ErrorAction SilentlyContinue |
         Where-Object { $_.Name -like "@node-llama-cpp*" -or $_.Name -like "node-llama-cpp@*" -or $_.Name -like "@napi-rs+canvas*" } |
         ForEach-Object {
@@ -182,6 +193,16 @@ function Prune-OpenClawRuntime([string]$RuntimeRoot) {
         if (Test-Path $typescriptPath) {
             Invoke-CmdChecked "rmdir /s /q `"$typescriptPath`""
         }
+    }
+
+    if ($preservedTemplatesTemp -and (Test-Path $preservedTemplatesTemp)) {
+        $restoredTemplatesPath = Join-Path $RuntimeRoot "docs\reference\templates"
+        if (Test-Path $restoredTemplatesPath) {
+            Invoke-CmdChecked "rmdir /s /q `"$restoredTemplatesPath`""
+        }
+        New-Item -ItemType Directory -Force -Path (Split-Path -Parent $restoredTemplatesPath) | Out-Null
+        Copy-Tree $preservedTemplatesTemp $restoredTemplatesPath
+        Invoke-CmdChecked "rmdir /s /q `"$preservedTemplatesTemp`""
     }
 }
 
