@@ -1931,35 +1931,147 @@ def _insert_chat_message(conn: Connection, user_id: int, payload: ChatMessageReq
     return int(cur.lastrowid)
 
 
+def _resolve_wechat_mirror_target() -> Optional[Dict[str, str]]:
+    state_dir = Path(__file__).resolve().parents[1] / "assistant_data" / "openclaw_state" / "openclaw-weixin"
+    accounts_index = state_dir / "accounts.json"
+    try:
+        account_ids = json.loads(accounts_index.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+    if not isinstance(account_ids, list) or not account_ids:
+        return None
+    account_id = str(account_ids[0] or "").strip()
+    if not account_id:
+        return None
+    account_path = state_dir / "accounts" / f"{account_id}.json"
+    try:
+        account_payload = json.loads(account_path.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+    if not isinstance(account_payload, dict):
+        return None
+    token = str(account_payload.get("token") or "").strip()
+    base_url = str(account_payload.get("baseUrl") or "https://ilinkai.weixin.qq.com").strip()
+    preferred_user_id = str(account_payload.get("userId") or "").strip()
+    context_path = state_dir / "accounts" / f"{account_id}.context-tokens.json"
+    try:
+        context_payload = json.loads(context_path.read_text(encoding="utf-8"))
+    except Exception:
+        context_payload = {}
+    if not isinstance(context_payload, dict):
+        context_payload = {}
+    user_id = preferred_user_id
+    context_token = str(context_payload.get(user_id) or "").strip() if user_id else ""
+    if (not user_id or not context_token) and context_payload:
+        for raw_user_id, raw_context in context_payload.items():
+            candidate_user_id = str(raw_user_id or "").strip()
+            candidate_context = str(raw_context or "").strip()
+            if candidate_user_id and candidate_context:
+                user_id = candidate_user_id
+                context_token = candidate_context
+                break
+    if not token or not base_url or not user_id:
+        return None
+    return {
+        "account_id": account_id,
+        "base_url": base_url,
+        "token": token,
+        "user_id": user_id,
+        "context_token": context_token,
+        "channel_version": "2.1.1",
+        "app_id": "bot",
+    }
+
+
+def _build_wechat_client_version(version: str) -> int:
+    parts = [int(part) if str(part).isdigit() else 0 for part in str(version or "0.0.0").split(".")]
+    major = parts[0] if len(parts) > 0 else 0
+    minor = parts[1] if len(parts) > 1 else 0
+    patch = parts[2] if len(parts) > 2 else 0
+    return ((major & 0xFF) << 16) | ((minor & 0xFF) << 8) | (patch & 0xFF)
+
+
+async def _mirror_bot_reply_to_wechat(text: str) -> bool:
+    clean_text = str(text or "").strip()
+    if not clean_text:
+        return False
+    target = _resolve_wechat_mirror_target()
+    if not target:
+        return False
+    client_id = f"desktop-sync-{int(time.time() * 1000)}-{secrets.token_hex(4)}"
+    x_wechat_uin = base64.b64encode(str(secrets.randbits(32)).encode("utf-8")).decode("utf-8")
+    headers = {
+        "Content-Type": "application/json",
+        "AuthorizationType": "ilink_bot_token",
+        "Authorization": f"Bearer {target['token']}",
+        "iLink-App-Id": target["app_id"],
+        "iLink-App-ClientVersion": str(_build_wechat_client_version(target["channel_version"])),
+        "X-WECHAT-UIN": x_wechat_uin,
+    }
+    body = {
+        "msg": {
+            "from_user_id": "",
+            "to_user_id": target["user_id"],
+            "client_id": client_id,
+            "message_type": 2,
+            "message_state": 2,
+            "item_list": [
+                {
+                    "type": 1,
+                    "text_item": {
+                        "text": clean_text,
+                    },
+                }
+            ],
+            "context_token": target.get("context_token") or None,
+        },
+        "base_info": {
+            "channel_version": target["channel_version"],
+        },
+    }
+    try:
+        async with httpx.AsyncClient(timeout=15.0, trust_env=False) as client:
+            response = await client.post(
+                f"{target['base_url'].rstrip('/')}/ilink/bot/sendmessage",
+                headers=headers,
+                json=body,
+            )
+            response.raise_for_status()
+        return True
+    except Exception as exc:
+        print(f"[wechat-mirror] outbound mirror failed: {exc}")
+        return False
+
+
 def _sync_wechat_transcript_history(
     conn: Connection,
     user_id: int,
     session_key: str,
     surface: str = "desktop",
-) -> None:
+) -> List[ChatMessageResponse]:
     transcript_items = assistant_service.list_wechat_mirror_messages(session_key, limit=200)
     if not transcript_items:
-        return
+        return []
     existing_rows = _list_chat_messages(conn, user_id, 400, session_key=session_key)
-    seen = {
-        (
-            str(row.get("sender") or ""),
-            str(row.get("text") or ""),
-            int(row.get("timestamp_ms") or 0),
-        )
-        for row in existing_rows
-    }
-    inserted = False
+    inserted: List[ChatMessageResponse] = []
     for item in transcript_items:
         sender = str(item.get("sender") or "").strip()
         text = str(item.get("text") or "").strip()
         timestamp_ms = int(item.get("timestamp_ms") or 0)
         if not sender or not text or timestamp_ms <= 0:
             continue
-        key = (sender, text, timestamp_ms)
-        if key in seen:
+        duplicate = next(
+            (
+                row for row in existing_rows
+                if str(row.get("sender") or "").strip() == sender
+                and str(row.get("text") or "").strip() == text
+                and abs(int(row.get("timestamp_ms") or 0) - timestamp_ms) <= 4000
+            ),
+            None,
+        )
+        if duplicate is not None:
             continue
-        _insert_chat_message(
+        msg_id = _insert_chat_message(
             conn,
             user_id,
             ChatMessageRequest(
@@ -1972,10 +2084,31 @@ def _sync_wechat_transcript_history(
                 session_key=session_key,
             ),
         )
-        seen.add(key)
-        inserted = True
+        existing_rows.append(
+            {
+                "id": msg_id,
+                "sender": sender,
+                "text": text,
+                "timestamp_ms": timestamp_ms,
+                "surface": surface,
+                "session_key": session_key,
+            }
+        )
+        inserted.append(
+            ChatMessageResponse(
+                id=msg_id,
+                sender=sender,
+                text=text,
+                content_type="text",
+                attachments=[],
+                timestamp_ms=timestamp_ms,
+                surface=surface,
+                session_key=session_key,
+            )
+        )
     if inserted:
         conn.commit()
+    return inserted
 
 
 def _chat_response_from_row(row: Dict[str, object]) -> ChatMessageResponse:
@@ -4589,7 +4722,7 @@ async def close_device_settings_page(
 
 
 @app.get("/api/chat/history", response_model=List[ChatMessageResponse])
-def chat_history(
+async def chat_history(
     limit: int = 100,
     surface: str = "desktop",
     session_key: Optional[str] = None,
@@ -4599,7 +4732,15 @@ def chat_history(
     user = _parse_access_token(credentials, conn)
     resolved_surface = normalize_surface(surface)
     resolved_session_key = session_key or build_session_key(resolved_surface, int(user["id"]))
-    _sync_wechat_transcript_history(conn, int(user["id"]), resolved_session_key, surface=resolved_surface)
+    inserted = _sync_wechat_transcript_history(conn, int(user["id"]), resolved_session_key, surface=resolved_surface)
+    for item in inserted:
+        await event_manager.broadcast(
+            {
+                "type": "ChatMessage",
+                "timestamp_ms": item.timestamp_ms,
+                "payload": item.model_dump(),
+            }
+        )
     rows = _list_chat_messages(conn, int(user["id"]), limit, session_key=resolved_session_key)
     return [_chat_response_from_row(row) for row in rows]
 
@@ -4797,6 +4938,8 @@ async def _assistant_send_impl(
             },
         }
     )
+    if normalize_surface(payload.surface) == "desktop":
+        await _mirror_bot_reply_to_wechat(bot_text)
     return AssistantSendResponse(
         ok=True,
         surface=str(response_payload["surface"]),

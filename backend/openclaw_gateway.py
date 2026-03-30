@@ -168,10 +168,16 @@ class OpenClawGatewayClient:
         timeout_ms = max(5000, int(self.config.timeout_ms))
         timeout_ms = min(timeout_ms, 120000)
         agent_error: Optional[Exception] = None
-        try:
-            return await self._send_message_via_agent(runtime, normalized_session_key, str(text), timeout_ms)
-        except Exception as exc:
-            agent_error = exc
+        cli_session_id = self._resolve_cli_session_id(runtime, normalized_session_key)
+        if cli_session_id:
+            try:
+                return await self._send_message_via_agent(runtime, cli_session_id, str(text), timeout_ms)
+            except Exception as exc:
+                agent_error = exc
+        else:
+            agent_error = OpenClawGatewayError(
+                f"OpenClaw CLI session id not found for session key: {normalized_session_key}"
+            )
         try:
             async with self._connect(runtime) as ws:
                 inbox: List[Dict[str, object]] = []
@@ -253,6 +259,23 @@ class OpenClawGatewayClient:
         cleaned = re.sub(r"[^A-Za-z0-9._-]+", "-", raw).strip("-") or "session"
         digest = hashlib.sha1(raw.encode("utf-8")).hexdigest()[:10]
         return f"{cleaned[:48]}-{digest}"
+
+    def _resolve_cli_session_id(self, runtime: Dict[str, str], session_key: str) -> Optional[str]:
+        raw = str(session_key or "").strip()
+        if not raw:
+            return None
+        if re.fullmatch(r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}", raw):
+            return raw
+        sessions_path = Path(str(runtime["state_dir"])) / "agents" / "main" / "sessions" / "sessions.json"
+        try:
+            sessions = self._read_json(sessions_path)
+        except Exception:
+            return None
+        row = sessions.get(raw) if isinstance(sessions, dict) else None
+        if not isinstance(row, dict):
+            return None
+        session_id = str(row.get("sessionId") or "").strip()
+        return session_id or None
 
     async def _send_message_via_agent(
         self,

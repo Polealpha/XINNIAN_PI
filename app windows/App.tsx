@@ -112,6 +112,42 @@ type ThemeToken = {
 
 const APP_ICON_URL = new URL("./assets/app-icon.png", import.meta.url).href;
 
+const mergeChatHistory = (local: ChatMessage[], incoming: ChatMessage[]): ChatMessage[] => {
+  const merged = [...local];
+  for (const msg of incoming) {
+    const existingIndex = merged.findIndex((item) => item.id === msg.id);
+    if (existingIndex >= 0) {
+      const prev = merged[existingIndex];
+      const prevText = String(prev.text || "");
+      const nextText = String(msg.text || "");
+      merged[existingIndex] = nextText.length >= prevText.length ? msg : prev;
+      continue;
+    }
+    const msgText = String(msg.text || "").trim();
+    const msgAttachKey = JSON.stringify(msg.attachments || []);
+    const msgTs = msg.timestamp.getTime();
+    const dupIndex = merged.findIndex((item) => {
+      const itemText = String(item.text || "").trim();
+      const itemAttachKey = JSON.stringify(item.attachments || []);
+      return (
+        item.sender === msg.sender &&
+        itemText === msgText &&
+        itemAttachKey === msgAttachKey &&
+        Math.abs(item.timestamp.getTime() - msgTs) <= 4000
+      );
+    });
+    if (dupIndex >= 0) {
+      const prev = merged[dupIndex];
+      const prevText = String(prev.text || "");
+      const nextText = String(msg.text || "");
+      merged[dupIndex] = nextText.length >= prevText.length ? msg : prev;
+      continue;
+    }
+    merged.push(msg);
+  }
+  return merged.sort((a, b) => a.timestamp.getTime() - b.timestamp.getTime());
+};
+
 const THEME_OPTIONS: ThemeOption[] = [
   {
     id: "midnight",
@@ -2018,16 +2054,25 @@ const App: React.FC = () => {
   useEffect(() => {
     if (!isAuthenticated || isGuest) return;
     let active = true;
-    getChatHistory()
-      .then((history) => {
+    const refreshChatHistory = async () => {
+      try {
+        const history = await getChatHistory();
         if (!active) return;
-        setMessages(history);
-      })
-      .catch((err) => console.warn("chat history fetch failed:", err));
+        setMessages((prev) => mergeChatHistory(prev, history));
+      } catch (err) {
+        if (!active) return;
+        console.warn("chat history fetch failed:", err);
+      }
+    };
+    void refreshChatHistory();
+    const timer = window.setInterval(() => {
+      void refreshChatHistory();
+    }, activeTab === Tab.CHAT ? 2000 : 5000);
     return () => {
       active = false;
+      window.clearInterval(timer);
     };
-  }, [isAuthenticated, isGuest]);
+  }, [activeTab, isAuthenticated, isGuest]);
 
   useEffect(() => {
     if (!isAuthenticated || isGuest) return;
