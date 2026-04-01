@@ -203,6 +203,7 @@ export const submitAssessmentTurn = async (payload: {
   surface?: string;
   device_id?: string;
   voice_mode?: string;
+  client_turn_id?: string;
 }): Promise<ActivationAssessmentTurnResponse> => {
   return apiPost(
     "/api/activation/assessment/turn",
@@ -212,6 +213,7 @@ export const submitAssessmentTurn = async (payload: {
       surface: payload.surface || "desktop",
       device_id: payload.device_id,
       voice_mode: payload.voice_mode || "text",
+      client_turn_id: payload.client_turn_id || "",
     },
     true
   );

@@ -89,6 +89,41 @@ class RealtimeRiskDetailResponse(BaseModel):
     detail: dict = Field(default_factory=dict)
 
 
+class CameraEmotionFaceBox(BaseModel):
+    left: float
+    top: float
+    width: float
+    height: float
+
+
+class CameraEmotionAnalyzeRequest(BaseModel):
+    image_data_url: str
+    width: int = 0
+    height: int = 0
+    timestamp_ms: Optional[int] = None
+    surface: str = "desktop"
+
+
+class CameraEmotionAnalyzeResponse(BaseModel):
+    ok: bool = True
+    timestamp_ms: int
+    model_ready: bool = False
+    face_detected: bool = False
+    face_count: int = 0
+    focus_locked: bool = False
+    recognition_paused: bool = False
+    pause_reason: str = ""
+    emotion_label: str = "unknown"
+    emotion_label_zh: str = "未识别"
+    confidence: float = 0.0
+    V: float = 0.0
+    A: float = 0.0
+    T: float = 0.0
+    S: float = 0.0
+    bbox: Optional[CameraEmotionFaceBox] = None
+    detail: dict = Field(default_factory=dict)
+
+
 class EmotionEventRequest(BaseModel):
     timestamp_ms: int
     type: str
@@ -592,6 +627,7 @@ class ActivationAssessmentTurnRequest(BaseModel):
     transcript: str = ""
     device_id: Optional[str] = None
     voice_mode: str = "text"
+    client_turn_id: str = ""
 
 
 class ActivationAssessmentVoiceRequest(BaseModel):

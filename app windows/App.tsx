@@ -20,6 +20,7 @@ import {
 import { AtmosphereView } from "./components/AtmosphereView";
 import { ActivationGate } from "./components/ActivationGate";
 import { ChatInterface } from "./components/ChatInterface";
+import { CameraPanel } from "./components/CameraPanel";
 import { CompanionProfilePanel } from "./components/CompanionProfilePanel";
 import { MoodChart } from "./components/MoodChart";
 import { Login } from "./components/Login";
@@ -29,6 +30,7 @@ import {
   Bell,
   LayoutDashboard,
   MessageSquareHeart,
+  Camera,
   Settings,
   Terminal,
   Activity,
@@ -77,6 +79,7 @@ enum Tab {
   CHAT = "CHAT",
   PERSONA = "PERSONA",
   FOCUS = "FOCUS",
+  CAMERA = "CAMERA",
   DEVICE = "DEVICE",
   CONTROL = "CONTROL",
   PROFILE = "PROFILE",
@@ -482,6 +485,39 @@ const normalizeCareDeliveryStrategy = (value: unknown): CareDeliveryStrategy => 
   return "policy";
 };
 
+type DashboardLiveSample = {
+  id: string;
+  timestamp: Date;
+  score: number;
+  label: string;
+  confidence?: number;
+  source?: "ws" | "poll";
+  scores?: RiskScores;
+};
+
+const EXPRESSION_LABELS_ZH = ["平静", "喜悦", "惊讶", "低落", "愤怒", "厌恶", "紧张", "轻蔑"];
+
+const resolveRealtimeLabel = (scores: RiskScores, riskDetail: RiskDetail | null) => {
+  const exprId = Number(riskDetail?.V_sub?.expression_class_id);
+  if (Number.isFinite(exprId) && exprId >= 0 && exprId < EXPRESSION_LABELS_ZH.length) {
+    return {
+      label: EXPRESSION_LABELS_ZH[Math.floor(exprId)],
+      confidence: Number(riskDetail?.V_sub?.expression_confidence ?? 0),
+    };
+  }
+  const ranked = [
+    { label: "整体紧绷", value: scores.S },
+    { label: "疲惫负荷", value: scores.T },
+    { label: "唤醒波动", value: scores.A },
+    { label: "敏感状态", value: scores.V },
+  ].sort((a, b) => b.value - a.value);
+  const top = ranked[0];
+  if (!top || top.value < 0.2) {
+    return { label: "平静", confidence: 0 };
+  }
+  return { label: top.label, confidence: top.value };
+};
+
 const defaultDeviceSettings = (): DeviceSettings => ({
   mode: "normal",
   care_delivery_strategy: "policy",
@@ -659,6 +695,7 @@ const App: React.FC = () => {
   const [wsConnected, setWsConnected] = useState(false);
   const [riskUpdatedAt, setRiskUpdatedAt] = useState<number | null>(null);
   const [riskSource, setRiskSource] = useState<"ws" | "poll" | null>(null);
+  const [liveEmotionSamples, setLiveEmotionSamples] = useState<DashboardLiveSample[]>([]);
   const [statusRefreshing, setStatusRefreshing] = useState(false);
   const [triggerToasts, setTriggerToasts] = useState<
     { id: string; title: string; detail: string }[]
@@ -725,6 +762,47 @@ const App: React.FC = () => {
     }
     return [];
   });
+  const appendLiveEmotionSample = useCallback(
+    (
+      nextScores: RiskScores,
+      nextRiskDetail: RiskDetail | null,
+      timestampMs: number,
+      source: "ws" | "poll"
+    ) => {
+      const safeTs = Number(timestampMs || Date.now());
+      const resolved = resolveRealtimeLabel(nextScores, nextRiskDetail);
+      const score = clamp(
+        Math.round((nextScores.S * 0.52 + nextScores.T * 0.24 + nextScores.A * 0.16 + nextScores.V * 0.08) * 100),
+        0,
+        100
+      );
+      setLiveEmotionSamples((prev) => {
+        const filtered = prev.filter((item) => safeTs - item.timestamp.getTime() <= 24 * 60 * 60 * 1000);
+        const last = filtered[filtered.length - 1];
+        if (
+          last &&
+          Math.abs(last.timestamp.getTime() - safeTs) < 2500 &&
+          Math.abs(last.score - score) < 1 &&
+          last.label === resolved.label
+        ) {
+          return filtered;
+        }
+        return [
+          ...filtered,
+          {
+            id: `${safeTs}-${source}`,
+            timestamp: new Date(safeTs),
+            score,
+            label: resolved.label,
+            confidence: resolved.confidence,
+            source,
+            scores: nextScores,
+          },
+        ].slice(-480);
+      });
+    },
+    []
+  );
 
   useEffect(() => {
     if (activeTab === Tab.DEVICE) {
@@ -1057,22 +1135,28 @@ const App: React.FC = () => {
     (event: EngineEvent) => {
       const payload = (event.payload || {}) as Record<string, any>;
       if (event.type === "RiskUpdate") {
-        setScores({
+        const nextScores = {
           V: Number(payload.V ?? 0),
           A: Number(payload.A ?? 0),
           T: Number(payload.T ?? 0),
           S: Number(payload.S ?? 0),
-        });
-        setRiskUpdatedAt(Number(event.timestamp_ms || Date.now()));
+        };
+        const nextRiskDetail =
+          payload.detail && typeof payload.detail === "object"
+            ? {
+                V_sub: (payload.detail.V_sub as Record<string, number>) || {},
+                A_sub: (payload.detail.A_sub as Record<string, number>) || {},
+                T_sub: (payload.detail.T_sub as Record<string, any>) || {},
+              }
+            : null;
+        const nextTs = Number(event.timestamp_ms || Date.now());
+        setScores(nextScores);
+        setRiskUpdatedAt(nextTs);
         setRiskSource("ws");
-        if (payload.detail && typeof payload.detail === "object") {
-          const detail = payload.detail as Record<string, any>;
-          setRiskDetail({
-            V_sub: (detail.V_sub as Record<string, number>) || {},
-            A_sub: (detail.A_sub as Record<string, number>) || {},
-            T_sub: (detail.T_sub as Record<string, any>) || {},
-          });
+        if (nextRiskDetail) {
+          setRiskDetail(nextRiskDetail);
         }
+        appendLiveEmotionSample(nextScores, nextRiskDetail, nextTs, "ws");
         if (payload.mode) {
           setMode(normalizeMode(payload.mode));
         }
@@ -1639,7 +1723,7 @@ const App: React.FC = () => {
     setActivationRequired(gateRequired);
     setActivationPath(nextActivationPath);
     setActiveTab(Tab.DASHBOARD);
-  }, []);
+  }, [appendLiveEmotionSample]);
 
   const handleLogout = useCallback(async () => {
     if (isGuest) {
@@ -2081,13 +2165,23 @@ const App: React.FC = () => {
       try {
         const detailData = await getRealtimeRiskDetail();
         if (!active) return;
-        setScores({ V: Number(detailData.V || 0), A: Number(detailData.A || 0), T: Number(detailData.T || 0), S: Number(detailData.S || 0) });
+        const nextScores = {
+          V: Number(detailData.V || 0),
+          A: Number(detailData.A || 0),
+          T: Number(detailData.T || 0),
+          S: Number(detailData.S || 0),
+        };
+        setScores(nextScores);
         if (detailData.detail && typeof detailData.detail === "object") {
-          setRiskDetail({
+          const nextRiskDetail = {
             V_sub: (detailData.detail.V_sub as Record<string, number>) || {},
             A_sub: (detailData.detail.A_sub as Record<string, number>) || {},
             T_sub: (detailData.detail.T_sub as Record<string, any>) || {},
-          });
+          };
+          setRiskDetail(nextRiskDetail);
+          appendLiveEmotionSample(nextScores, nextRiskDetail, Number(detailData.timestamp_ms || Date.now()), "poll");
+        } else {
+          appendLiveEmotionSample(nextScores, null, Number(detailData.timestamp_ms || Date.now()), "poll");
         }
         setRiskUpdatedAt(Number(detailData.timestamp_ms || Date.now()));
         setRiskSource("poll");
@@ -2096,6 +2190,7 @@ const App: React.FC = () => {
           const data = await getRealtimeScores();
           if (!active) return;
           setScores(data);
+          appendLiveEmotionSample(data, null, Date.now(), "poll");
           setRiskUpdatedAt(Date.now());
           setRiskSource("poll");
         } catch (innerErr) {
@@ -2109,7 +2204,7 @@ const App: React.FC = () => {
       active = false;
       window.clearInterval(timer);
     };
-  }, [isAuthenticated, isGuest]);
+  }, [appendLiveEmotionSample, isAuthenticated, isGuest]);
 
   useEffect(() => {
     if (!isAuthenticated || isGuest) return;
@@ -2349,6 +2444,55 @@ const App: React.FC = () => {
       return true;
     })
     .sort((a, b) => b.timestamp.getTime() - a.timestamp.getTime());
+
+  const todayLiveSamples = React.useMemo(
+    () =>
+      liveEmotionSamples
+        .filter((sample) => isSameLocalDay(sample.timestamp, new Date()))
+        .sort((a, b) => b.timestamp.getTime() - a.timestamp.getTime()),
+    [liveEmotionSamples]
+  );
+
+  const dashboardFeed = React.useMemo(() => {
+    if (todayEmotionRecords.length > 0) {
+      return todayEmotionRecords.slice(0, 10).map((event) => ({
+        id: event.id,
+        type: event.type,
+        time: event.timestamp,
+        description: event.description || "情绪已记录",
+        intensity: Math.round(
+          event.intensity ?? Math.max(event.scores.S, event.scores.T, event.scores.A) * 100
+        ),
+        live: false,
+      }));
+    }
+    return todayLiveSamples.slice(0, 10).map((sample) => ({
+      id: sample.id,
+      type: sample.label,
+      time: sample.timestamp,
+      description: `实时采样 · 波动值 ${sample.score}%`,
+      intensity: Math.round(sample.score),
+      live: true,
+    }));
+  }, [todayEmotionRecords, todayLiveSamples]);
+
+  const dashboardSummary = React.useMemo(() => {
+    const latest = todayLiveSamples[0];
+    const average =
+      todayLiveSamples.length > 0
+        ? Math.round(todayLiveSamples.reduce((sum, item) => sum + item.score, 0) / todayLiveSamples.length)
+        : 0;
+    const peak =
+      todayLiveSamples.length > 0
+        ? Math.round(Math.max(...todayLiveSamples.map((item) => item.score)))
+        : 0;
+    return {
+      current: latest?.label || resolveRealtimeLabel(scores, riskDetail).label,
+      average,
+      peak,
+      sampleCount: todayLiveSamples.length,
+    };
+  }, [riskDetail, scores, todayLiveSamples]);
 
   const resolvedAvatar = profileAvatar
     ? profileAvatar
@@ -2647,6 +2791,11 @@ const App: React.FC = () => {
           icon={ListChecks}
         />
         <NavButton
+          active={activeTab === Tab.CAMERA}
+          onClick={() => setActiveTab(Tab.CAMERA)}
+          icon={Camera}
+        />
+        <NavButton
           active={activeTab === Tab.DEVICE}
           onClick={() => setActiveTab(Tab.DEVICE)}
           icon={Activity}
@@ -2769,56 +2918,108 @@ const App: React.FC = () => {
 
         <div className="flex-1 flex flex-col overflow-hidden min-h-0">
           {activeTab === Tab.DASHBOARD && (
-            <div className="grid grid-cols-12 gap-6 h-full min-h-0 items-stretch">
-              <div className="col-span-3 h-full">
-                <AtmosphereView scores={scores} mode={mode} />
+            <div className="grid grid-cols-12 gap-6 min-h-full items-start overflow-y-auto pr-2 pb-4 no-scrollbar">
+              <div className="col-span-3 min-h-[760px]">
+                <AtmosphereView
+                  scores={scores}
+                  mode={mode}
+                  riskDetail={riskDetail}
+                  riskUpdatedAt={riskUpdatedAt}
+                  riskSource={riskSource}
+                  todayRecordCount={Math.max(todayEmotionRecords.length, todayLiveSamples.length)}
+                />
               </div>
-              <div className="col-span-6 h-full">
-                <MoodChart events={events} isGuest={isGuest} />
+              <div className="col-span-6 min-h-[760px]">
+                <MoodChart
+                  events={events}
+                  isGuest={isGuest}
+                  liveSamples={liveEmotionSamples}
+                  riskSource={riskSource}
+                  riskUpdatedAt={riskUpdatedAt}
+                />
               </div>
-              <div className="col-span-3 h-full bg-[#0c1222]/50 backdrop-blur-3xl rounded-[2.5rem] border border-white/[0.05] flex flex-col shadow-2xl overflow-hidden">
-                <div className="p-6 border-b border-white/[0.03] flex justify-between items-center">
-                  <div className="flex items-center gap-2">
-                    <Terminal size={14} className="text-indigo-500" />
-                    <h3 className="text-[10px] font-black text-slate-500 uppercase tracking-widest">
-                      今日情绪记录
-                    </h3>
+              <div className="col-span-3 min-h-[760px] rounded-[2.35rem] border border-white/5 bg-[linear-gradient(180deg,rgba(12,18,34,0.78),rgba(10,15,28,0.88))] backdrop-blur-3xl shadow-2xl overflow-hidden flex flex-col">
+                <div className="px-6 pt-6 pb-5 border-b border-white/[0.04]">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                      <Terminal size={14} className="text-indigo-400" />
+                      <h3 className="text-[10px] font-black uppercase tracking-[0.28em] text-slate-500">
+                        今日情绪记录
+                      </h3>
+                    </div>
+                    <span className="text-[9px] font-black uppercase tracking-[0.24em] text-indigo-300/70">
+                      Today
+                    </span>
                   </div>
-                  <span className="text-[8px] font-black text-indigo-400/50">TODAY</span>
+                  <div className="mt-5 grid grid-cols-2 gap-3">
+                    <div className="rounded-[1.45rem] border border-white/6 bg-white/[0.03] p-3.5">
+                      <div className="text-[10px] font-black uppercase tracking-[0.24em] text-slate-500">当前情绪</div>
+                      <div className="mt-2 text-base font-black text-white">{dashboardSummary.current}</div>
+                    </div>
+                    <div className="rounded-[1.45rem] border border-white/6 bg-white/[0.03] p-3.5">
+                      <div className="text-[10px] font-black uppercase tracking-[0.24em] text-slate-500">实时样本</div>
+                      <div className="mt-2 text-base font-black text-white">{dashboardSummary.sampleCount}</div>
+                    </div>
+                    <div className="rounded-[1.45rem] border border-white/6 bg-white/[0.03] p-3.5">
+                      <div className="text-[10px] font-black uppercase tracking-[0.24em] text-slate-500">今日均值</div>
+                      <div className="mt-2 text-base font-black text-white">
+                        {dashboardSummary.average > 0 ? `${dashboardSummary.average}%` : "--"}
+                      </div>
+                    </div>
+                    <div className="rounded-[1.45rem] border border-white/6 bg-white/[0.03] p-3.5">
+                      <div className="text-[10px] font-black uppercase tracking-[0.24em] text-slate-500">峰值</div>
+                      <div className="mt-2 text-base font-black text-white">
+                        {dashboardSummary.peak > 0 ? `${dashboardSummary.peak}%` : "--"}
+                      </div>
+                    </div>
+                  </div>
                 </div>
-                <div className="flex-1 overflow-y-auto p-4 no-scrollbar space-y-4">
-                  {todayEmotionRecords.length === 0 && (
-                    <div className="text-[11px] font-semibold text-slate-500 text-center py-8">
-                      今天还没有情绪记录
+                <div className="flex-1 overflow-y-auto px-4 py-5 no-scrollbar">
+                  {dashboardFeed.length === 0 && (
+                    <div className="text-[11px] font-semibold text-slate-500 text-center py-10">
+                      今天还没有情绪记录，实时采样出现后会自动显示在这里
                     </div>
                   )}
-                  {todayEmotionRecords.map((event) => (
+                  <div className="space-y-3">
+                  {dashboardFeed.map((event) => (
                     <div
                       key={event.id}
-                      className="p-3 bg-white/[0.02] border border-white/[0.05] rounded-2xl group hover:bg-white/[0.04] transition-all"
+                      className="rounded-[1.6rem] border border-white/6 bg-white/[0.025] px-4 py-3.5 transition-all hover:bg-white/[0.04]"
                     >
-                      <div className="flex justify-between items-start mb-1">
+                      <div className="flex justify-between items-start gap-3">
                         <div className="flex items-center gap-2">
-                          <span className="text-[9px] font-black px-1.5 py-0.5 rounded bg-indigo-500/20 text-indigo-300">
+                          <span className="rounded-full bg-indigo-500/18 px-2 py-1 text-[9px] font-black text-indigo-300">
                             {event.type}
                           </span>
-                          <span className="text-[8px] font-bold text-slate-500">
-                            {getDayPartLabel(event.timestamp)}
+                          <span className="text-[9px] font-bold text-slate-500">
+                            {getDayPartLabel(event.time)}
                           </span>
+                          {event.live && (
+                            <span className="rounded-full bg-cyan-500/18 px-2 py-1 text-[9px] font-black text-cyan-300">
+                              LIVE
+                            </span>
+                          )}
                         </div>
-                        <span className="text-[8px] font-mono text-slate-600">
-                          {event.timestamp.toLocaleTimeString([], {
+                        <span className="text-[9px] font-mono text-slate-600">
+                          {event.time.toLocaleTimeString([], {
                             hour: "2-digit",
                             minute: "2-digit",
                             second: "2-digit",
                           })}
                         </span>
                       </div>
-                      <p className="text-[10px] text-slate-300 font-bold leading-tight line-clamp-2">
+                      <p className="mt-3 text-[11px] text-slate-300 font-semibold leading-6">
                         {event.description || "情绪已记录"}
                       </p>
+                      <div className="mt-3 h-1.5 rounded-full bg-white/[0.04] overflow-hidden">
+                        <div
+                          className="h-full rounded-full bg-gradient-to-r from-indigo-400 via-cyan-300 to-fuchsia-400"
+                          style={{ width: `${Math.max(8, Math.min(100, event.intensity))}%` }}
+                        />
+                      </div>
                     </div>
                   ))}
+                  </div>
                 </div>
               </div>
             </div>
@@ -3058,6 +3259,15 @@ const App: React.FC = () => {
                   )}
                 </div>
               </div>
+            </div>
+          )}
+          {activeTab === Tab.CAMERA && (
+            <div className="h-full w-full">
+              <CameraPanel
+                status={deviceStatus}
+                videoEnabled={mediaState.videoEnabled}
+                active={activeTab === Tab.CAMERA}
+              />
             </div>
           )}
           <div

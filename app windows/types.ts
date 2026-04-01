@@ -51,6 +51,16 @@ export interface EmotionEvent {
   transcript?: string;
 }
 
+export interface EmotionSample {
+  id: string;
+  timestamp: Date;
+  score: number;
+  label: string;
+  confidence?: number;
+  source?: "ws" | "poll" | "history";
+  scores?: RiskScores;
+}
+
 export interface DeviceStatus {
   device_id: string;
   device_ip?: string;

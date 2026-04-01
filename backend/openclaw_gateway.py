@@ -271,11 +271,27 @@ class OpenClawGatewayClient:
             sessions = self._read_json(sessions_path)
         except Exception:
             return None
-        row = sessions.get(raw) if isinstance(sessions, dict) else None
-        if not isinstance(row, dict):
+        if not isinstance(sessions, dict):
             return None
-        session_id = str(row.get("sessionId") or "").strip()
-        return session_id or None
+        candidates: List[str] = []
+        normalized = self._normalize_agent_session_key(raw)
+        for candidate in (
+            raw,
+            normalized,
+            f"agent:main:{raw}",
+            f"agent:main:{normalized}",
+        ):
+            clean = str(candidate or "").strip()
+            if clean and clean not in candidates:
+                candidates.append(clean)
+        for candidate in candidates:
+            row = sessions.get(candidate)
+            if not isinstance(row, dict):
+                continue
+            session_id = str(row.get("sessionId") or "").strip()
+            if session_id:
+                return session_id
+        return None
 
     async def _send_message_via_agent(
         self,

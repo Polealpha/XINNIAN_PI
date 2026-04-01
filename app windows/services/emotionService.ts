@@ -23,6 +23,53 @@ export const getRealtimeRiskDetail = async (): Promise<RealtimeRiskDetailRespons
   return apiGet("/api/emotion/realtime/detail", true);
 };
 
+export interface CameraEmotionFaceBox {
+  left: number;
+  top: number;
+  width: number;
+  height: number;
+}
+
+export interface CameraEmotionAnalyzeResponse {
+  ok: boolean;
+  timestamp_ms: number;
+  model_ready: boolean;
+  face_detected: boolean;
+  face_count: number;
+  focus_locked: boolean;
+  recognition_paused: boolean;
+  pause_reason: string;
+  emotion_label: string;
+  emotion_label_zh: string;
+  confidence: number;
+  V: number;
+  A: number;
+  T: number;
+  S: number;
+  bbox?: CameraEmotionFaceBox | null;
+  detail?: Record<string, any>;
+}
+
+export const analyzeCameraEmotion = async (payload: {
+  imageDataUrl: string;
+  width: number;
+  height: number;
+  timestampMs?: number;
+  surface?: string;
+}): Promise<CameraEmotionAnalyzeResponse> => {
+  return apiPost(
+    "/api/vision/camera/analyze",
+    {
+      image_data_url: payload.imageDataUrl,
+      width: payload.width,
+      height: payload.height,
+      timestamp_ms: payload.timestampMs ?? Date.now(),
+      surface: payload.surface ?? "desktop",
+    },
+    true
+  );
+};
+
 export const getEmotionHistory = async (): Promise<EmotionEvent[]> => {
   const data = await apiGet("/api/emotion/history?limit=50", true);
   const allowed = new Set(["HAPPY", "SAD", "ANGRY", "CALM", "TIRED", "ANXIOUS"]);

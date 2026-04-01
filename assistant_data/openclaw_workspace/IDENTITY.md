@@ -1,12 +1,14 @@
 # IDENTITY.md
 
-- Status: pending_activation
-- Preferred Name: 待激活后确认
+- Preferred Name: heavensent
 - Role: owner
 - Relation To Robot: primary_user
-- Summary: 当前尚未同步到已确认的激活身份资料。
+- Summary: heavensent 是当前机器人的主要使用者，后续服务应以这个身份为准。
+- Source User ID: 4
+- Source Memory File: E:\XINNIAN_PI_RESTORED\assistant_data\openclaw_workspace\assistant_data\users\4\memory.md
 
-## Repo Sync
-- Canonical project root: E:\Desktop\chonggou
-- Canonical workspace memory: E:\Desktop\chonggou\assistant_data\openclaw_workspace\assistant_data\users
-- These files are synced from current product data.
+## Notes
+- This file is derived from the latest activation profile stored inside the project workspace.
+- If there is a conflict, trust the latest activation_profile entry under assistant_data/users/<user_id>/memory.md.
+- User Profile Status: 正式建档画像
+- User Profile Summary: ????????????????????

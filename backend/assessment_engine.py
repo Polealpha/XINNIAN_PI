@@ -8,6 +8,39 @@ SCORE_KEYS = ("Se", "Si", "Ne", "Ni", "Te", "Ti", "Fe", "Fi")
 PAIR_KEYS = SCORE_KEYS
 QUESTION_MAP: Dict[str, Dict[str, object]] = {}
 
+FALLBACK_QUESTION_BANK: List[Dict[str, str]] = [
+    {
+        "id": "fallback-support-style",
+        "focus": "interaction_preferences",
+        "prompt": "如果你状态不太好时，有人来关心你，你更希望对方怎么开口，才不会让你觉得有压力？",
+    },
+    {
+        "id": "fallback-avoid-patterns",
+        "focus": "avoid_patterns",
+        "prompt": "有没有哪种关心方式，反而会让你觉得更烦或者更想躲开？",
+    },
+    {
+        "id": "fallback-decision-style",
+        "focus": "decision_style",
+        "prompt": "如果遇到一个有点复杂的选择，你会更想自己先想清楚，还是找个人说说再决定？",
+    },
+    {
+        "id": "fallback-stress-response",
+        "focus": "stress_response",
+        "prompt": "最近有没有哪件事让你觉得压力特别大、喘不过气？如果有，那个时候你本能地做了什么？",
+    },
+    {
+        "id": "fallback-comfort-preferences",
+        "focus": "comfort_preferences",
+        "prompt": "如果你特别累或者情绪很低的时候，有人想陪你，你会更希望对方安静陪着、陪你聊聊，还是先别打扰你？",
+    },
+    {
+        "id": "fallback-care-guidance",
+        "focus": "care_guidance",
+        "prompt": "如果以后我想更好地陪你，你最希望我记住的一条相处原则是什么？",
+    },
+]
+
 PROFILE_LIST_KEYS = ("interaction_preferences", "comfort_preferences", "avoid_patterns")
 PROFILE_TEXT_KEYS = ("summary", "decision_style", "stress_response", "care_guidance")
 
@@ -184,6 +217,48 @@ def _append_dialogue_turn(dialogue_turns: List[Dict[str, object]], role: str, te
     return next_turns[-40:]
 
 
+def _asked_question_ids(session: Dict[str, object]) -> List[str]:
+    asked: List[str] = []
+    for item in session.get("question_history") or []:
+        if not isinstance(item, dict):
+            continue
+        question_id = str(item.get("question_id") or "").strip()
+        if question_id:
+            asked.append(question_id)
+    last_question_id = str(session.get("last_question_id") or "").strip()
+    if last_question_id:
+        asked.append(last_question_id)
+    return asked
+
+
+def _infer_missing_focus(session: Dict[str, object]) -> str:
+    preview = _merge_profile_preview(
+        {
+            "summary": str(session.get("summary") or "").strip(),
+            "interaction_preferences": session.get("interaction_preferences") or [],
+            "decision_style": str(session.get("decision_style") or "").strip(),
+            "stress_response": str(session.get("stress_response") or "").strip(),
+            "comfort_preferences": session.get("comfort_preferences") or [],
+            "avoid_patterns": session.get("avoid_patterns") or [],
+            "care_guidance": str(session.get("care_guidance") or "").strip(),
+        },
+        dict(session.get("profile_preview") or {}),
+    )
+    if not _listify(preview.get("interaction_preferences")):
+        return "interaction_preferences"
+    if not _listify(preview.get("avoid_patterns")):
+        return "avoid_patterns"
+    if not str(preview.get("decision_style") or "").strip():
+        return "decision_style"
+    if not str(preview.get("stress_response") or "").strip():
+        return "stress_response"
+    if not _listify(preview.get("comfort_preferences")):
+        return "comfort_preferences"
+    if not str(preview.get("care_guidance") or "").strip():
+        return "care_guidance"
+    return "stress_response"
+
+
 def extract_next_question_from_model(text: str) -> Dict[str, object]:
     parsed = parse_json_dict(text)
     question = str(parsed.get("question") or parsed.get("next_question") or "").strip()
@@ -258,21 +333,110 @@ def extract_turn_analysis_from_model(text: str) -> Dict[str, object]:
 
 
 def select_next_question(scores: Dict[str, float], asked_ids: List[str], confidence: Dict[str, float]) -> Dict[str, object]:
-    del scores, asked_ids, confidence
-    return {}
+    del scores, confidence
+    asked = {str(item or "").strip() for item in asked_ids if str(item or "").strip()}
+    for item in FALLBACK_QUESTION_BANK:
+        if str(item["id"]) not in asked:
+            return {
+                "id": item["id"],
+                "prompt": item["prompt"],
+                "pair": item["focus"],
+                "focus": item["focus"],
+                "rationale": "fallback_sequence",
+            }
+    last = FALLBACK_QUESTION_BANK[-1]
+    return {
+        "id": last["id"],
+        "prompt": last["prompt"],
+        "pair": last["focus"],
+        "focus": last["focus"],
+        "rationale": "fallback_repeat",
+    }
+
+
+def fallback_next_question(session: Dict[str, object], preferred_focus: str = "") -> Dict[str, object]:
+    focus = str(preferred_focus or _infer_missing_focus(session) or "").strip()
+    asked = set(_asked_question_ids(session))
+    for item in FALLBACK_QUESTION_BANK:
+        if item["focus"] == focus and item["id"] not in asked:
+            return {
+                "id": item["id"],
+                "prompt": item["prompt"],
+                "pair": item["focus"],
+                "focus": item["focus"],
+                "rationale": "fallback_focus_match",
+            }
+    return select_next_question({}, list(asked), {})
 
 
 def score_answer_heuristic(question: Dict[str, object], answer: str) -> Dict[str, object]:
-    del question, answer
+    clean = str(answer or "").strip()
+    focus = str(question.get("focus") or question.get("pair") or "").strip()
+    updates: Dict[str, object] = {}
+    evidence: List[str] = []
+    reasoning = "fallback_heuristic"
+    if clean:
+        evidence.append(f"问：{str(question.get('prompt') or '').strip()} 答：{clean}")
+    if focus == "interaction_preferences" and clean:
+        updates["interaction_preferences"] = [clean]
+        updates["summary"] = f"偏好被以“{clean}”这样的方式接近和关心。"
+    elif focus == "avoid_patterns" and clean:
+        updates["avoid_patterns"] = [clean]
+    elif focus == "decision_style" and clean:
+        updates["decision_style"] = clean
+        updates["summary"] = f"做决定时更接近“{clean}”。"
+    elif focus == "stress_response" and clean:
+        updates["stress_response"] = clean
+    elif focus == "comfort_preferences" and clean:
+        updates["comfort_preferences"] = [clean]
+    elif focus == "care_guidance" and clean:
+        updates["care_guidance"] = clean
     return {
-        "effective": False,
-        "profile_updates": {},
-        "evidence_summary": [],
-        "reasoning": "heuristic_disabled",
+        "effective": bool(clean),
+        "profile_updates": updates,
+        "evidence_summary": evidence[:3],
+        "reasoning": reasoning,
         "next_focus": "",
         "stable_enough": False,
-        "confidence": 0.0,
-        "summary_hint": "",
+        "confidence": 0.22 if clean else 0.0,
+        "summary_hint": str(updates.get("summary") or "").strip(),
+    }
+
+
+def fallback_turn_analysis(question: Dict[str, object], session: Dict[str, object], answer: str, error: str = "") -> Dict[str, object]:
+    scoring = score_answer_heuristic(question, answer)
+    merged_preview = _merge_profile_preview(
+        dict(session.get("profile_preview") or {}),
+        dict(scoring.get("profile_updates") or {}),
+    )
+    probe_session = dict(session)
+    probe_session["profile_preview"] = merged_preview
+    probe_session["interaction_preferences"] = _listify(merged_preview.get("interaction_preferences"))
+    probe_session["decision_style"] = str(merged_preview.get("decision_style") or "").strip()
+    probe_session["stress_response"] = str(merged_preview.get("stress_response") or "").strip()
+    probe_session["comfort_preferences"] = _listify(merged_preview.get("comfort_preferences"))
+    probe_session["avoid_patterns"] = _listify(merged_preview.get("avoid_patterns"))
+    probe_session["care_guidance"] = str(merged_preview.get("care_guidance") or "").strip()
+    next_focus = _infer_missing_focus(probe_session)
+    next_question = fallback_next_question(probe_session, next_focus)
+    finishable = (
+        int(session.get("effective_turn_count", 0) or 0) + (1 if scoring.get("effective") else 0)
+        >= int(session.get("required_min_turns", 4) or 4)
+        and not next_focus
+    )
+    reasoning = "fallback_turn_analysis"
+    if error:
+        reasoning = f"{reasoning}: {str(error).strip()}"
+    return {
+        "effective": bool(scoring.get("effective")),
+        "profile_updates": dict(scoring.get("profile_updates") or {}),
+        "evidence_summary": list(scoring.get("evidence_summary") or []),
+        "reasoning": reasoning,
+        "confidence": max(float(scoring.get("confidence") or 0.0), 0.18 if answer else 0.0),
+        "should_finish": bool(finishable),
+        "finish_reason": "fallback_complete" if finishable else "fallback_continue",
+        "missing_area": next_focus,
+        "next_question": {} if finishable else next_question,
     }
 
 

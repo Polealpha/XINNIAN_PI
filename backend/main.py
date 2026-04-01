@@ -10,6 +10,7 @@ import subprocess
 import base64
 import hashlib
 import secrets
+import binascii
 from difflib import SequenceMatcher
 from collections import deque
 from pathlib import Path
@@ -23,7 +24,11 @@ from fastapi.staticfiles import StaticFiles
 from sqlite3 import Connection
 import httpx
 from cryptography.fernet import Fernet, InvalidToken
-from engine.core.config import load_engine_config
+from engine.core.config import EngineConfig, load_engine_config
+from engine.core.types import VideoFrame
+from engine.vision.face_detector import FaceDetector
+from engine.vision.frame_decode import decode_rgb
+from engine.vision.vision_risk import VisionRiskScorer
 
 from . import auth
 from .activation_prompts import ACTIVATION_SYSTEM_PROMPT, IDENTITY_EXTRACTION_PROMPT
@@ -39,6 +44,8 @@ from .assessment_engine import (
     empty_score_map,
     extract_next_question_from_model,
     extract_turn_analysis_from_model,
+    fallback_next_question,
+    fallback_turn_analysis,
     merge_scoring,
     normalize_confidence,
     normalize_scores,
@@ -89,6 +96,9 @@ from .schemas import (
     AssistantTodoUpdateRequest,
     CareRequest,
     CareResponse,
+    CameraEmotionAnalyzeRequest,
+    CameraEmotionAnalyzeResponse,
+    CameraEmotionFaceBox,
     DailySummaryRequest,
     DailySummaryResponse,
     DesktopRuntimeStatusResponse,
@@ -169,6 +179,8 @@ _llm = None
 _llm_config = None
 _llm_init_attempted = False
 _llm_init_lock = threading.Lock()
+_camera_vision_lock = threading.Lock()
+_camera_vision_runtime: Optional[Dict[str, Any]] = None
 HEARTBEAT_STALE_MS = 30000
 CLIENT_SESSION_STALE_MS = 45000
 _RUNTIME_BOOT_TS = int(time.time() * 1000)
@@ -195,6 +207,173 @@ def _runtime_version_payload() -> Dict[str, object]:
         "build_ts": _RUNTIME_BOOT_TS,
         "bridge_git_sha": _safe_git(["git", "rev-parse", "--short", "HEAD"]) or "unknown",
     }
+
+
+def _repo_root() -> Path:
+    return Path(__file__).resolve().parents[1]
+
+
+def _resolve_repo_path(value: str) -> str:
+    raw = str(value or "").strip()
+    if not raw:
+        return raw
+    candidate = Path(raw)
+    if candidate.is_absolute():
+        return str(candidate)
+    return str((_repo_root() / candidate).resolve())
+
+
+def _expression_label_to_zh(label: str) -> str:
+    mapping = {
+        "neutral": "平静",
+        "happiness": "开心",
+        "surprise": "惊讶",
+        "sadness": "低落",
+        "anger": "愤怒",
+        "disgust": "厌恶",
+        "fear": "紧张",
+        "contempt": "轻蔑",
+        "unknown": "未识别",
+    }
+    return mapping.get(str(label or "").strip().lower(), "未识别")
+
+
+def _decode_camera_image_payload(image_data_url: str) -> bytes:
+    raw = str(image_data_url or "").strip()
+    if not raw:
+        raise HTTPException(status_code=400, detail="image_data_url is required")
+    if "," in raw:
+        _, raw = raw.split(",", 1)
+    try:
+        return base64.b64decode(raw, validate=True)
+    except (binascii.Error, ValueError) as exc:
+        raise HTTPException(status_code=400, detail="invalid image_data_url") from exc
+
+
+def _get_camera_vision_runtime() -> Dict[str, Any]:
+    global _camera_vision_runtime
+    if _camera_vision_runtime is not None:
+        return _camera_vision_runtime
+    with _camera_vision_lock:
+        if _camera_vision_runtime is not None:
+            return _camera_vision_runtime
+        video_cfg = EngineConfig().video
+        video_cfg.expression_enabled = True
+        video_cfg.expression_model_path = _resolve_repo_path(video_cfg.expression_model_path)
+        video_cfg.expression_mp_model_path = _resolve_repo_path(video_cfg.expression_mp_model_path)
+        runtime: Dict[str, Any] = {
+            "scorer": VisionRiskScorer(video_cfg),
+            "detector": FaceDetector(
+                {
+                    "detector": "mediapipe",
+                    "min_detection_confidence": 0.35,
+                    "min_face_area_ratio": 0.015,
+                    "max_face_area_ratio": 0.92,
+                    "multi_face_policy": "largest",
+                }
+            ),
+            "counter": None,
+            "counter_source": "fallback",
+        }
+        try:
+            from mediapipe.tasks import python  # type: ignore
+            from mediapipe.tasks.python import vision  # type: ignore
+
+            runtime["counter"] = vision.FaceLandmarker.create_from_options(
+                vision.FaceLandmarkerOptions(
+                    base_options=python.BaseOptions(model_asset_path=video_cfg.expression_mp_model_path),
+                    output_face_blendshapes=False,
+                    output_facial_transformation_matrixes=False,
+                    num_faces=2,
+                    min_face_detection_confidence=0.25,
+                    min_face_presence_confidence=0.25,
+                    min_tracking_confidence=0.25,
+                )
+            )
+            runtime["counter_source"] = "mediapipe_tasks"
+        except Exception:
+            runtime["counter"] = None
+            runtime["counter_source"] = "fallback"
+        _camera_vision_runtime = runtime
+        return runtime
+
+
+def _count_faces_for_camera(frame: VideoFrame, runtime: Dict[str, Any]) -> tuple[int, Optional[tuple[int, int, int, int]], str]:
+    rgb = decode_rgb(frame)
+    counter = runtime.get("counter")
+    if rgb is not None and counter is not None:
+        try:
+            import mediapipe as mp  # type: ignore
+
+            mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb)
+            results = counter.detect(mp_image)
+            detections = getattr(results, "face_landmarks", None) or []
+            candidates: List[tuple[int, int, int, int]] = []
+            for face_landmarks in detections:
+                xs = [float(point.x) for point in face_landmarks]
+                ys = [float(point.y) for point in face_landmarks]
+                if not xs or not ys:
+                    continue
+                expanded = _expand_face_bbox_from_landmarks(xs, ys, frame.width, frame.height)
+                if not expanded:
+                    continue
+                candidates.append(expanded)
+            if candidates:
+                candidates.sort(key=lambda item: int(item[2]) * int(item[3]), reverse=True)
+                return len(candidates), candidates[0], "mediapipe_tasks"
+            return 0, None, "mediapipe_tasks"
+        except Exception:
+            pass
+    detector = runtime.get("detector")
+    if detector is not None:
+        face_det = detector.detect(frame)
+        if face_det.found and face_det.bbox:
+            return 1, face_det.bbox, "fallback"
+    return 0, None, "fallback"
+
+
+def _bbox_to_percent(bbox: Optional[tuple[int, int, int, int]], width: int, height: int) -> Optional[Dict[str, float]]:
+    if not bbox or width <= 0 or height <= 0:
+        return None
+    x, y, w, h = bbox
+    return {
+        "left": max(0.0, min(100.0, float(x / width * 100.0))),
+        "top": max(0.0, min(100.0, float(y / height * 100.0))),
+        "width": max(0.0, min(100.0, float(w / width * 100.0))),
+        "height": max(0.0, min(100.0, float(h / height * 100.0))),
+    }
+
+
+def _expand_face_bbox_from_landmarks(
+    xs: List[float], ys: List[float], frame_w: int, frame_h: int
+) -> Optional[tuple[int, int, int, int]]:
+    if not xs or not ys or frame_w <= 0 or frame_h <= 0:
+        return None
+    x1 = max(0.0, min(xs)) * frame_w
+    y1 = max(0.0, min(ys)) * frame_h
+    x2 = min(1.0, max(xs)) * frame_w
+    y2 = min(1.0, max(ys)) * frame_h
+    raw_w = max(0.0, x2 - x1)
+    raw_h = max(0.0, y2 - y1)
+    if raw_w <= 0.0 or raw_h <= 0.0:
+        return None
+
+    # Landmarker points tend to hug the inner face contour and cut off hair/chin.
+    # Expand and bias slightly downward so the visible face is fully enclosed.
+    cx = (x1 + x2) * 0.5
+    cy = (y1 + y2) * 0.5 + raw_h * 0.05
+    box_w = raw_w * 1.38
+    box_h = raw_h * 1.58
+
+    left = int(max(0.0, cx - box_w * 0.5))
+    top = int(max(0.0, cy - box_h * 0.5))
+    right = int(min(float(frame_w), cx + box_w * 0.5))
+    bottom = int(min(float(frame_h), cy + box_h * 0.5))
+    width = max(0, right - left)
+    height = max(0, bottom - top)
+    if width <= 0 or height <= 0:
+        return None
+    return left, top, width, height
 
 
 def _looks_tool_call_leak_text(text: str) -> bool:
@@ -255,6 +434,7 @@ desktop_speech_service = DesktopSpeechService()
 
 ACTIVATION_ASSESSMENT_MODEL_TIMEOUT_MS = 35_000
 ACTIVATION_ASSESSMENT_MEMORY_TIMEOUT_MS = 30_000
+ACTIVATION_ASSESSMENT_RETRY_DELAYS_MS = (1200, 2600, 5200)
 _ENGINE_CONFIG_PATH = Path(__file__).resolve().parent.parent / "config" / "engine_config.json"
 
 
@@ -1056,6 +1236,20 @@ def _assessment_speak_text(device_ip: str, text: str, timeout_sec: float = 8.0) 
     return _post_device_json(device_ip, "/speak", {"text": clean}, timeout_sec=timeout_sec)
 
 
+def _apply_assessment_question(payload: Dict[str, object], question: Dict[str, object], *, default_source: str = "ai") -> None:
+    next_question = dict(question or {})
+    if not next_question:
+        return
+    payload["latest_question"] = str(next_question.get("prompt") or payload.get("latest_question") or "")
+    payload["last_question_id"] = str(next_question.get("id") or payload.get("last_question_id") or "")
+    payload["question_pair"] = str(next_question.get("pair") or payload.get("question_pair") or "")
+    payload["current_focus"] = str(
+        next_question.get("focus") or next_question.get("pair") or payload.get("current_focus") or ""
+    )
+    rationale = str(next_question.get("rationale") or "").strip().lower()
+    payload["question_source"] = "fallback" if rationale.startswith("fallback") else str(default_source or "ai")
+
+
 def _assessment_should_ignore_transcript(session_payload: Dict[str, object], transcript: str) -> bool:
     clean = _compact_text(transcript)
     if not clean:
@@ -1092,6 +1286,7 @@ async def _assessment_apply_turn(
     device_id: Optional[str],
     voice_mode: str,
     surface: str,
+    client_turn_id: str = "",
 ) -> tuple[Dict[str, object], ActivationAssessmentTurnResponse]:
     ai_snapshot = _activation_ai_runtime_snapshot()
     if not bool(ai_snapshot["ai_ready"]):
@@ -1118,17 +1313,8 @@ async def _assessment_apply_turn(
             raise RuntimeError("assessment_turn_analysis_empty")
         scoring_source = "ai"
     except Exception as exc:
-        session_payload["status"] = "blocked"
-        session_payload["blocking_reason"] = f"AI 这一轮分析未完成：{exc}"
-        session_payload["assessment_ready"] = False
-        _save_assessment_session(conn, int(user_id), session_payload, session_id=int(session_id))
-        device_online, _selected = _assessment_device_online(conn, int(user_id), device_id)
-        response = _assessment_response(session_payload, device_online=device_online, exists=True)
-        return session_payload, ActivationAssessmentTurnResponse(
-            **response.model_dump(),
-            question_changed=False,
-            just_completed=False,
-        )
+        analysis = fallback_turn_analysis(question, session_payload, answer_text, error=str(exc))
+        scoring_source = "fallback"
 
     scoring = {
         "effective": bool(analysis.get("effective", True)),
@@ -1166,15 +1352,17 @@ async def _assessment_apply_turn(
             merged["blocking_reason"] = "AI 认为当前信息还不够稳定，正式建档继续等待更多回答。"
     elif merged.get("status") != "completed":
         if not next_question:
-            merged["status"] = "blocked"
-            merged["blocking_reason"] = "AI 下一题生成未完成：缺少下一题内容"
-            merged["assessment_ready"] = False
-        else:
-            merged["latest_question"] = str(next_question.get("prompt") or merged.get("latest_question") or "")
-            merged["last_question_id"] = str(next_question.get("id") or merged.get("last_question_id") or "")
-            merged["question_pair"] = str(next_question.get("pair") or merged.get("question_pair") or "")
-            merged["current_focus"] = str(next_question.get("focus") or next_question.get("pair") or missing_area or merged.get("current_focus") or "")
-            merged["question_source"] = "ai"
+            fallback_question = fallback_next_question(merged, missing_area)
+            if fallback_question:
+                next_question = fallback_question
+            else:
+                merged["status"] = "blocked"
+                merged["blocking_reason"] = "AI 下一题生成未完成：缺少下一题内容"
+                merged["assessment_ready"] = False
+        if next_question and merged.get("status") != "blocked":
+            if missing_area and not str(next_question.get("focus") or "").strip():
+                next_question["focus"] = missing_area
+            _apply_assessment_question(merged, next_question)
 
     _append_assessment_turn_event(
         conn,
@@ -1199,11 +1387,16 @@ async def _assessment_apply_turn(
     _save_assessment_session(conn, int(user_id), merged, session_id=int(session_id))
     device_online, _selected = _assessment_device_online(conn, int(user_id), device_id)
     response = _assessment_response(merged, device_online=device_online, exists=True)
-    return merged, ActivationAssessmentTurnResponse(
+    turn_response = ActivationAssessmentTurnResponse(
         **response.model_dump(),
         question_changed=bool(response.latest_question),
         just_completed=bool(merged.get("status") == "completed"),
     )
+    if str(client_turn_id or "").strip():
+        merged["last_client_turn_id"] = str(client_turn_id).strip()
+        merged["last_turn_response"] = turn_response.model_dump()
+        _save_assessment_session(conn, int(user_id), merged, session_id=int(session_id))
+    return merged, turn_response
 
 
 def _heuristic_personality_profile(text: str) -> Dict[str, object]:
@@ -1366,6 +1559,50 @@ async def _gateway_send_message_with_timeout(session_key: str, prompt: str, time
         return await assistant_service.gateway.send_message(session_key, prompt)
 
 
+def _is_retryable_assessment_gateway_error(exc: Exception) -> bool:
+    detail = str(exc or "").strip().lower()
+    if not detail:
+        return False
+    retry_markers = (
+        "429",
+        "rate limit",
+        "速率限制",
+        "network_error",
+        "timeout",
+        "timed out",
+        "fetch failed",
+        "provider finish_reason: network_error",
+    )
+    return any(marker in detail for marker in retry_markers)
+
+
+async def _gateway_send_message_with_backoff(
+    session_key: str,
+    prompt: str,
+    timeout_ms: int,
+    *,
+    retry_delays_ms: tuple[int, ...] = ACTIVATION_ASSESSMENT_RETRY_DELAYS_MS,
+) -> str:
+    last_exc: Optional[Exception] = None
+    attempts = 1 + len(retry_delays_ms)
+    for attempt in range(attempts):
+        try:
+            return await _gateway_send_message_with_timeout(session_key, prompt, timeout_ms=timeout_ms)
+        except Exception as exc:
+            last_exc = exc
+            if attempt >= attempts - 1 or not _is_retryable_assessment_gateway_error(exc):
+                raise
+            await asyncio.sleep(max(0.0, retry_delays_ms[attempt] / 1000.0))
+    if last_exc is not None:
+        raise last_exc
+    raise RuntimeError("assessment_gateway_retry_failed")
+
+
+def _assessment_gateway_session_key(user_id: int, stage: str) -> str:
+    clean_stage = re.sub(r"[^a-z0-9_-]+", "-", str(stage or "turn").strip().lower()).strip("-") or "turn"
+    return f"activation:{int(user_id)}:assessment:{clean_stage}"
+
+
 async def _assessment_pick_model_question(
     user_id: int,
     activation_profile: Dict[str, object],
@@ -1411,13 +1648,19 @@ async def _assessment_pick_model_question(
         f"{ASSESSMENT_CONDUCTOR_PROMPT}\n\n"
         f"输入数据：{json.dumps({'user_id': user_id, 'identity': compact_identity, 'session': compact_session}, ensure_ascii=False)}"
     )
-    session_key = f"activation:{int(user_id)}:assessment:conductor:{int(time.time() * 1000)}"
-    raw = await _gateway_send_message_with_timeout(
-        session_key,
-        prompt,
-        timeout_ms=ACTIVATION_ASSESSMENT_MODEL_TIMEOUT_MS,
-    )
-    return extract_next_question_from_model(raw)
+    session_key = _assessment_gateway_session_key(int(user_id), "conductor")
+    try:
+        raw = await _gateway_send_message_with_backoff(
+            session_key,
+            prompt,
+            timeout_ms=ACTIVATION_ASSESSMENT_MODEL_TIMEOUT_MS,
+        )
+        parsed = extract_next_question_from_model(raw)
+        if parsed:
+            return parsed
+    except Exception:
+        pass
+    return fallback_next_question(session_payload, str(session_payload.get("current_focus") or "").strip())
 
 
 async def _assessment_analyze_turn_model(
@@ -1462,8 +1705,8 @@ async def _assessment_analyze_turn_model(
         f"{ASSESSMENT_TURN_PROMPT}\n\n"
         f"输入数据：{json.dumps({'question': {'id': question.get('id'), 'prompt': _trim_text(question.get('prompt'), 120), 'focus': question.get('focus') or question.get('pair')}, 'session': compact_session, 'answer': _trim_text(answer, 160)}, ensure_ascii=False)}"
     )
-    session_key = f"activation:{int(user_id)}:assessment:turn:{int(time.time() * 1000)}"
-    raw = await _gateway_send_message_with_timeout(
+    session_key = _assessment_gateway_session_key(int(user_id), "turn")
+    raw = await _gateway_send_message_with_backoff(
         session_key,
         prompt,
         timeout_ms=ACTIVATION_ASSESSMENT_MODEL_TIMEOUT_MS,
@@ -1476,8 +1719,8 @@ async def _assessment_memory_writer_model(user_id: int, final_profile: Dict[str,
         f"{ASSESSMENT_MEMORY_WRITER_PROMPT}\n\n"
         f"输入数据：{json.dumps({'final_profile': final_profile, 'session': session_payload}, ensure_ascii=False)}"
     )
-    session_key = f"activation:{int(user_id)}:assessment:memory:{int(time.time() * 1000)}"
-    raw = await _gateway_send_message_with_timeout(
+    session_key = _assessment_gateway_session_key(int(user_id), "memory")
+    raw = await _gateway_send_message_with_backoff(
         session_key,
         prompt,
         timeout_ms=ACTIVATION_ASSESSMENT_MEMORY_TIMEOUT_MS,
@@ -3552,10 +3795,17 @@ async def activation_assessment_turn(
     conn: Connection = Depends(get_db),
 ) -> ActivationAssessmentTurnResponse:
     user = _parse_access_token_for_local_activation(credentials, conn, request)
+    client_turn_id = str(payload.client_turn_id or "").strip()
     session_id, session_payload = _load_assessment_session(conn, int(user["id"]), active_only=True)
     if not session_payload or session_id is None:
         latest_session_id, latest_payload = _load_assessment_session(conn, int(user["id"]), active_only=False)
         latest_status = str(latest_payload.get("status") or "").strip()
+        if latest_payload and latest_status == "completed":
+            cached = latest_payload.get("last_turn_response")
+            if client_turn_id and str(latest_payload.get("last_client_turn_id") or "").strip() == client_turn_id and isinstance(cached, dict):
+                return ActivationAssessmentTurnResponse(**cached)
+            response = _assessment_response(latest_payload, device_online=_assessment_device_online(conn, int(user["id"]), payload.device_id)[0], exists=True)
+            return ActivationAssessmentTurnResponse(**response.model_dump(), question_changed=False, just_completed=False)
         if latest_payload and latest_session_id is not None and latest_status != "completed":
             ai_snapshot = _activation_ai_runtime_snapshot()
             if not bool(ai_snapshot["ai_ready"]):
@@ -3585,6 +3835,16 @@ async def activation_assessment_turn(
     if str(session_payload.get("status") or "") == "completed":
         response = _assessment_response(session_payload, device_online=_assessment_device_online(conn, int(user["id"]), payload.device_id)[0], exists=True)
         return ActivationAssessmentTurnResponse(**response.model_dump(), question_changed=False, just_completed=False)
+    if client_turn_id and str(session_payload.get("last_client_turn_id") or "").strip() == client_turn_id:
+        cached = session_payload.get("last_turn_response")
+        if isinstance(cached, dict):
+            return ActivationAssessmentTurnResponse(**cached)
+        response = _assessment_response(session_payload, device_online=_assessment_device_online(conn, int(user["id"]), payload.device_id)[0], exists=True)
+        return ActivationAssessmentTurnResponse(
+            **response.model_dump(),
+            question_changed=bool(response.latest_question),
+            just_completed=bool(str(session_payload.get("status") or "") == "completed"),
+        )
     answer_text = str(payload.answer or payload.transcript or "").strip()
     if not answer_text:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="answer is required")
@@ -3598,6 +3858,7 @@ async def activation_assessment_turn(
         device_id=payload.device_id,
         voice_mode=payload.voice_mode,
         surface=payload.surface,
+        client_turn_id=client_turn_id,
     )
     return response
 
@@ -4096,6 +4357,117 @@ def emotion_realtime_update(payload: RealtimeScoresResponse) -> RealtimeScoresRe
     app.state.scores = payload.model_dump()
     app.state.risk_timestamp_ms = int(time.time() * 1000)
     return payload
+
+
+@app.post("/api/vision/camera/analyze", response_model=CameraEmotionAnalyzeResponse)
+def camera_emotion_analyze(
+    payload: CameraEmotionAnalyzeRequest,
+    credentials: HTTPAuthorizationCredentials = Depends(bearer_scheme),
+    conn: Connection = Depends(get_db),
+) -> CameraEmotionAnalyzeResponse:
+    _parse_access_token(credentials, conn)
+    timestamp_ms = int(payload.timestamp_ms or int(time.time() * 1000))
+    width = int(payload.width or 0)
+    height = int(payload.height or 0)
+    if width <= 0 or height <= 0:
+        raise HTTPException(status_code=400, detail="width/height are required")
+
+    image_bytes = _decode_camera_image_payload(payload.image_data_url)
+    runtime = _get_camera_vision_runtime()
+    scorer = runtime.get("scorer")
+    if scorer is None:
+        raise HTTPException(status_code=503, detail="camera emotion runtime unavailable")
+
+    frame = VideoFrame(
+        format="jpeg",
+        data=image_bytes,
+        width=width,
+        height=height,
+        timestamp_ms=timestamp_ms,
+        seq=0,
+        device_id="desktop-camera",
+    )
+
+    face_count, primary_bbox, counter_source = _count_faces_for_camera(frame, runtime)
+    bbox_percent = _bbox_to_percent(primary_bbox, width, height)
+    model_ready = bool(
+        getattr(scorer, "_expr", None) and getattr(scorer._expr, "ready", False)
+    ) or bool(
+        getattr(scorer, "_expr_mp", None) and getattr(scorer._expr_mp, "ready", False)
+    )
+
+    if face_count != 1:
+        pause_reason = "multiple_faces" if face_count > 1 else "no_face"
+        detail = {
+            "face_ok": 0.0,
+            "expression_class_id": -1.0,
+            "expression_confidence": 0.0,
+            "expression_risk": 0.0,
+            "expression_valid": 0.0,
+            "expr_reason": pause_reason,
+            "expr_source": counter_source,
+            "expr_model_ready": 1.0 if model_ready else 0.0,
+            "face_count": float(face_count),
+        }
+        app.state.scores = {"V": 0.0, "A": 0.0, "T": 0.0, "S": 0.0}
+        app.state.risk_detail = {"V_sub": detail, "A_sub": {}, "T_sub": {}}
+        app.state.risk_timestamp_ms = timestamp_ms
+        app.state.risk_mode = "desktop_camera"
+        return CameraEmotionAnalyzeResponse(
+            timestamp_ms=timestamp_ms,
+            model_ready=model_ready,
+            face_detected=bool(face_count > 0),
+            face_count=face_count,
+            focus_locked=False,
+            recognition_paused=True,
+            pause_reason=pause_reason,
+            bbox=CameraEmotionFaceBox(**bbox_percent) if bbox_percent else None,
+            detail=detail,
+        )
+
+    v_score, detail = scorer.score(frame, True)
+    if not isinstance(detail, dict):
+        detail = {}
+    detail = dict(detail)
+    detail["face_count"] = float(face_count)
+    detail["counter_source"] = counter_source
+    detail["subject_locked"] = 1.0
+
+    expr_id = int(detail.get("expression_class_id", -1))
+    expr_conf = float(detail.get("expression_confidence", 0.0) or 0.0)
+    expr_label = {
+        0: "neutral",
+        1: "happiness",
+        2: "surprise",
+        3: "sadness",
+        4: "anger",
+        5: "disgust",
+        6: "fear",
+        7: "contempt",
+    }.get(expr_id, "unknown")
+    s_score = float(v_score)
+    app.state.scores = {"V": float(v_score), "A": 0.0, "T": 0.0, "S": s_score}
+    app.state.risk_detail = {"V_sub": detail, "A_sub": {}, "T_sub": {}}
+    app.state.risk_timestamp_ms = timestamp_ms
+    app.state.risk_mode = "desktop_camera"
+    return CameraEmotionAnalyzeResponse(
+        timestamp_ms=timestamp_ms,
+        model_ready=model_ready,
+        face_detected=True,
+        face_count=face_count,
+        focus_locked=True,
+        recognition_paused=False,
+        pause_reason="",
+        emotion_label=expr_label,
+        emotion_label_zh=_expression_label_to_zh(expr_label),
+        confidence=expr_conf,
+        V=float(v_score),
+        A=0.0,
+        T=0.0,
+        S=s_score,
+        bbox=CameraEmotionFaceBox(**bbox_percent) if bbox_percent else None,
+        detail=detail,
+    )
 
 
 @app.get("/api/emotion/history", response_model=List[EmotionEventResponse])
