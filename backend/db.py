@@ -4,6 +4,7 @@ import sqlite3
 from typing import Iterator
 
 from .settings import DB_PATH
+from .settings import DESKTOP_SHARED_LOGIN_EMAIL, DESKTOP_SHARED_LOGIN_PASSWORD
 
 
 def get_db() -> Iterator[sqlite3.Connection]:
@@ -384,6 +385,7 @@ def init_db() -> None:
         _ensure_column(conn, "assessment_turn_events", "transcript_text", "TEXT")
         _ensure_column(conn, "assessment_turn_events", "scoring_json", "TEXT NOT NULL DEFAULT '{}'")
         _ensure_column(conn, "assessment_turn_events", "created_at", "INTEGER NOT NULL DEFAULT 0")
+        _ensure_seed_users(conn)
         conn.commit()
     finally:
         conn.close()
@@ -409,3 +411,42 @@ def _dedupe_chat_messages(conn: sqlite3.Connection) -> None:
         )
         """
     )
+
+
+def _ensure_seed_users(conn: sqlite3.Connection) -> None:
+    from . import auth
+
+    seed_users = [
+        {
+            "username": str(DESKTOP_SHARED_LOGIN_EMAIL or "").strip() or "desktop-team@example.com",
+            "password": str(DESKTOP_SHARED_LOGIN_PASSWORD or "").strip() or "Team123456!",
+            "is_configured": 0,
+            "display_name": "Desktop Team",
+        }
+    ]
+    now = int(__import__("time").time())
+    for seed in seed_users:
+        username = str(seed.get("username") or "").strip()
+        password = str(seed.get("password") or "").strip()
+        if not username or not password:
+            continue
+        existing = conn.execute(
+            "SELECT id FROM users WHERE username = ?",
+            (username,),
+        ).fetchone()
+        if existing:
+            continue
+        conn.execute(
+            """
+            INSERT INTO users (username, password_hash, created_at, is_configured, display_name, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (
+                username,
+                auth.hash_password(password),
+                now,
+                int(seed.get("is_configured", 0) or 0),
+                str(seed.get("display_name") or "").strip() or None,
+                now,
+            ),
+        )
