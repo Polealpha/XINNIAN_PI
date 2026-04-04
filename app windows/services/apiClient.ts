@@ -11,6 +11,13 @@ export const getApiBase = () => API_BASE;
 export const getDeviceSyncApiBase = () => DEVICE_SYNC_API_BASE;
 export const getLocalApiBase = () => LOCAL_API_BASE;
 
+const isDesktopRuntime = () => {
+  if (typeof window === "undefined") {
+    return false;
+  }
+  return typeof (window as Window & { desktop?: unknown }).desktop !== "undefined";
+};
+
 export const getWsBase = () => {
   if (LOCAL_API_BASE.startsWith("https://")) return LOCAL_API_BASE.replace("https://", "wss://");
   if (LOCAL_API_BASE.startsWith("http://")) return LOCAL_API_BASE.replace("http://", "ws://");
@@ -35,6 +42,9 @@ const REMOTE_PATH_PREFIXES = [
 ];
 
 const resolveBaseForPath = (path: string) => {
+  if (isDesktopRuntime() && path.startsWith("/api/")) {
+    return LOCAL_API_BASE;
+  }
   if (LOCAL_PATH_PREFIXES.some((prefix) => path.startsWith(prefix))) {
     return LOCAL_API_BASE;
   }
