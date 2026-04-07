@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Optional, Union
+from typing import Dict, Optional, Union
 
 from pydantic import BaseModel, Field
 
@@ -341,6 +341,7 @@ class CareResponse(BaseModel):
     source: str = "fallback"
     detail: str = ""
     ai_ready: bool = False
+    timing: Dict[str, object] = Field(default_factory=dict)
 
 
 class DailySummaryRequest(BaseModel):

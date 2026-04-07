@@ -287,7 +287,7 @@ export const CameraPanel: React.FC<CameraPanelProps> = ({
 
   const renderLocalCameraCard = (expanded = false) => (
     <div
-      className={`flex flex-col overflow-hidden rounded-[2rem] border border-white/[0.06] bg-white/[0.03] ${
+      className={`ios-float-card-soft flex flex-col overflow-hidden rounded-[2rem] ${
         expanded ? "min-h-[760px]" : "min-h-[640px]"
       }`}
     >
@@ -303,13 +303,13 @@ export const CameraPanel: React.FC<CameraPanelProps> = ({
           <button
             type="button"
             onClick={() => setExpandedCamera((current) => (current === "local" ? null : "local"))}
-            className="inline-flex items-center gap-2 rounded-2xl border border-white/10 bg-white/5 px-3 py-2 text-[11px] font-bold text-slate-200 transition hover:bg-white/10"
+            className="inline-flex items-center gap-2 rounded-2xl ios-ghost-chip px-3 py-2 text-[11px] font-semibold text-slate-200 transition hover:bg-white/10"
           >
             {expanded ? <Minimize2 size={14} /> : <Maximize2 size={14} />}
             {expanded ? "收起" : "放大"}
           </button>
           <span
-            className={`rounded-full px-3 py-1 text-[10px] font-black uppercase tracking-widest ${
+            className={`rounded-full px-3 py-1 text-[10px] font-semibold tracking-[0.18em] ${
               localReady ? "bg-emerald-500/15 text-emerald-200" : "bg-white/10 text-slate-400"
             }`}
           >
@@ -389,7 +389,7 @@ export const CameraPanel: React.FC<CameraPanelProps> = ({
 
   const renderRobotCameraCard = (expanded = false) => (
     <div
-      className={`flex flex-col overflow-hidden rounded-[2rem] border border-white/[0.06] bg-white/[0.03] ${
+      className={`ios-float-card-soft flex flex-col overflow-hidden rounded-[2rem] ${
         expanded ? "min-h-[760px]" : "min-h-[640px]"
       }`}
     >
@@ -405,13 +405,13 @@ export const CameraPanel: React.FC<CameraPanelProps> = ({
           <button
             type="button"
             onClick={() => setExpandedCamera((current) => (current === "robot" ? null : "robot"))}
-            className="inline-flex items-center gap-2 rounded-2xl border border-white/10 bg-white/5 px-3 py-2 text-[11px] font-bold text-slate-200 transition hover:bg-white/10"
+            className="inline-flex items-center gap-2 rounded-2xl ios-ghost-chip px-3 py-2 text-[11px] font-semibold text-slate-200 transition hover:bg-white/10"
           >
             {expanded ? <Minimize2 size={14} /> : <Maximize2 size={14} />}
             {expanded ? "收起" : "放大"}
           </button>
           <span
-            className={`rounded-full px-3 py-1 text-[10px] font-black uppercase tracking-widest ${
+            className={`rounded-full px-3 py-1 text-[10px] font-semibold tracking-[0.18em] ${
               robotOnline && robotCameraReady ? "bg-emerald-500/15 text-emerald-200" : "bg-white/10 text-slate-400"
             }`}
           >
@@ -443,7 +443,7 @@ export const CameraPanel: React.FC<CameraPanelProps> = ({
   return (
     <div className="h-full w-full overflow-y-auto pr-1 no-scrollbar">
       <div className="mx-auto grid h-full w-full max-w-[1560px] grid-cols-12 gap-6 animate-pop-in">
-        <section className="col-span-9 flex min-h-[780px] flex-col rounded-[2.5rem] border border-white/[0.05] bg-[#0c1222]/50 p-7 shadow-2xl backdrop-blur-3xl">
+        <section className="col-span-9 ios-float-card flex min-h-[780px] flex-col rounded-[2.5rem] p-7">
           <div className="flex items-center justify-between gap-4">
             <div>
               <div className="flex items-center gap-3">
@@ -458,7 +458,7 @@ export const CameraPanel: React.FC<CameraPanelProps> = ({
               <button
                 type="button"
                 onClick={() => setSnapshotNonce(Date.now())}
-                className="inline-flex items-center gap-2 rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-[12px] font-bold text-slate-200 transition hover:bg-white/10"
+                className="inline-flex items-center gap-2 rounded-2xl ios-ghost-chip px-4 py-3 text-[12px] font-semibold text-slate-200 transition hover:bg-white/10"
               >
                 <RefreshCw size={14} />
                 刷新机器人画面
@@ -500,10 +500,10 @@ export const CameraPanel: React.FC<CameraPanelProps> = ({
         </section>
 
         <aside className="col-span-3 flex min-h-[780px] flex-col gap-6">
-          <section className="rounded-[2.5rem] border border-white/[0.05] bg-[#0c1222]/50 p-7 shadow-2xl backdrop-blur-3xl">
+          <section className="ios-float-card rounded-[2.5rem] p-7">
             <div className="flex items-center justify-between">
-              <div className="text-[11px] font-black uppercase tracking-[0.28em] text-cyan-300">实时情绪曲线</div>
-              <div className="text-[10px] font-bold text-slate-500">{curvePoints.length} 点</div>
+              <div className="text-[11px] font-semibold tracking-[0.18em] text-cyan-300">实时情绪曲线</div>
+              <div className="text-[10px] font-semibold text-slate-500">{curvePoints.length} 点</div>
             </div>
             <div className="mt-4 h-[220px]">
               <ResponsiveContainer width="100%" height="100%">
@@ -555,8 +555,8 @@ export const CameraPanel: React.FC<CameraPanelProps> = ({
             </div>
           </section>
 
-          <section className="rounded-[2.5rem] border border-white/[0.05] bg-[#0c1222]/50 p-7 shadow-2xl backdrop-blur-3xl">
-            <div className="text-[11px] font-black uppercase tracking-[0.28em] text-slate-400">识别状态</div>
+          <section className="ios-float-card rounded-[2.5rem] p-7">
+            <div className="text-[11px] font-semibold tracking-[0.18em] text-slate-400">识别状态</div>
             <div className="mt-5 space-y-3 text-[13px] text-slate-300">
               <div className="flex items-center justify-between rounded-2xl border border-white/6 bg-white/[0.03] px-4 py-3">
                 <span>本机相机预览</span>

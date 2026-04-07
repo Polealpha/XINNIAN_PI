@@ -46,22 +46,22 @@ export const AtmosphereView: React.FC<AtmosphereViewProps> = ({
     : "等待数据";
 
   return (
-    <div className="h-full min-h-[760px] rounded-[2.35rem] border border-white/5 bg-[radial-gradient(circle_at_top,rgba(99,102,241,0.18),transparent_38%),rgba(12,18,34,0.72)] backdrop-blur-3xl p-7 shadow-2xl flex flex-col overflow-hidden">
+    <div className="h-full min-h-[760px] rounded-[2.6rem] border border-white/8 bg-[radial-gradient(circle_at_top,rgba(165,180,252,0.16),transparent_32%),linear-gradient(180deg,rgba(28,35,58,0.72),rgba(14,19,34,0.86))] backdrop-blur-[30px] p-7 shadow-[0_24px_80px_rgba(0,0,0,0.28),inset_0_1px_0_rgba(255,255,255,0.08)] flex flex-col overflow-hidden animate-rise">
       <div className="flex items-center justify-between">
-        <span className="inline-flex items-center gap-2 rounded-full border border-white/8 bg-white/[0.03] px-3 py-1.5 text-[10px] font-black uppercase tracking-[0.25em] text-slate-400">
+        <span className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.05] px-3.5 py-2 text-[10px] font-bold tracking-[0.18em] text-slate-300">
           <Waves size={11} className="text-indigo-300" />
           {mode === "privacy" ? "隐私守护" : "情绪摘要"}
         </span>
-        <span className="text-[10px] font-bold text-slate-500">{todayRecordCount} 条记录</span>
+        <span className="text-[10px] font-semibold text-slate-500">{todayRecordCount} 条记录</span>
       </div>
 
       <div className="mt-8">
-        <div className="text-[12px] font-black uppercase tracking-[0.35em] text-indigo-300/70">Current Mood</div>
+        <div className="text-[11px] font-semibold tracking-[0.18em] text-indigo-200/60">当前状态</div>
         <div className="mt-3 flex items-end gap-3">
-          <div className="text-5xl font-black tracking-tight text-white">{summary.label}</div>
-          <div className="pb-1 text-sm font-semibold text-slate-400">{pct(scores.S)}</div>
+          <div className="text-5xl font-black tracking-[-0.04em] text-white">{summary.label}</div>
+          <div className="pb-1 text-sm font-semibold text-slate-400/90">{pct(scores.S)}</div>
         </div>
-        <p className="mt-3 max-w-[220px] text-sm leading-7 font-semibold text-slate-400">
+        <p className="mt-3 max-w-[220px] text-[15px] leading-7 font-medium text-slate-300/88">
           当前主导维度是{summary.primary.label}，这一列只保留即时摘要，不再堆很多同层级卡片。
         </p>
       </div>
@@ -79,25 +79,25 @@ export const AtmosphereView: React.FC<AtmosphereViewProps> = ({
       </div>
 
       <div className="mt-8 space-y-3">
-        <div className="rounded-[1.6rem] border border-white/6 bg-white/[0.03] p-4">
+        <div className="ios-metric-card rounded-[1.75rem] p-4">
           <div className="flex items-center justify-between">
             <div>
-              <div className="text-[10px] font-black uppercase tracking-[0.24em] text-slate-500">识别状态</div>
+              <div className="text-[10px] font-semibold tracking-[0.18em] text-slate-400">识别状态</div>
               <div className="mt-2 text-lg font-black text-white">
                 {summary.confidence > 0 ? `${Math.round(summary.confidence * 100)}%` : "--"}
               </div>
             </div>
             <Activity size={18} className="text-cyan-300" />
           </div>
-          <div className="mt-2 text-xs font-semibold text-slate-400">
+          <div className="mt-2 text-xs font-medium text-slate-400">
             来源：{riskSource === "ws" ? "实时推送" : riskSource === "poll" ? "轮询刷新" : "等待接入"}
           </div>
         </div>
 
-        <div className="rounded-[1.6rem] border border-white/6 bg-white/[0.03] p-4">
+        <div className="ios-metric-card rounded-[1.75rem] p-4">
           <div className="flex items-center justify-between">
             <div>
-              <div className="text-[10px] font-black uppercase tracking-[0.24em] text-slate-500">最近刷新</div>
+              <div className="text-[10px] font-semibold tracking-[0.18em] text-slate-400">最近刷新</div>
               <div className="mt-2 text-lg font-black text-white">{updated}</div>
             </div>
             {mode === "privacy" ? (
@@ -106,14 +106,14 @@ export const AtmosphereView: React.FC<AtmosphereViewProps> = ({
               <Clock3 size={18} className="text-slate-300" />
             )}
           </div>
-          <div className="mt-2 text-xs font-semibold text-slate-400">
+          <div className="mt-2 text-xs font-medium text-slate-400">
             {mode === "privacy" ? "当前处于隐私模式" : "当前处于正常采集模式"}
           </div>
         </div>
       </div>
 
-      <div className="mt-8 rounded-[1.8rem] border border-white/6 bg-white/[0.02] p-5">
-        <div className="text-[10px] font-black uppercase tracking-[0.24em] text-slate-500">风险维度</div>
+      <div className="mt-8 rounded-[2rem] border border-white/10 bg-white/[0.045] p-5 shadow-[inset_0_1px_0_rgba(255,255,255,0.06)]">
+        <div className="text-[10px] font-semibold tracking-[0.18em] text-slate-400">风险维度</div>
         <div className="mt-4 space-y-4">
           {[
             { key: "S", label: "压力", value: scores.S },

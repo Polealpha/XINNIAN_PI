@@ -127,11 +127,11 @@ export const MoodChart: React.FC<MoodChartProps> = ({
   }, [points]);
 
   return (
-    <div className="h-full min-h-[760px] rounded-[2.35rem] border border-white/5 bg-[linear-gradient(180deg,rgba(12,18,34,0.86),rgba(10,14,28,0.78))] backdrop-blur-3xl p-7 shadow-2xl flex flex-col overflow-hidden">
+    <div className="h-full min-h-[760px] rounded-[2.6rem] border border-white/8 bg-[linear-gradient(180deg,rgba(24,31,54,0.74),rgba(12,18,33,0.88))] backdrop-blur-[30px] p-7 shadow-[0_24px_80px_rgba(0,0,0,0.28),inset_0_1px_0_rgba(255,255,255,0.08)] flex flex-col overflow-hidden animate-rise" style={{ animationDelay: "70ms" }}>
       <div className="flex items-start justify-between gap-5">
         <div>
-          <h2 className="text-[2rem] font-black tracking-tight text-white">情绪韵律看板</h2>
-          <div className="mt-2 flex items-center gap-3 text-[10px] font-black uppercase tracking-[0.28em] text-slate-500">
+          <h2 className="text-[2rem] font-black tracking-[-0.04em] text-white">情绪韵律看板</h2>
+          <div className="mt-2 flex items-center gap-3 text-[10px] font-semibold tracking-[0.18em] text-slate-500">
             <span>Temporal Emotional Dynamics</span>
             <span className="h-1 w-1 rounded-full bg-indigo-300/60" />
             <span className="text-indigo-300">{range === "DATE" ? "History" : "Real-time"}</span>
@@ -139,7 +139,7 @@ export const MoodChart: React.FC<MoodChartProps> = ({
           </div>
         </div>
         <div className="flex items-center gap-2">
-          <div className="flex gap-1 rounded-full border border-white/6 bg-white/[0.03] p-1">
+          <div className="flex gap-1 rounded-full border border-white/10 bg-white/[0.05] p-1 shadow-[inset_0_1px_0_rgba(255,255,255,0.05)]">
             {(["1H", "6H", "24H"] as RangeOption[]).map((option) => (
               <button
                 key={option}
@@ -147,8 +147,8 @@ export const MoodChart: React.FC<MoodChartProps> = ({
                   setRange(option);
                   setDatePickerOpen(false);
                 }}
-                className={`rounded-full px-4 py-2 text-[10px] font-black transition-all ${
-                  range === option ? "bg-white text-[#0a1020]" : "text-slate-400 hover:text-slate-200"
+                className={`rounded-full px-4 py-2 text-[10px] font-semibold transition-all ${
+                  range === option ? "bg-white text-[#0a1020] shadow-[0_8px_18px_rgba(255,255,255,0.15)]" : "text-slate-400 hover:text-slate-200"
                 }`}
               >
                 {option}
@@ -161,8 +161,8 @@ export const MoodChart: React.FC<MoodChartProps> = ({
                 setDatePickerOpen((prev) => !prev);
                 setRange("DATE");
               }}
-              className={`rounded-full border px-4 py-2 text-[10px] font-black uppercase tracking-[0.22em] transition-all ${
-                range === "DATE" ? "border-white bg-white text-[#0a1020]" : "border-white/10 text-slate-400 hover:text-slate-200"
+              className={`rounded-full border px-4 py-2 text-[10px] font-semibold tracking-[0.18em] transition-all ${
+                range === "DATE" ? "border-white bg-white text-[#0a1020] shadow-[0_8px_18px_rgba(255,255,255,0.15)]" : "border-white/10 text-slate-400 hover:text-slate-200"
               }`}
             >
               日期
@@ -188,18 +188,18 @@ export const MoodChart: React.FC<MoodChartProps> = ({
           { label: "最低点", value: stats.low },
           { label: "样本数", value: stats.samples },
         ].map((item) => (
-          <div key={item.label} className="rounded-[1.45rem] border border-white/6 bg-white/[0.03] px-4 py-4">
-            <div className="text-[10px] font-black uppercase tracking-[0.24em] text-slate-500">{item.label}</div>
+          <div key={item.label} className="ios-metric-card rounded-[1.7rem] px-4 py-4">
+            <div className="text-[10px] font-semibold tracking-[0.18em] text-slate-400">{item.label}</div>
             <div className="mt-2 text-2xl font-black text-white">{item.value}</div>
           </div>
         ))}
       </div>
 
-      <div className="mt-5 flex items-center justify-between rounded-[1.5rem] border border-white/6 bg-white/[0.025] px-4 py-3">
-        <div className="text-sm font-semibold text-slate-300">
+      <div className="mt-5 flex items-center justify-between rounded-[1.7rem] border border-white/10 bg-white/[0.045] px-4 py-3 shadow-[inset_0_1px_0_rgba(255,255,255,0.05)]">
+        <div className="text-sm font-medium text-slate-300">
           当前识别：<span className="font-black text-white">{stats.label}</span>
         </div>
-        <div className="text-[10px] font-black uppercase tracking-[0.24em] text-slate-500">
+        <div className="text-[10px] font-semibold tracking-[0.18em] text-slate-500">
           {riskSource === "ws" ? "WS LIVE" : riskSource === "poll" ? "POLLING" : "STANDBY"}
           {riskUpdatedAt
             ? ` · ${new Date(riskUpdatedAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`
@@ -207,7 +207,7 @@ export const MoodChart: React.FC<MoodChartProps> = ({
         </div>
       </div>
 
-      <div className="mt-6 flex-1 min-h-[360px] rounded-[2rem] border border-white/6 bg-[linear-gradient(180deg,rgba(255,255,255,0.03),rgba(255,255,255,0.01))] p-4">
+      <div className="mt-6 flex-1 min-h-[360px] rounded-[2.2rem] border border-white/10 bg-[linear-gradient(180deg,rgba(255,255,255,0.045),rgba(255,255,255,0.015))] p-4 shadow-[inset_0_1px_0_rgba(255,255,255,0.05)]">
         {points.length === 0 ? (
           <div className="flex h-full items-center justify-center text-center">
             <div>

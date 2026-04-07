@@ -1,0 +1,347 @@
+:root {
+  color-scheme: dark;
+  --ios-ease: cubic-bezier(0.22, 1, 0.36, 1);
+  --ios-border: rgba(255, 255, 255, 0.08);
+  --ios-border-strong: rgba(255, 255, 255, 0.12);
+  --ios-fill: rgba(255, 255, 255, 0.05);
+  --ios-fill-strong: rgba(255, 255, 255, 0.08);
+  --ios-shadow: 0 24px 80px rgba(0, 0, 0, 0.28);
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background:
+    radial-gradient(circle at 14% 18%, rgba(99, 102, 241, 0.18), transparent 26%),
+    radial-gradient(circle at 82% 12%, rgba(56, 189, 248, 0.12), transparent 24%),
+    linear-gradient(180deg, #0b1020 0%, #0a1020 48%, #09101d 100%);
+}
+
+.ios-page-shell {
+  position: relative;
+  isolation: isolate;
+  background:
+    radial-gradient(circle at top left, rgba(129, 140, 248, 0.12), transparent 24%),
+    radial-gradient(circle at bottom right, rgba(34, 211, 238, 0.08), transparent 22%),
+    linear-gradient(180deg, rgba(9, 14, 27, 0.98), rgba(9, 14, 27, 1));
+}
+
+.ios-shell {
+  background:
+    radial-gradient(circle at 12% 14%, rgba(129, 140, 248, 0.2), transparent 24%),
+    radial-gradient(circle at 76% 10%, rgba(56, 189, 248, 0.1), transparent 20%),
+    radial-gradient(circle at 82% 82%, rgba(168, 85, 247, 0.08), transparent 18%);
+}
+
+.ios-sidebar {
+  background: linear-gradient(180deg, rgba(18, 24, 44, 0.84), rgba(10, 15, 28, 0.92));
+  border-right: 1px solid rgba(255, 255, 255, 0.05);
+  box-shadow: inset -1px 0 0 rgba(255, 255, 255, 0.03);
+  backdrop-filter: blur(28px);
+}
+
+.ios-float-card {
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.12), rgba(255, 255, 255, 0.06));
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  box-shadow: var(--ios-shadow), inset 0 1px 0 rgba(255, 255, 255, 0.08);
+  backdrop-filter: blur(28px) saturate(155%);
+  transition: transform 340ms var(--ios-ease), box-shadow 340ms var(--ios-ease), border-color 340ms var(--ios-ease);
+}
+
+.ios-float-card-soft {
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.08), rgba(255, 255, 255, 0.04));
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.18), inset 0 1px 0 rgba(255, 255, 255, 0.06);
+  backdrop-filter: blur(26px) saturate(150%);
+  transition: transform 320ms var(--ios-ease), box-shadow 320ms var(--ios-ease), border-color 320ms var(--ios-ease);
+}
+
+.ios-list-card {
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.085), rgba(255, 255, 255, 0.045));
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.05);
+  backdrop-filter: blur(24px);
+  transition: transform 300ms var(--ios-ease), border-color 300ms var(--ios-ease), background 300ms var(--ios-ease);
+}
+
+.ios-metric-card {
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.075), rgba(255, 255, 255, 0.035));
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.05);
+  backdrop-filter: blur(22px);
+  transition: transform 300ms var(--ios-ease), border-color 300ms var(--ios-ease), background 300ms var(--ios-ease);
+}
+
+.theme-pill {
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.1), rgba(255, 255, 255, 0.04));
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08), 0 10px 30px rgba(0, 0, 0, 0.18);
+  backdrop-filter: blur(28px) saturate(155%);
+  transition: transform 280ms var(--ios-ease), box-shadow 280ms var(--ios-ease), border-color 280ms var(--ios-ease);
+}
+
+.theme-button {
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.12), rgba(255, 255, 255, 0.05));
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08), 0 10px 24px rgba(0, 0, 0, 0.16);
+  backdrop-filter: blur(28px) saturate(155%);
+  transition: transform 280ms var(--ios-ease), box-shadow 280ms var(--ios-ease), border-color 280ms var(--ios-ease);
+}
+
+.theme-button:hover,
+.theme-icon-button:hover {
+  transform: translateY(-1px) scale(1.01);
+  border-color: rgba(255, 255, 255, 0.16);
+}
+
+.theme-icon-button {
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.08), rgba(255, 255, 255, 0.03));
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.06);
+  backdrop-filter: blur(24px);
+  border-radius: 9999px;
+  transition: transform 280ms var(--ios-ease), box-shadow 280ms var(--ios-ease), border-color 280ms var(--ios-ease);
+}
+
+.ios-float-card:hover,
+.ios-float-card-soft:hover {
+  transform: translateY(-2px);
+  border-color: rgba(255, 255, 255, 0.14);
+}
+
+.ios-list-card:hover,
+.ios-metric-card:hover,
+.theme-pill:hover {
+  transform: translateY(-1px);
+  border-color: rgba(255, 255, 255, 0.13);
+}
+
+.status-dot {
+  box-shadow: 0 0 0 4px rgba(99, 102, 241, 0.12), 0 0 16px rgba(99, 102, 241, 0.3);
+}
+
+.status-dot--offline {
+  box-shadow: 0 0 0 4px rgba(248, 113, 113, 0.12), 0 0 16px rgba(248, 113, 113, 0.22);
+}
+
+.ios-chat-shell {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  overflow: hidden;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background:
+    radial-gradient(circle at top, rgba(129, 140, 248, 0.1), transparent 28%),
+    linear-gradient(180deg, rgba(20, 28, 48, 0.78), rgba(10, 15, 28, 0.92));
+  box-shadow: 0 30px 90px rgba(0, 0, 0, 0.28), inset 0 1px 0 rgba(255, 255, 255, 0.08);
+  backdrop-filter: blur(32px) saturate(150%);
+}
+
+.ios-chat-shell::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background:
+    radial-gradient(circle at top left, rgba(56, 189, 248, 0.06), transparent 24%),
+    radial-gradient(circle at bottom right, rgba(168, 85, 247, 0.05), transparent 22%);
+}
+
+.ios-chat-header {
+  position: relative;
+  z-index: 1;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.06), rgba(255, 255, 255, 0.02));
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+  backdrop-filter: blur(28px);
+}
+
+.ios-chat-thread {
+  position: relative;
+  z-index: 1;
+}
+
+.ios-chat-avatar {
+  box-shadow: 0 16px 36px rgba(0, 0, 0, 0.24), inset 0 1px 0 rgba(255, 255, 255, 0.08);
+}
+
+.ios-chat-avatar--assistant {
+  background: linear-gradient(180deg, rgba(123, 142, 255, 0.95), rgba(95, 112, 242, 0.88));
+  color: white;
+  animation: iosGlow 4.8s ease-in-out infinite;
+}
+
+.ios-chat-avatar--user {
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.16), rgba(255, 255, 255, 0.08));
+  color: rgba(226, 232, 240, 0.95);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.ios-chat-bubble {
+  border-radius: 1.8rem;
+  line-height: 1.8;
+  font-weight: 650;
+  letter-spacing: -0.01em;
+  box-shadow: 0 18px 44px rgba(0, 0, 0, 0.16), inset 0 1px 0 rgba(255, 255, 255, 0.05);
+  transition: transform 280ms var(--ios-ease), box-shadow 280ms var(--ios-ease), border-color 280ms var(--ios-ease);
+}
+
+.ios-chat-bubble:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 22px 48px rgba(0, 0, 0, 0.2), inset 0 1px 0 rgba(255, 255, 255, 0.06);
+}
+
+.ios-chat-bubble--assistant {
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.08), rgba(255, 255, 255, 0.04));
+  border: 1px solid rgba(255, 255, 255, 0.07);
+  color: rgba(241, 245, 249, 0.96);
+  border-top-left-radius: 0.7rem;
+}
+
+.ios-chat-bubble--user {
+  background: linear-gradient(180deg, rgba(111, 132, 255, 0.95), rgba(94, 112, 242, 0.9));
+  color: white;
+  border: 1px solid rgba(196, 205, 255, 0.18);
+  border-top-right-radius: 0.7rem;
+}
+
+.ios-ghost-chip {
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.08), rgba(255, 255, 255, 0.04));
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.05);
+  backdrop-filter: blur(20px);
+}
+
+.ios-chat-composer {
+  position: relative;
+  z-index: 1;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.045), rgba(255, 255, 255, 0.02));
+  border-top: 1px solid rgba(255, 255, 255, 0.06);
+  backdrop-filter: blur(30px);
+}
+
+.ios-chat-composer-bar {
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.07), rgba(255, 255, 255, 0.03));
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.06), 0 18px 36px rgba(0, 0, 0, 0.16);
+  backdrop-filter: blur(28px);
+  transition: border-color 280ms var(--ios-ease), box-shadow 280ms var(--ios-ease), transform 280ms var(--ios-ease);
+}
+
+.ios-chat-composer-bar:focus-within {
+  border-color: rgba(129, 140, 248, 0.24);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.08),
+    0 20px 44px rgba(0, 0, 0, 0.2),
+    0 0 0 6px rgba(99, 102, 241, 0.08);
+}
+
+.ios-chat-input {
+  letter-spacing: -0.01em;
+}
+
+.ios-send-button {
+  background: linear-gradient(180deg, rgba(121, 140, 255, 0.98), rgba(98, 116, 242, 0.92));
+  color: white;
+  box-shadow: 0 14px 28px rgba(95, 112, 242, 0.28), inset 0 1px 0 rgba(255, 255, 255, 0.24);
+  transition: transform 260ms var(--ios-ease), box-shadow 260ms var(--ios-ease), filter 260ms var(--ios-ease);
+}
+
+.ios-send-button:hover {
+  transform: translateY(-1px) scale(1.02);
+  filter: brightness(1.02);
+  box-shadow: 0 18px 36px rgba(95, 112, 242, 0.34), inset 0 1px 0 rgba(255, 255, 255, 0.24);
+}
+
+.ios-typing {
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.07), rgba(255, 255, 255, 0.035));
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.05);
+}
+
+.ios-typing-dot {
+  background: linear-gradient(180deg, rgba(164, 180, 252, 0.95), rgba(56, 189, 248, 0.88));
+  animation: iosTyping 1.15s ease-in-out infinite;
+}
+
+.ios-typing-dot:nth-child(2) {
+  animation-delay: 120ms;
+}
+
+.ios-typing-dot:nth-child(3) {
+  animation-delay: 240ms;
+}
+
+.animate-pop-in {
+  animation: iosPopIn 620ms var(--ios-ease) both;
+}
+
+.animate-rise {
+  animation: iosRise 720ms var(--ios-ease) both;
+}
+
+.ios-soft-float {
+  animation: iosFloat 8s ease-in-out infinite;
+}
+
+@keyframes iosPopIn {
+  0% {
+    opacity: 0;
+    transform: translateY(22px) scale(0.975);
+    filter: blur(10px);
+  }
+  100% {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+    filter: blur(0);
+  }
+}
+
+@keyframes iosRise {
+  0% {
+    opacity: 0;
+    transform: translateY(18px);
+  }
+  100% {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes iosFloat {
+  0%,
+  100% {
+    transform: translateY(0px);
+  }
+  50% {
+    transform: translateY(-6px);
+  }
+}
+
+@keyframes iosGlow {
+  0%,
+  100% {
+    box-shadow: 0 16px 36px rgba(0, 0, 0, 0.24), inset 0 1px 0 rgba(255, 255, 255, 0.08);
+  }
+  50% {
+    box-shadow: 0 20px 42px rgba(83, 104, 255, 0.26), inset 0 1px 0 rgba(255, 255, 255, 0.12);
+  }
+}
+
+@keyframes iosTyping {
+  0%,
+  80%,
+  100% {
+    transform: translateY(0) scale(0.92);
+    opacity: 0.55;
+  }
+  40% {
+    transform: translateY(-3px) scale(1);
+    opacity: 1;
+  }
+}

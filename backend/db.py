@@ -74,6 +74,42 @@ def init_db() -> None:
         )
         cursor.execute(
             """
+            CREATE TABLE IF NOT EXISTS proactive_care_decisions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                timestamp_ms INTEGER NOT NULL,
+                entrypoint TEXT NOT NULL DEFAULT 'llm_care',
+                current_emotion TEXT,
+                recommendation TEXT NOT NULL,
+                intensity TEXT,
+                source TEXT NOT NULL,
+                ai_ready INTEGER NOT NULL DEFAULT 0,
+                high_risk INTEGER NOT NULL DEFAULT 0,
+                state_score REAL NOT NULL DEFAULT 0,
+                receptivity_score REAL NOT NULL DEFAULT 0,
+                context_preview TEXT NOT NULL DEFAULT '',
+                detail TEXT NOT NULL DEFAULT '',
+                timing_json TEXT NOT NULL DEFAULT '{}',
+                created_at INTEGER NOT NULL,
+                FOREIGN KEY(user_id) REFERENCES users(id)
+            )
+            """
+        )
+        _ensure_column(conn, "proactive_care_decisions", "entrypoint", "TEXT NOT NULL DEFAULT 'llm_care'")
+        _ensure_column(conn, "proactive_care_decisions", "current_emotion", "TEXT")
+        _ensure_column(conn, "proactive_care_decisions", "recommendation", "TEXT NOT NULL DEFAULT ''")
+        _ensure_column(conn, "proactive_care_decisions", "intensity", "TEXT")
+        _ensure_column(conn, "proactive_care_decisions", "source", "TEXT NOT NULL DEFAULT 'fallback'")
+        _ensure_column(conn, "proactive_care_decisions", "ai_ready", "INTEGER NOT NULL DEFAULT 0")
+        _ensure_column(conn, "proactive_care_decisions", "high_risk", "INTEGER NOT NULL DEFAULT 0")
+        _ensure_column(conn, "proactive_care_decisions", "state_score", "REAL NOT NULL DEFAULT 0")
+        _ensure_column(conn, "proactive_care_decisions", "receptivity_score", "REAL NOT NULL DEFAULT 0")
+        _ensure_column(conn, "proactive_care_decisions", "context_preview", "TEXT NOT NULL DEFAULT ''")
+        _ensure_column(conn, "proactive_care_decisions", "detail", "TEXT NOT NULL DEFAULT ''")
+        _ensure_column(conn, "proactive_care_decisions", "timing_json", "TEXT NOT NULL DEFAULT '{}'")
+        _ensure_column(conn, "proactive_care_decisions", "created_at", "INTEGER NOT NULL DEFAULT 0")
+        cursor.execute(
+            """
             CREATE TABLE IF NOT EXISTS chat_messages (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 user_id INTEGER NOT NULL,

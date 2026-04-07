@@ -2660,13 +2660,14 @@ const App: React.FC = () => {
   }
 
   return (
-    <div className="w-screen h-screen bg-[#070b14] flex overflow-hidden font-sans text-slate-200">
+    <div className="ios-page-shell w-screen h-screen flex overflow-hidden font-sans text-slate-200">
+      <div className="absolute inset-0 ios-shell pointer-events-none" />
       {triggerToasts.length > 0 && (
         <div className="absolute top-6 left-8 z-20 space-y-3">
           {triggerToasts.map((toast) => (
             <div
               key={toast.id}
-              className="bg-slate-900/80 border border-white/10 rounded-2xl px-4 py-3 shadow-xl backdrop-blur-2xl max-w-xs"
+              className="ios-float-card rounded-[1.35rem] px-4 py-3 max-w-xs animate-pop-in"
             >
               <div className="text-[9px] font-black uppercase tracking-[0.3em] text-indigo-300">
                 {toast.title}
@@ -2677,10 +2678,9 @@ const App: React.FC = () => {
         </div>
       )}
       {themeOnboardingOpen && (
-        <div className="absolute inset-0 z-30 flex items-center justify-center bg-black/40 backdrop-blur-sm">
+        <div className="absolute inset-0 z-30 flex items-center justify-center bg-black/28 backdrop-blur-md">
           <div
-            className="w-[520px] max-w-[90vw] rounded-[2rem] p-6 border shadow-2xl"
-            style={{ background: "var(--panel-bg-strong)", borderColor: "var(--panel-border)" }}
+            className="w-[520px] max-w-[90vw] rounded-[2rem] p-6 shadow-2xl ios-float-card animate-pop-in"
           >
             <div className="flex items-center justify-between mb-4">
               <div>
@@ -2727,20 +2727,20 @@ const App: React.FC = () => {
       )}
       {carePopup && (
         <div className="absolute top-6 right-8 z-20 max-w-sm animate-pop-in">
-          <div className="bg-white/90 text-slate-900 rounded-3xl shadow-2xl p-6 border border-white/40">
+          <div className="ios-float-card text-slate-50 rounded-[1.85rem] p-6">
             <div className="text-xs font-black uppercase tracking-[0.3em] text-slate-500 mb-2">
               主动关怀
             </div>
-            <div className="text-sm font-bold leading-relaxed">{carePopup.text}</div>
+            <div className="text-sm font-semibold leading-relaxed text-slate-100">{carePopup.text}</div>
             {carePopup.followup_question && (
-              <div className="text-sm font-semibold mt-3 text-slate-600">
+              <div className="text-sm font-semibold mt-3 text-slate-300">
                 {carePopup.followup_question}
               </div>
             )}
             <div className="mt-4 flex justify-end">
               <button
                 onClick={() => setCarePopup(null)}
-                className="text-xs font-black text-slate-600 hover:text-slate-900 transition-colors"
+                className="text-xs font-black text-slate-400 hover:text-white transition-colors"
               >
                 关闭
               </button>
@@ -2750,17 +2750,17 @@ const App: React.FC = () => {
           )}
       {weeklySummaryPopup && (
         <div className="absolute top-6 right-8 z-20 max-w-md animate-pop-in">
-          <div className="bg-white/95 text-slate-900 rounded-3xl shadow-2xl p-6 border border-white/40">
+          <div className="ios-float-card text-slate-50 rounded-[1.85rem] p-6">
             <div className="text-xs font-black uppercase tracking-[0.3em] text-slate-500 mb-2">
               每周总结
             </div>
-            <div className="text-sm font-semibold leading-relaxed whitespace-pre-line">
+            <div className="text-sm font-semibold leading-relaxed whitespace-pre-line text-slate-100">
               {weeklySummaryPopup}
             </div>
             <div className="mt-4 flex justify-end">
               <button
                 onClick={() => setWeeklySummaryPopup(null)}
-                className="text-xs font-black text-slate-600 hover:text-slate-900 transition-colors"
+                className="text-xs font-black text-slate-400 hover:text-white transition-colors"
               >
                 关闭
               </button>
@@ -2769,7 +2769,7 @@ const App: React.FC = () => {
         </div>
       )}
 
-      <nav className="w-20 bg-[#0a0f1d] border-r border-white/[0.03] flex flex-col items-center py-10 gap-8 z-20">
+      <nav className="ios-sidebar w-24 flex flex-col items-center py-10 gap-8 z-20">
         <NavButton
           active={activeTab === Tab.DASHBOARD}
           onClick={() => setActiveTab(Tab.DASHBOARD)}
@@ -2820,16 +2820,16 @@ const App: React.FC = () => {
 
       <section className="flex-1 flex flex-col px-10 pb-10 relative min-h-0">
         <header className="h-32 flex items-center justify-between" style={{ WebkitAppRegion: "drag" }}>
-          <div className="flex items-center gap-3 animate-pop-in">
-            <div className="text-indigo-400 relative">
-              <img src={APP_ICON_URL} alt="app icon" className="w-6 h-6 object-cover rounded-md opacity-90" />
+          <div className="flex items-center gap-4 animate-pop-in">
+            <div className="text-indigo-400 relative ios-soft-float">
+              <img src={APP_ICON_URL} alt="app icon" className="w-7 h-7 object-cover rounded-xl opacity-95" />
               <div className="absolute -top-1 -right-1 w-1.5 h-1.5 bg-indigo-400 rounded-full animate-pulse"></div>
             </div>
             <div className="flex flex-col">
-              <h1 className="text-[12px] font-black uppercase tracking-[0.6em] text-white/50 leading-none">
+              <h1 className="text-[12px] font-black uppercase tracking-[0.45em] text-white/55 leading-none">
                 心念双灵
               </h1>
-              <span className="text-[9px] font-bold tracking-[0.4em] text-white/20 mt-1">
+              <span className="text-[9px] font-semibold tracking-[0.32em] text-white/20 mt-1">
                 EMORESONANCE V2.5
               </span>
             </div>
@@ -2864,10 +2864,10 @@ const App: React.FC = () => {
                 <span>{THEME_OPTIONS.find((item) => item.id === uiTheme)?.label || "主题"}</span>
               </button>
               {themeMenuOpen && (
-                <div
-                  className="absolute right-0 mt-3 w-56 rounded-2xl p-3 backdrop-blur-2xl shadow-2xl border z-50"
-                  style={{ background: "var(--panel-bg-strong)", borderColor: "var(--panel-border)" }}
-                >
+          <div
+            className="absolute right-0 mt-3 w-56 rounded-[1.6rem] p-3 ios-float-card z-50"
+            style={{ background: "var(--panel-bg-strong)", borderColor: "var(--panel-border)" }}
+          >
                   <div
                     className="text-[10px] font-black uppercase tracking-widest mb-2"
                     style={{ color: "var(--theme-muted)" }}
@@ -2938,7 +2938,7 @@ const App: React.FC = () => {
                   riskUpdatedAt={riskUpdatedAt}
                 />
               </div>
-              <div className="col-span-3 min-h-[760px] rounded-[2.35rem] border border-white/5 bg-[linear-gradient(180deg,rgba(12,18,34,0.78),rgba(10,15,28,0.88))] backdrop-blur-3xl shadow-2xl overflow-hidden flex flex-col">
+              <div className="col-span-3 min-h-[760px] ios-float-card rounded-[2.35rem] overflow-hidden flex flex-col animate-rise">
                 <div className="px-6 pt-6 pb-5 border-b border-white/[0.04]">
                   <div className="flex items-center justify-between">
                     <div className="flex items-center gap-2">
@@ -2952,22 +2952,22 @@ const App: React.FC = () => {
                     </span>
                   </div>
                   <div className="mt-5 grid grid-cols-2 gap-3">
-                    <div className="rounded-[1.45rem] border border-white/6 bg-white/[0.03] p-3.5">
-                      <div className="text-[10px] font-black uppercase tracking-[0.24em] text-slate-500">当前情绪</div>
+                    <div className="ios-metric-card rounded-[1.6rem] p-3.5">
+                      <div className="text-[10px] font-black uppercase tracking-[0.22em] text-slate-400">当前情绪</div>
                       <div className="mt-2 text-base font-black text-white">{dashboardSummary.current}</div>
                     </div>
-                    <div className="rounded-[1.45rem] border border-white/6 bg-white/[0.03] p-3.5">
-                      <div className="text-[10px] font-black uppercase tracking-[0.24em] text-slate-500">实时样本</div>
+                    <div className="ios-metric-card rounded-[1.6rem] p-3.5">
+                      <div className="text-[10px] font-black uppercase tracking-[0.22em] text-slate-400">实时样本</div>
                       <div className="mt-2 text-base font-black text-white">{dashboardSummary.sampleCount}</div>
                     </div>
-                    <div className="rounded-[1.45rem] border border-white/6 bg-white/[0.03] p-3.5">
-                      <div className="text-[10px] font-black uppercase tracking-[0.24em] text-slate-500">今日均值</div>
+                    <div className="ios-metric-card rounded-[1.6rem] p-3.5">
+                      <div className="text-[10px] font-black uppercase tracking-[0.22em] text-slate-400">今日均值</div>
                       <div className="mt-2 text-base font-black text-white">
                         {dashboardSummary.average > 0 ? `${dashboardSummary.average}%` : "--"}
                       </div>
                     </div>
-                    <div className="rounded-[1.45rem] border border-white/6 bg-white/[0.03] p-3.5">
-                      <div className="text-[10px] font-black uppercase tracking-[0.24em] text-slate-500">峰值</div>
+                    <div className="ios-metric-card rounded-[1.6rem] p-3.5">
+                      <div className="text-[10px] font-black uppercase tracking-[0.22em] text-slate-400">峰值</div>
                       <div className="mt-2 text-base font-black text-white">
                         {dashboardSummary.peak > 0 ? `${dashboardSummary.peak}%` : "--"}
                       </div>
@@ -2984,18 +2984,18 @@ const App: React.FC = () => {
                   {dashboardFeed.map((event) => (
                     <div
                       key={event.id}
-                      className="rounded-[1.6rem] border border-white/6 bg-white/[0.025] px-4 py-3.5 transition-all hover:bg-white/[0.04]"
+                      className="ios-list-card rounded-[1.85rem] px-4 py-3.5 transition-all hover:bg-white/[0.075]"
                     >
                       <div className="flex justify-between items-start gap-3">
                         <div className="flex items-center gap-2">
-                          <span className="rounded-full bg-indigo-500/18 px-2 py-1 text-[9px] font-black text-indigo-300">
+                          <span className="rounded-full bg-indigo-500/16 px-2.5 py-1 text-[9px] font-black text-indigo-200">
                             {event.type}
                           </span>
-                          <span className="text-[9px] font-bold text-slate-500">
+                          <span className="text-[9px] font-semibold text-slate-500">
                             {getDayPartLabel(event.time)}
                           </span>
                           {event.live && (
-                            <span className="rounded-full bg-cyan-500/18 px-2 py-1 text-[9px] font-black text-cyan-300">
+                            <span className="rounded-full bg-cyan-500/16 px-2.5 py-1 text-[9px] font-black text-cyan-200">
                               LIVE
                             </span>
                           )}
@@ -3026,7 +3026,7 @@ const App: React.FC = () => {
           )}
 
           {activeTab === Tab.CHAT && (
-            <div className="h-full max-w-6xl mx-auto w-full">
+            <div className="h-full max-w-6xl mx-auto w-full animate-rise">
               <ChatInterface
                 currentEmotion={scores.S > 0.5 ? EmotionType.ANXIOUS : EmotionType.CALM}
                 initialMessages={messages}
@@ -3044,7 +3044,7 @@ const App: React.FC = () => {
           )}
           {activeTab === Tab.FOCUS && (
             <div className="h-full w-full grid grid-cols-12 gap-6">
-              <div className="col-span-5 bg-[#0c1222]/50 backdrop-blur-3xl rounded-[2.5rem] border border-white/[0.05] p-8 shadow-2xl flex flex-col">
+              <div className="col-span-5 ios-float-card rounded-[2.5rem] p-8 flex flex-col animate-rise">
                 <div className="flex items-center justify-between">
                   <div>
                     <h3 className="text-lg font-black text-white">番茄钟</h3>
@@ -3174,7 +3174,7 @@ const App: React.FC = () => {
                 </div>
               </div>
 
-              <div className="col-span-7 bg-[#0c1222]/50 backdrop-blur-3xl rounded-[2.5rem] border border-white/[0.05] p-8 shadow-2xl flex flex-col">
+              <div className="col-span-7 ios-float-card rounded-[2.5rem] p-8 flex flex-col animate-rise" style={{ animationDelay: "80ms" }}>
                 <div className="flex items-center justify-between">
                   <div>
                     <h3 className="text-lg font-black text-white">工作清单</h3>
@@ -3310,7 +3310,7 @@ const App: React.FC = () => {
           )}
           {activeTab === Tab.PROFILE && (
             <div className="h-full w-full overflow-y-auto pr-1 no-scrollbar">
-              <div className="w-full max-w-5xl mx-auto bg-[#0c1222]/50 backdrop-blur-3xl rounded-[2.5rem] border border-white/[0.05] shadow-2xl p-10 animate-pop-in">
+              <div className="w-full max-w-5xl mx-auto ios-float-card rounded-[2.5rem] p-10 animate-pop-in">
                 <div className="flex items-center gap-6">
                   <div className="w-20 h-20 rounded-full border border-white/10 overflow-hidden">
                     <img src={resolvedAvatar} alt="avatar" className="w-full h-full object-cover" />
@@ -3449,7 +3449,7 @@ const App: React.FC = () => {
         </div>
       </section>
 
-      <div className="fixed inset-0 pointer-events-none border border-white/[0.01] z-50"></div>
+      <div className="fixed inset-0 pointer-events-none border border-white/[0.02] z-50"></div>
     </div>
   );
 };
@@ -3457,13 +3457,18 @@ const App: React.FC = () => {
 const NavButton = ({ active, onClick, icon: Icon }: any) => (
   <button
     onClick={onClick}
-    className={`relative p-3.5 rounded-2xl transition-all duration-500 group ${
-      active ? "bg-indigo-600/10 text-white" : "text-slate-600 hover:text-slate-300"
+    className={`relative p-4 rounded-[1.55rem] transition-all duration-500 group ios-soft-float ${
+      active
+        ? "bg-white/[0.12] text-white shadow-[inset_0_1px_0_rgba(255,255,255,0.08),0_16px_30px_rgba(0,0,0,0.18)]"
+        : "text-slate-500 hover:text-slate-200 hover:bg-white/[0.05] hover:shadow-[0_12px_28px_rgba(0,0,0,0.14)]"
     }`}
   >
     <Icon size={22} strokeWidth={active ? 2.5 : 2} />
     {active && (
-      <div className="absolute -left-1 top-1/2 -translate-y-1/2 w-1 h-5 bg-indigo-500 rounded-full shadow-[0_0_10px_#6366f1]"></div>
+      <>
+        <div className="absolute inset-0 rounded-[1.55rem] border border-white/10" />
+        <div className="absolute -left-1 top-1/2 -translate-y-1/2 w-1 h-5 bg-indigo-300 rounded-full shadow-[0_0_14px_rgba(165,180,252,0.9)]"></div>
+      </>
     )}
   </button>
 );

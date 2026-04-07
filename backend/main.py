@@ -1195,6 +1195,67 @@ def _assessment_response(session: Dict[str, object], device_online: bool = False
     )
 
 
+_ASSESSMENT_FALLBACK_QUESTIONS: List[Dict[str, str]] = [
+    {
+        "id": "fallback-support-style",
+        "pair": "interaction_preferences",
+        "focus": "interaction_preferences",
+        "prompt": "如果你状态不太好时，有人来关心你，你更希望对方怎么开口，才不会让你觉得有压力？",
+    },
+    {
+        "id": "fallback-decision-style",
+        "pair": "decision_style",
+        "focus": "decision_style",
+        "prompt": "遇到要做选择的事情时，你通常是很快拍板，还是会先反复想一会儿？",
+    },
+    {
+        "id": "fallback-stress-response",
+        "pair": "stress_response",
+        "focus": "stress_response",
+        "prompt": "当你很累、很烦或者压力上来时，你更容易先沉默自己扛着，还是会想找人说一说？",
+    },
+    {
+        "id": "fallback-comfort-preferences",
+        "pair": "comfort_preferences",
+        "focus": "comfort_preferences",
+        "prompt": "如果我要安抚你，你更能接受哪种方式：先安静陪着、先给明确建议，还是先陪你把情绪说出来？",
+    },
+    {
+        "id": "fallback-avoid-patterns",
+        "pair": "avoid_patterns",
+        "focus": "avoid_patterns",
+        "prompt": "有没有哪种说话方式会让你立刻不想继续聊，比如催、说教、追问或者太多鸡汤？",
+    },
+]
+
+
+def _assessment_fallback_question(session_payload: Dict[str, object]) -> Dict[str, str]:
+    asked_ids = {
+        str(item.get("question_id") or "").strip()
+        for item in (session_payload.get("question_history") or [])
+        if isinstance(item, dict) and str(item.get("question_id") or "").strip()
+    }
+    for item in _ASSESSMENT_FALLBACK_QUESTIONS:
+        if item["id"] not in asked_ids:
+            return dict(item)
+    turn_index = int(session_payload.get("turn_count") or 0)
+    return dict(_ASSESSMENT_FALLBACK_QUESTIONS[turn_index % len(_ASSESSMENT_FALLBACK_QUESTIONS)])
+
+
+async def _assessment_pick_question_with_fallback(
+    user_id: int,
+    activation_profile: Dict[str, object],
+    session_payload: Dict[str, object],
+) -> tuple[Dict[str, object], str]:
+    try:
+        model_question = await _assessment_pick_model_question(int(user_id), activation_profile, session_payload)
+    except Exception:
+        model_question = {}
+    if model_question:
+        return model_question, "ai"
+    return _assessment_fallback_question(session_payload), "fallback"
+
+
 def _activation_ai_runtime_snapshot() -> Dict[str, object]:
     runtime = assistant_service.runtime_status()
     gateway_ready = bool(runtime.get("gateway_ready"))
@@ -3726,7 +3787,7 @@ async def activation_assessment_start(
         session_payload = build_initial_session(now_ms)
         session_payload["voice_mode"] = str(payload.voice_mode or "text").strip() or "text"
         activation = _get_activation_profile(conn, int(user["id"]))
-        model_question = await _assessment_pick_model_question(int(user["id"]), activation, session_payload)
+        model_question, question_source = await _assessment_pick_question_with_fallback(int(user["id"]), activation, session_payload)
         if not model_question:
             session_payload["status"] = "blocked"
             session_payload["blocking_reason"] = "AI 没有生成首个正式建档问题。"
@@ -3735,12 +3796,12 @@ async def activation_assessment_start(
             session_payload["latest_question"] = str(model_question.get("prompt") or "")
             session_payload["question_pair"] = str(model_question.get("pair") or "")
             session_payload["current_focus"] = str(model_question.get("focus") or model_question.get("pair") or "")
-            session_payload["question_source"] = "ai"
+            session_payload["question_source"] = question_source
         session_id = _save_assessment_session(conn, int(user["id"]), session_payload, session_id=None)
         existing = session_payload
     elif not str(existing.get("latest_question") or "").strip() and str(existing.get("status") or "") != "completed":
         activation = _get_activation_profile(conn, int(user["id"]))
-        model_question = await _assessment_pick_model_question(int(user["id"]), activation, existing)
+        model_question, question_source = await _assessment_pick_question_with_fallback(int(user["id"]), activation, existing)
         if model_question:
             existing["status"] = "active"
             existing["blocking_reason"] = ""
@@ -3748,7 +3809,7 @@ async def activation_assessment_start(
             existing["latest_question"] = str(model_question.get("prompt") or "")
             existing["question_pair"] = str(model_question.get("pair") or "")
             existing["current_focus"] = str(model_question.get("focus") or model_question.get("pair") or "")
-            existing["question_source"] = "ai"
+            existing["question_source"] = question_source
             _save_assessment_session(conn, int(user["id"]), existing, session_id=int(session_id))
     elif existing and session_id is not None and str(existing.get("status") or "").strip() == "blocked" and bool(ai_snapshot["ai_ready"]):
         existing["status"] = "active"
@@ -5609,6 +5670,164 @@ def _require_bearer(credentials: Optional[HTTPAuthorizationCredentials]) -> None
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token")
 
 
+def _evaluate_proactive_care_timing(
+    payload: CareRequest,
+    current_ts_ms: int,
+    history_items: List[Dict[str, object]],
+    expr_label: str,
+    expr_conf: float,
+) -> Dict[str, object]:
+    raw_text = str(payload.context or "").strip()
+    emotion = str(payload.current_emotion or "").strip().lower()
+    lowered = raw_text.lower()
+    hour = time.localtime(current_ts_ms / 1000).tm_hour
+
+    high_risk_tokens = [
+        "想死",
+        "不想活",
+        "活不下去",
+        "结束掉",
+        "不如死",
+        "消失",
+        "撑不住了",
+        "崩溃了",
+        "想结束",
+    ]
+    support_tokens = [
+        "帮我",
+        "怎么办",
+        "好累",
+        "累死",
+        "难受",
+        "烦死",
+        "想哭",
+        "崩溃",
+        "压力",
+        "焦虑",
+        "害怕",
+        "睡不着",
+        "失眠",
+        "撑不住",
+        "受不了",
+    ]
+    busy_tokens = [
+        "开会",
+        "在忙",
+        "忙着",
+        "上班",
+        "稍后",
+        "回头",
+        "等下",
+        "待会",
+        "先别",
+        "别吵",
+        "睡了",
+        "休息了",
+    ]
+    negative_emotions = {
+        "sad",
+        "sadness",
+        "down",
+        "depressed",
+        "anger",
+        "angry",
+        "frustrated",
+        "irritated",
+        "fear",
+        "anxious",
+        "anxiety",
+        "stress",
+        "stressed",
+    }
+    negative_expr_labels = {"sadness", "anger", "fear", "disgust", "contempt"}
+
+    history_gap_ms: Optional[int] = None
+    if history_items:
+        history_gap_ms = max(0, int(current_ts_ms) - int(history_items[-1].get("timestamp_ms", current_ts_ms)))
+    recent_user_count = sum(
+        1
+        for item in history_items[-4:]
+        if str(item.get("sender", "user")).strip().lower() == "user"
+    )
+
+    state_score = 0.10
+    state_reasons: List[str] = []
+    is_high_risk = any(token in raw_text for token in high_risk_tokens)
+    if is_high_risk:
+        state_score += 0.62
+        state_reasons.append("命中高风险表达")
+    if emotion in negative_emotions:
+        state_score += 0.22
+        state_reasons.append(f"当前情绪为 {emotion}")
+    if any(token in raw_text for token in support_tokens):
+        state_score += 0.18
+        state_reasons.append("文本出现求助/高压信号")
+    if expr_label in negative_expr_labels and expr_conf >= 0.55:
+        state_score += 0.14
+        state_reasons.append(f"表情信号偏负向({expr_label}, {expr_conf:.2f})")
+    if recent_user_count >= 2:
+        state_score += 0.08
+        state_reasons.append("近期连续多轮用户表达")
+    state_score = max(0.0, min(1.0, state_score))
+    state_active = is_high_risk or state_score >= 0.45
+
+    receptivity_score = 0.35
+    receptivity_reasons: List[str] = []
+    busy_detected = any(token in raw_text for token in busy_tokens)
+    if busy_detected:
+        receptivity_score -= 0.36
+        receptivity_reasons.append("文本出现忙碌/不便被打扰信号")
+    explicit_invite_tokens = ["怎么办", "帮我", "可以吗", "能不能", "能否", "怎么做", "要不要"]
+    if "?" in raw_text or "？" in raw_text or any(token in lowered for token in explicit_invite_tokens):
+        receptivity_score += 0.20
+        receptivity_reasons.append("当前文本含明确回应邀请")
+    if history_gap_ms is None or history_gap_ms <= 3 * 60 * 1000:
+        receptivity_score += 0.14
+        receptivity_reasons.append("当前会话仍在活跃窗口内")
+    elif history_gap_ms >= 15 * 60 * 1000:
+        receptivity_score -= 0.14
+        receptivity_reasons.append("距离上一轮交互较久")
+    if hour >= 23 or hour < 7:
+        receptivity_score -= 0.10
+        receptivity_reasons.append("当前处于深夜/清晨时段")
+    if is_high_risk:
+        receptivity_score += 0.24
+        receptivity_reasons.append("高风险场景优先安全介入")
+    receptivity_score = max(0.0, min(1.0, receptivity_score))
+    receptive = is_high_risk or receptivity_score >= 0.45
+
+    if is_high_risk:
+        recommendation = "intervene_now"
+        intensity = "safety_check"
+    elif state_active and receptive:
+        recommendation = "intervene_now"
+        intensity = "gentle_support"
+    elif state_active:
+        recommendation = "defer_softly"
+        intensity = "brief_checkin"
+    else:
+        recommendation = "hold"
+        intensity = "minimal"
+
+    return {
+        "current_hour": int(hour),
+        "history_gap_ms": history_gap_ms,
+        "state_stage": {
+            "score": round(state_score, 3),
+            "active": bool(state_active),
+            "reasons": state_reasons,
+        },
+        "receptivity_stage": {
+            "score": round(receptivity_score, 3),
+            "receptive": bool(receptive),
+            "reasons": receptivity_reasons,
+        },
+        "high_risk": bool(is_high_risk),
+        "recommendation": recommendation,
+        "intensity": intensity,
+    }
+
+
 def _build_care_context(payload: CareRequest) -> Dict[str, object]:
     expr_labels = ["neutral", "happiness", "surprise", "sadness", "anger", "disgust", "fear", "contempt"]
     runtime_detail = app.state.risk_detail if isinstance(getattr(app.state, "risk_detail", None), dict) else {}
@@ -5689,6 +5908,14 @@ def _build_care_context(payload: CareRequest) -> Dict[str, object]:
             entry["image_data_url"] = image_data_url
         attachment_items.append(entry)
 
+    care_timing = _evaluate_proactive_care_timing(
+        payload,
+        int(current_ts_ms),
+        history_items,
+        expr_label,
+        expr_conf,
+    )
+
     return {
         "input_type": "user_text",
         "scene": "office",
@@ -5710,6 +5937,7 @@ def _build_care_context(payload: CareRequest) -> Dict[str, object]:
         "attachments": attachment_items,
         "history_gap_ms": history_gap_ms,
         "history_usable": history_usable,
+        "care_timing": care_timing,
         "expression_modality": {
             "label": expr_label,
             "confidence": expr_conf,
@@ -5724,6 +5952,8 @@ def _build_care_context(payload: CareRequest) -> Dict[str, object]:
             "不输出思考过程；新闻问题优先联网搜索；"
             "若发生联网搜索，先明确说“我帮你联网搜搜”；"
             "回复时要参考 expression_modality（算法信号，非用户原话）；"
+            "回复时必须参考 care_timing：若 recommendation=hold，则只允许极轻量、非打扰式回应；"
+            "若 recommendation=defer_softly，则最多一到两句，不要连续追问；"
             "不要向用户展示function_call/tool_call/json草稿。"
         ),
     }
@@ -5768,11 +5998,21 @@ def _build_care_prompt(
     )
 
 
-def _fallback_care_text(payload: CareRequest, user_profile: Dict[str, object], detail: str = "") -> str:
+def _fallback_care_text(
+    payload: CareRequest,
+    user_profile: Dict[str, object],
+    detail: str = "",
+    timing: Optional[Dict[str, object]] = None,
+) -> str:
     raw_text = str(payload.context or "").strip()
     emotion = str(payload.current_emotion or "").strip().lower()
     preferred_name = str((user_profile.get("identity") or {}).get("preferred_name") or "").strip()
     prefix = f"{preferred_name}，" if preferred_name else ""
+    recommendation = str((timing or {}).get("recommendation") or "").strip()
+    if recommendation == "hold":
+        return f"{prefix}我先轻一点陪着你，不多打扰。等你想说的时候，直接叫我。"
+    if recommendation == "defer_softly":
+        return f"{prefix}我先不一下子问很多。你如果愿意，只回我一句现在最卡的是哪件事。"
     if emotion in {"sad", "sadness", "down", "depressed"}:
         base = f"{prefix}我听出来你现在有点低落，我们先别急着把所有事一次想完。先把眼前最压人的那一件事说清楚，我陪你一起拆开。"
     elif emotion in {"angry", "anger", "frustrated", "irritated"}:
@@ -5788,6 +6028,89 @@ def _fallback_care_text(payload: CareRequest, user_profile: Dict[str, object], d
     return base
 
 
+def _build_policy_care_response(
+    payload: CareRequest,
+    user_profile: Dict[str, object],
+    runtime_snapshot: Dict[str, object],
+    timing: Optional[Dict[str, object]] = None,
+) -> Optional[CareResponse]:
+    timing = timing if isinstance(timing, dict) else {}
+    recommendation = str(timing.get("recommendation") or "").strip()
+    if recommendation not in {"hold", "defer_softly"}:
+        return None
+    stage_reasons = timing.get("receptivity_stage") if isinstance(timing.get("receptivity_stage"), dict) else {}
+    reasons = stage_reasons.get("reasons") if isinstance(stage_reasons.get("reasons"), list) else []
+    reason_text = "；".join(str(item).strip() for item in reasons if str(item).strip())
+    detail = f"policy:{recommendation}"
+    if reason_text:
+        detail = f"{detail} ({reason_text})"
+    return CareResponse(
+        text=_fallback_care_text(payload, user_profile, detail=detail, timing=timing),
+        followup_question="",
+        style="warm",
+        source=f"policy_{recommendation}",
+        detail=detail,
+        ai_ready=bool(runtime_snapshot.get("ai_ready")),
+        timing=timing,
+    )
+
+
+def _persist_proactive_care_decision(
+    conn: Connection,
+    user_id: int,
+    payload: CareRequest,
+    entrypoint: str,
+    response: CareResponse,
+) -> None:
+    timing = response.timing if isinstance(response.timing, dict) else {}
+    state_stage = timing.get("state_stage") if isinstance(timing.get("state_stage"), dict) else {}
+    receptivity_stage = timing.get("receptivity_stage") if isinstance(timing.get("receptivity_stage"), dict) else {}
+    timestamp_ms = int(payload.current_ts_ms or int(time.time() * 1000))
+    created_at = int(time.time() * 1000)
+    preview = re.sub(r"\s+", " ", str(payload.context or "").strip())[:180]
+    conn.execute(
+        """
+        INSERT INTO proactive_care_decisions (
+            user_id, timestamp_ms, entrypoint, current_emotion, recommendation, intensity,
+            source, ai_ready, high_risk, state_score, receptivity_score, context_preview,
+            detail, timing_json, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            int(user_id),
+            timestamp_ms,
+            str(entrypoint or "llm_care"),
+            str(payload.current_emotion or "").strip(),
+            str(timing.get("recommendation") or "").strip(),
+            str(timing.get("intensity") or "").strip(),
+            str(response.source or "fallback").strip(),
+            1 if bool(response.ai_ready) else 0,
+            1 if bool(timing.get("high_risk")) else 0,
+            float(state_stage.get("score", 0.0) or 0.0),
+            float(receptivity_stage.get("score", 0.0) or 0.0),
+            preview,
+            str(response.detail or "").strip(),
+            json.dumps(timing, ensure_ascii=False),
+            created_at,
+        ),
+    )
+    conn.commit()
+
+
+def _finalize_care_response(
+    conn: Connection,
+    user_id: int,
+    payload: CareRequest,
+    entrypoint: str,
+    response: CareResponse,
+) -> CareResponse:
+    try:
+        _persist_proactive_care_decision(conn, user_id, payload, entrypoint, response)
+    except Exception:
+        pass
+    return response
+
+
 async def _run_care_reply(
     conn: Connection,
     user_id: int,
@@ -5796,19 +6119,30 @@ async def _run_care_reply(
 ) -> CareResponse:
     user_profile = _build_assistant_identity_context(conn, int(user_id))
     context = _build_care_context(payload)
+    timing = context.get("care_timing") if isinstance(context.get("care_timing"), dict) else {}
     runtime_snapshot = _normalize_care_runtime(assistant_service.runtime_status())
+    policy_response = _build_policy_care_response(payload, user_profile, runtime_snapshot, timing=timing)
+    if policy_response is not None:
+        return _finalize_care_response(conn, int(user_id), payload, entrypoint, policy_response)
     stored_memory_summary = assistant_service.get_profile_memory_summary(int(user_id), max_chars=1200)
     prompt = _build_care_prompt(context, user_profile, runtime_snapshot)
     if not bool(runtime_snapshot.get("ai_ready")):
-        fallback_text = _fallback_care_text(payload, user_profile, str(runtime_snapshot.get("ai_detail") or ""))
-        return CareResponse(
+        fallback_text = _fallback_care_text(
+            payload,
+            user_profile,
+            str(runtime_snapshot.get("ai_detail") or ""),
+            timing=timing,
+        )
+        response = CareResponse(
             text=fallback_text,
             followup_question="",
             style="warm",
             source="fallback",
             detail=str(runtime_snapshot.get("ai_detail") or ""),
             ai_ready=False,
+            timing=timing,
         )
+        return _finalize_care_response(conn, int(user_id), payload, entrypoint, response)
     try:
         assistant_reply = await assistant_service.send_message(
             conn,
@@ -5823,32 +6157,37 @@ async def _run_care_reply(
                 "current_emotion": payload.current_emotion,
                 "care_channel": "proactive_care",
                 "care_runtime": runtime_snapshot,
+                "care_timing": timing,
                 "user_profile": user_profile,
                 "memory_summary": stored_memory_summary,
             },
         )
         safe_text, _rewritten = _sanitize_outbound_bot_text(str(assistant_reply.get("text") or ""))
         if safe_text:
-            return CareResponse(
+            response = CareResponse(
                 text=safe_text,
                 followup_question="",
                 style="warm",
                 source="ai",
                 detail=str(runtime_snapshot.get("ai_detail") or ""),
                 ai_ready=True,
+                timing=timing,
             )
+            return _finalize_care_response(conn, int(user_id), payload, entrypoint, response)
         raise RuntimeError("OpenClaw returned empty care reply")
     except Exception as exc:
         detail = str(exc).strip() or str(runtime_snapshot.get("ai_detail") or "")
-        fallback_text = _fallback_care_text(payload, user_profile, detail)
-        return CareResponse(
+        fallback_text = _fallback_care_text(payload, user_profile, detail, timing=timing)
+        response = CareResponse(
             text=fallback_text,
             followup_question="",
             style="warm",
             source="fallback",
             detail=detail,
             ai_ready=bool(runtime_snapshot.get("ai_ready")),
+            timing=timing,
         )
+        return _finalize_care_response(conn, int(user_id), payload, entrypoint, response)
 
 
 def _inject_tooling_budget(
@@ -5915,7 +6254,15 @@ async def llm_care_stream(
 
     async def event_stream():
         try:
-            yield _sse("start", {"ok": True, "source": care_reply.source, "ai_ready": care_reply.ai_ready})
+            yield _sse(
+                "start",
+                {
+                    "ok": True,
+                    "source": care_reply.source,
+                    "ai_ready": care_reply.ai_ready,
+                    "timing": care_reply.timing,
+                },
+            )
             sent_text = ""
             for char in final_text[:100]:
                 delta = char
@@ -5932,6 +6279,7 @@ async def llm_care_stream(
                     "source": care_reply.source,
                     "detail": care_reply.detail,
                     "ai_ready": care_reply.ai_ready,
+                    "timing": care_reply.timing,
                 },
             )
         except Exception as exc:

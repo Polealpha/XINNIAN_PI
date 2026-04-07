@@ -691,31 +691,31 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
 
   return (
     <div
-      className={`relative flex flex-col h-full backdrop-blur-3xl shadow-2xl border border-white/5 overflow-hidden animate-pop-in ${
-        compact ? "rounded-2xl bg-slate-900/50" : "rounded-[2.5rem] bg-slate-900/40"
+      className={`ios-chat-shell animate-pop-in ${
+        compact ? "rounded-[1.8rem]" : "rounded-[2.8rem]"
       }`}
       onDragOver={onRootDragOver}
       onDragLeave={onRootDragLeave}
       onDrop={onRootDrop}
     >
       {dragActive && (
-        <div className="absolute inset-0 z-30 bg-indigo-500/10 border-2 border-dashed border-indigo-300/60 pointer-events-none flex items-center justify-center">
-          <div className="px-4 py-2 rounded-xl bg-slate-900/80 text-indigo-200 text-xs font-bold">
+        <div className="absolute inset-0 z-30 border-2 border-dashed border-indigo-300/60 bg-indigo-400/10 backdrop-blur-md pointer-events-none flex items-center justify-center">
+          <div className="ios-float-card-soft px-4 py-2 rounded-[1.1rem] text-indigo-100 text-xs font-semibold">
             释放以上传图片或视频
           </div>
         </div>
       )}
       {!compact && (
-        <div className="p-6 flex items-center justify-between border-b border-white/5 bg-slate-950/20">
+        <div className="ios-chat-header p-6 flex items-center justify-between">
           <div className="flex items-center gap-4">
-            <div className="w-12 h-12 rounded-full bg-gradient-to-tr from-indigo-500 to-fuchsia-500 flex items-center justify-center text-white shadow-lg animate-pulse-glow">
+            <div className="ios-chat-avatar ios-chat-avatar--assistant w-12 h-12 rounded-full flex items-center justify-center">
               <Sparkles size={22} fill="white" />
             </div>
             <div>
               <h3 className="text-lg font-black text-white tracking-tight">关怀助手</h3>
               <div className="flex items-center gap-2">
-                <span className={`w-2 h-2 rounded-full ${assistantReady ? "bg-green-400 animate-pulse" : "bg-rose-400"}`}></span>
-                <span className={`text-[10px] font-bold uppercase tracking-tighter ${assistantReady ? "text-indigo-300" : "text-rose-300"}`}>
+                <span className={`w-2 h-2 rounded-full ${assistantReady ? "bg-emerald-300 animate-pulse" : "bg-rose-300"}`}></span>
+                <span className={`text-[10px] font-semibold tracking-[0.16em] ${assistantReady ? "text-indigo-200" : "text-rose-200"}`}>
                   {assistantReady ? "OpenClaw 已连接" : "OpenClaw 未就绪"}
                 </span>
               </div>
@@ -726,9 +726,9 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
               )}
             </div>
           </div>
-          <div className="hidden sm:flex items-center gap-2 px-3 py-1 bg-white/5 rounded-full border border-white/10">
+          <div className="hidden sm:flex items-center gap-2 px-3 py-1 ios-ghost-chip rounded-full">
             <Activity size={14} className="text-indigo-400" />
-            <span className="text-[10px] font-bold text-slate-400 uppercase">
+            <span className="text-[10px] font-semibold text-slate-300 tracking-[0.16em]">
               状态：
               {voiceState === "detecting"
                 ? "待唤醒"
@@ -744,32 +744,32 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
         </div>
       )}
 
-      <div ref={messageListRef} className={`flex-1 overflow-y-auto no-scrollbar ${compact ? "p-4 space-y-4" : "p-6 space-y-6"}`}>
+      <div ref={messageListRef} className={`ios-chat-thread flex-1 overflow-y-auto no-scrollbar ${compact ? "p-4 space-y-4" : "p-6 space-y-6"}`}>
         {messages.filter((msg) => hasRenderableContent(msg)).map((msg, index) => (
           <div
             key={msg.id}
-            className={`flex gap-3 animate-pop-in ${msg.sender === "user" ? "flex-row-reverse" : "flex-row"}`}
+            className={`flex gap-3 animate-rise ${msg.sender === "user" ? "flex-row-reverse" : "flex-row"}`}
             style={{ animationDelay: `${index * 50}ms` }}
           >
             <div
-              className={`rounded-full flex items-center justify-center flex-shrink-0 shadow-xl ${
+              className={`ios-chat-avatar rounded-full flex items-center justify-center flex-shrink-0 ${
                 compact ? "w-8 h-8" : "w-10 h-10"
-              } ${msg.sender === "user" ? "bg-slate-700 text-slate-300" : "bg-indigo-600 text-white"}`}
+              } ${msg.sender === "user" ? "ios-chat-avatar--user" : "ios-chat-avatar--assistant"}`}
             >
               {msg.sender === "user" ? <User size={compact ? 14 : 18} /> : <Bot size={compact ? 16 : 20} />}
             </div>
 
             <div className={`flex flex-col gap-1 max-w-[85%] ${msg.sender === "user" ? "items-end" : "items-start"}`}>
               {msg.isActiveCare && (
-                <span className="text-[9px] font-black text-indigo-400 uppercase tracking-widest mb-1 px-2">主动关怀触发</span>
+                <span className="text-[9px] font-semibold text-indigo-300 tracking-[0.18em] mb-1 px-2">主动关怀触发</span>
               )}
               <div
-                className={`rounded-3xl font-bold leading-relaxed shadow-lg transition-transform duration-300 hover:scale-[1.01] ${
+                className={`ios-chat-bubble transition-transform duration-300 ${
                   compact ? "p-3 text-[11px]" : "p-4 text-sm"
                 } ${
                   msg.sender === "user"
-                    ? "bg-indigo-500 text-white rounded-tr-none"
-                    : "bg-slate-800 text-slate-100 rounded-tl-none border border-white/5"
+                    ? "ios-chat-bubble--user"
+                    : "ios-chat-bubble--assistant"
                 }`}
               >
                 {Array.isArray(msg.attachments) && msg.attachments.length > 0 && (
@@ -780,14 +780,14 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
                           key={`${msg.id}-img-${i}`}
                           src={att.url}
                           alt={att.name || "image"}
-                          className="max-h-52 rounded-xl border border-white/10 object-contain bg-black/20"
+                          className="max-h-52 rounded-[1rem] border border-white/10 object-contain bg-black/20"
                         />
                       ) : (
                         <video
                           key={`${msg.id}-video-${i}`}
                           src={att.url}
                           controls
-                          className="max-h-56 rounded-xl border border-white/10 bg-black/20"
+                          className="max-h-56 rounded-[1rem] border border-white/10 bg-black/20"
                         />
                       )
                     )}
@@ -795,7 +795,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
                 )}
                 {hasRenderableText(msg.text) ? msg.text : <span className="opacity-75">已发送附件</span>}
               </div>
-              <span className="text-[9px] font-bold text-slate-600 px-2 mt-1">
+              <span className="text-[9px] font-semibold text-slate-500 px-2 mt-1">
                 {msg.timestamp.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
               </span>
               {msg.sender !== "user" && hasRenderableText(msg.text) && speechSupported && (
@@ -808,7 +808,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
                     }
                     speakReply(msg.id, msg.text);
                   }}
-                  className="px-2 py-1 mt-1 rounded-full border border-white/10 bg-slate-900/60 text-[9px] font-black uppercase tracking-wider text-slate-300 hover:text-white"
+                  className="ios-ghost-chip px-2.5 py-1 mt-1 rounded-full text-[9px] font-semibold tracking-[0.16em] text-slate-300 hover:text-white"
                 >
                   <span className="inline-flex items-center gap-1">
                     {speakingMessageId === msg.id ? <Square size={10} fill="currentColor" /> : <Volume2 size={10} />}
@@ -820,36 +820,36 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
           </div>
         ))}
         {isTyping && (
-          <div className="flex items-center gap-3 animate-pop-in">
-            <div className="w-10 h-10 rounded-full bg-indigo-600 flex items-center justify-center shadow-lg">
+          <div className="flex items-center gap-3 animate-rise">
+            <div className="ios-chat-avatar ios-chat-avatar--assistant w-10 h-10 rounded-full flex items-center justify-center">
               <Bot size={20} className="text-white" />
             </div>
-            <div className="bg-slate-800 border border-white/5 px-4 py-3 rounded-3xl rounded-tl-none flex gap-1.5 items-center">
-              <span className="w-2 h-2 bg-indigo-400 rounded-full animate-bounce" style={{ animationDelay: "0ms" }}></span>
-              <span className="w-2 h-2 bg-indigo-400 rounded-full animate-bounce" style={{ animationDelay: "150ms" }}></span>
-              <span className="w-2 h-2 bg-indigo-400 rounded-full animate-bounce" style={{ animationDelay: "300ms" }}></span>
+            <div className="ios-typing px-4 py-3 rounded-[1.8rem] rounded-tl-[0.7rem] flex gap-1.5 items-center">
+              <span className="ios-typing-dot w-2 h-2 rounded-full"></span>
+              <span className="ios-typing-dot w-2 h-2 rounded-full"></span>
+              <span className="ios-typing-dot w-2 h-2 rounded-full"></span>
             </div>
           </div>
         )}
         <div ref={messagesEndRef} />
       </div>
 
-      <div className={`${compact ? "p-4" : "p-6"} bg-slate-950/40 backdrop-blur-xl border-t border-white/5`}>
+      <div className={`ios-chat-composer ${compact ? "p-4" : "p-6"}`}>
         <input ref={fileInputRef} type="file" accept="image/*,video/*" multiple className="hidden" onChange={onAttachmentPicked} />
 
         {pendingAttachments.length > 0 && (
           <div className="mb-3 flex flex-wrap gap-2">
             {pendingAttachments.map((att, idx) => (
-              <div key={`pending-${idx}`} className="relative rounded-xl border border-white/10 bg-slate-900/80 p-1">
+              <div key={`pending-${idx}`} className="relative ios-list-card rounded-[1rem] p-1">
                 {att.kind === "image" ? (
-                  <img src={att.url} alt={att.name || "image"} className="h-16 w-16 object-cover rounded-lg" />
+                  <img src={att.url} alt={att.name || "image"} className="h-16 w-16 object-cover rounded-[0.8rem]" />
                 ) : (
-                  <video src={att.url} className="h-16 w-20 object-cover rounded-lg" />
+                  <video src={att.url} className="h-16 w-20 object-cover rounded-[0.8rem]" />
                 )}
                 <button
                   type="button"
                   onClick={() => removePendingAttachment(idx)}
-                  className="absolute -top-2 -right-2 rounded-full bg-black/70 text-white p-1"
+                  className="absolute -top-2 -right-2 rounded-full bg-black/70 text-white p-1 border border-white/10"
                 >
                   <X size={12} />
                 </button>
@@ -859,7 +859,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
         )}
 
         <div
-          className={`flex items-center gap-3 bg-slate-900/80 rounded-full border border-white/10 shadow-inner group transition-all focus-within:ring-2 focus-within:ring-indigo-500/30 ${
+          className={`ios-chat-composer-bar flex items-center gap-3 rounded-full group transition-all focus-within:ring-2 focus-within:ring-indigo-500/30 ${
             compact ? "p-2 pl-4" : "p-2 pl-6"
           }`}
         >
@@ -867,7 +867,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
             type="button"
             onClick={pickAttachments}
             disabled={uploading || voiceBusy || chatInputDisabled}
-            className="text-slate-300 hover:text-white disabled:opacity-40"
+            className="text-slate-300 hover:text-white disabled:opacity-40 transition-colors"
             title="上传图片或视频"
           >
             <Paperclip size={compact ? 16 : 18} />
@@ -876,7 +876,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
             type="button"
             onClick={handleVoiceToggle}
             disabled={uploading || isTyping || voiceBusy || chatInputDisabled}
-            className={`disabled:opacity-40 ${voiceRecording ? "text-rose-300 hover:text-rose-200" : "text-slate-300 hover:text-white"}`}
+            className={`disabled:opacity-40 transition-colors ${voiceRecording ? "text-rose-300 hover:text-rose-200" : "text-slate-300 hover:text-white"}`}
             title={voiceRecording ? "结束录音并转写" : "本地语音输入"}
           >
             {voiceBusy ? (
@@ -895,14 +895,14 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
             onPaste={onInputPaste}
             placeholder={chatInputPlaceholder}
             disabled={chatInputDisabled}
-            className={`flex-1 bg-transparent border-none outline-none text-slate-200 font-bold placeholder-slate-500 ${
+            className={`ios-chat-input flex-1 bg-transparent border-none outline-none text-slate-100 font-semibold placeholder-slate-500 ${
               compact ? "text-[12px]" : "text-sm"
             }`}
           />
           <button
             onClick={handleSend}
             disabled={chatInputDisabled || (!input.trim() && pendingAttachments.length === 0) || isTyping || uploading}
-            className={`bg-indigo-500 text-white rounded-full q-bounce disabled:opacity-30 shadow-lg shadow-indigo-500/20 ${
+            className={`ios-send-button rounded-full q-bounce disabled:opacity-30 ${
               compact ? "p-3" : "p-3.5"
             }`}
           >
@@ -914,7 +914,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
         {voiceRecording && <p className="text-[10px] font-bold text-amber-300 mt-2">正在本地录音，再按一次麦克风即可结束并自动发送</p>}
         {!audioEnabled && <p className="text-[10px] font-bold text-slate-500 mt-2">当前已关闭音频输出，回答不会自动朗读。</p>}
         {!compact && (
-          <p className="text-[9px] text-center mt-3 text-slate-600 font-black uppercase tracking-tighter">
+          <p className="text-[9px] text-center mt-3 text-slate-500 font-semibold tracking-[0.18em]">
             机器人动作指令（语音/动作/表情）由本地引擎实时处理
           </p>
         )}

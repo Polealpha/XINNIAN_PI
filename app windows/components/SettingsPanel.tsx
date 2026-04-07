@@ -148,7 +148,7 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({ settings, isGuest,
   return (
     <div className="h-full w-full overflow-y-auto no-scrollbar animate-pop-in">
       <div className="mx-auto grid max-w-7xl grid-cols-12 gap-6">
-        <aside className="col-span-12 xl:col-span-4 rounded-[2rem] border border-white/10 bg-[radial-gradient(circle_at_top,#1d4ed820,transparent_50%),linear-gradient(180deg,#0f172acc,#0b1020f2)] p-8 shadow-[0_30px_120px_rgba(2,6,23,0.4)]">
+        <aside className="col-span-12 xl:col-span-4 ios-float-card rounded-[2rem] p-8">
           <div className="flex items-start justify-between gap-4">
             <div>
               <div className="text-[11px] font-black uppercase tracking-[0.35em] text-cyan-300/70">
@@ -177,8 +177,8 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({ settings, isGuest,
             ))}
           </div>
 
-          <div className="mt-8 rounded-[1.5rem] border border-white/10 bg-white/[0.04] p-5">
-            <div className="text-[11px] font-black uppercase tracking-[0.28em] text-slate-400">当前摘要</div>
+          <div className="mt-8 rounded-[1.5rem] ios-list-card p-5">
+            <div className="text-[11px] font-semibold tracking-[0.18em] text-slate-400">当前摘要</div>
             <div className="mt-4 space-y-3">
               {summary.map((item) => (
                 <div key={item} className="rounded-2xl bg-black/20 px-4 py-3 text-sm font-semibold text-slate-200">
@@ -199,7 +199,7 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({ settings, isGuest,
             </button>
             <button
               onClick={() => void onClose()}
-              className="inline-flex items-center justify-center gap-3 rounded-2xl border border-white/10 bg-white/5 px-5 py-4 text-sm font-black text-slate-100 transition hover:bg-white/10"
+              className="inline-flex items-center justify-center gap-3 rounded-2xl ios-ghost-chip px-5 py-4 text-sm font-black text-slate-100 transition hover:bg-white/10"
             >
               <X size={18} />
               关闭设置
@@ -207,7 +207,7 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({ settings, isGuest,
           </div>
 
           {statusMessage ? (
-            <div className="mt-4 rounded-2xl border border-cyan-400/20 bg-cyan-400/10 px-4 py-3 text-sm font-bold text-cyan-100">
+            <div className="mt-4 rounded-2xl border border-cyan-400/20 bg-cyan-400/10 px-4 py-3 text-sm font-bold text-cyan-100 shadow-[inset_0_1px_0_rgba(255,255,255,0.05)]">
               {statusMessage}
             </div>
           ) : null}
