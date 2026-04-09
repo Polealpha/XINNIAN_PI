@@ -1,9 +1,5 @@
-import React, { useEffect, useMemo, useRef, useState } from "react";
-<<<<<<< Updated upstream
-import { ArrowLeft, Brain, CheckCircle2, LoaderCircle, Mic, PauseCircle, ShieldCheck, UserRound } from "lucide-react";
-=======
-import { Brain, CheckCircle2, ChevronDown, ChevronUp, LoaderCircle, Mic, PauseCircle, ShieldCheck, UserRound } from "lucide-react";
->>>>>>> Stashed changes
+﻿import React, { useEffect, useMemo, useRef, useState } from "react";
+import { ArrowLeft, Brain, CheckCircle2, ChevronDown, ChevronUp, LoaderCircle, Mic, PauseCircle, ShieldCheck, UserRound } from "lucide-react";
 
 import { getActivationState } from "../services/authService";
 import {
@@ -29,18 +25,12 @@ interface ActivationGateProps {
 
 interface PendingAssessmentTurn {
   clientTurnId: string;
-<<<<<<< Updated upstream
   questionId: string;
   question: string;
-=======
-  question: string;
-  questionId: string;
->>>>>>> Stashed changes
   answer: string;
   submittedAtMs: number;
 }
 
-<<<<<<< Updated upstream
 interface StoredAssessmentDraft {
   questionId: string;
   draft: string;
@@ -52,21 +42,12 @@ const ASSESSMENT_DRAFT_STORAGE_KEY = "activation-assessment-draft-v3";
 const ASSESSMENT_PENDING_STORAGE_KEY = "activation-assessment-pending-v3";
 
 const createClientTurnId = () => `desktop-turn-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-=======
-const createClientTurnId = () => `desktop-turn-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-const ASSESSMENT_DRAFT_STORAGE_KEY = "activation-assessment-draft-v2";
-const ASSESSMENT_PENDING_STORAGE_KEY = "activation-assessment-pending-v2";
->>>>>>> Stashed changes
 
 const readLocalJson = <T,>(key: string): T | null => {
   try {
     const raw = window.localStorage.getItem(key);
-<<<<<<< Updated upstream
-    return raw ? (JSON.parse(raw) as T) : null;
-=======
     if (!raw) return null;
     return JSON.parse(raw) as T;
->>>>>>> Stashed changes
   } catch {
     return null;
   }
@@ -76,11 +57,7 @@ const writeLocalJson = (key: string, value: unknown) => {
   try {
     window.localStorage.setItem(key, JSON.stringify(value));
   } catch {
-<<<<<<< Updated upstream
-    // ignore desktop storage failures
-=======
     // ignore storage failures in desktop runtime
->>>>>>> Stashed changes
   }
 };
 
@@ -88,24 +65,16 @@ const removeLocalJson = (key: string) => {
   try {
     window.localStorage.removeItem(key);
   } catch {
-<<<<<<< Updated upstream
-    // ignore desktop storage failures
-=======
     // ignore storage failures in desktop runtime
->>>>>>> Stashed changes
   }
 };
 
 const normalizeAnswerText = (value: string) => String(value || "").trim().replace(/\s+/g, " ");
 
-<<<<<<< Updated upstream
-const answerRecordedInState = (state: ActivationAssessmentState, answer: string) => {
-=======
 const answerRecordedInState = (
   state: Pick<ActivationAssessmentState, "dialogue_turns" | "latest_transcript">,
   answer: string
 ) => {
->>>>>>> Stashed changes
   const normalizedAnswer = normalizeAnswerText(answer);
   if (!normalizedAnswer) return false;
   if (normalizeAnswerText(String(state.latest_transcript || "")) === normalizedAnswer) {
@@ -116,7 +85,6 @@ const answerRecordedInState = (
   );
 };
 
-<<<<<<< Updated upstream
 const assessmentAdvancedPastPending = (state: ActivationAssessmentState, pending: PendingAssessmentTurn) => {
   const nextQuestionId = String(state.last_question_id || "").trim();
   if (nextQuestionId && pending.questionId && nextQuestionId !== pending.questionId) {
@@ -125,31 +93,11 @@ const assessmentAdvancedPastPending = (state: ActivationAssessmentState, pending
   return Boolean(state.updated_at_ms && Number(state.updated_at_ms) > Number(pending.submittedAtMs));
 };
 
-=======
->>>>>>> Stashed changes
 const suggestedAnswersForQuestion = (focus: string, question: string): string[] => {
   const focusKey = String(focus || "").trim();
   const prompt = String(question || "").trim();
   const lowered = prompt.toLowerCase();
   const byFocus: Record<string, string[]> = {
-<<<<<<< Updated upstream
-    interaction_preferences: ["先轻一点问我怎么了", "先陪我聊两句，不要连续追问", "先给我一点空间，等我愿意再说"],
-    comfort_preferences: ["先安静陪着我就好", "先共情，再给一点建议", "先让我把情绪说出来"],
-    decision_style: ["我一般会很快拍板", "我会先想一会儿再决定", "小事快，大事会纠结"],
-    stress_response: ["我更容易先自己扛着", "我会想找人说一说", "一开始会沉默，过会儿才愿意聊"],
-    avoid_patterns: ["别催我，也别逼我马上表态", "不要说教或者灌鸡汤", "别一下子追问太多细节"],
-  };
-  if (byFocus[focusKey]) {
-    return byFocus[focusKey];
-  }
-  if (lowered.includes("怎么开口") || prompt.includes("怎么开口")) {
-    return ["先轻一点问我还好吗", "先别追问细节，给我一点空间", "先说你在，我想说时再说"];
-  }
-  if (lowered.includes("更希望") || prompt.includes("更希望")) {
-    return ["我更偏第一种", "我更偏第二种", "要看我当时状态"];
-  }
-  return ["更偏第一种", "更偏第二种", "得看具体情况"];
-=======
     interaction_preferences: ["先轻一点问我怎么了", "先陪我聊两句，不要上来就追问", "先给我一点空间，等我愿意再说"],
     comfort_preferences: ["先安静陪着我就好", "先共情，再给一点明确建议", "先帮我把情绪说出来，再慢慢理清"],
     decision_style: ["我一般会很快拍板", "我会先想一会儿，再决定", "看事情大小，小事快，大事会纠结"],
@@ -184,7 +132,6 @@ const appendDialogueTurn = (
   }
   nextTurns.push({ role, text: clean, timestamp_ms: timestampMs });
   return nextTurns;
->>>>>>> Stashed changes
 };
 
 const emptyAssessment = (): ActivationAssessmentState => ({
@@ -282,10 +229,7 @@ export function ActivationGate({ onActivated }: ActivationGateProps) {
   const [desktopVoiceBusy, setDesktopVoiceBusy] = useState(false);
   const [desktopVoiceRecording, setDesktopVoiceRecording] = useState(false);
   const [finishing, setFinishing] = useState(false);
-<<<<<<< Updated upstream
-=======
   const [historyExpanded, setHistoryExpanded] = useState(false);
->>>>>>> Stashed changes
   const [pendingTurn, setPendingTurn] = useState<PendingAssessmentTurn | null>(null);
   const [lastSubmitDurationMs, setLastSubmitDurationMs] = useState<number | null>(null);
   const [error, setError] = useState("");
@@ -300,7 +244,6 @@ export function ActivationGate({ onActivated }: ActivationGateProps) {
   const [desktopVoiceStatus, setDesktopVoiceStatus] = useState<DesktopVoiceStatus>(emptyDesktopVoice);
   const [assessment, setAssessment] = useState<ActivationAssessmentState>(emptyAssessment);
   const recorderRef = useRef<{ stop: () => Promise<Blob> } | null>(null);
-<<<<<<< Updated upstream
   const questionRecoveryRef = useRef(false);
   const hydratedDraftRef = useRef(false);
   const hydratedQuestionIdRef = useRef("");
@@ -316,11 +259,9 @@ export function ActivationGate({ onActivated }: ActivationGateProps) {
       return normalized;
     });
   };
-=======
   const dialogueViewportRef = useRef<HTMLDivElement | null>(null);
   const stateSyncSeqRef = useRef(0);
   const pauseStateSyncRef = useRef(false);
->>>>>>> Stashed changes
 
   const dialogue = useMemo(
     () => (assessment.dialogue_turns || []).filter((item) => String(item.text || "").trim()),
@@ -329,13 +270,6 @@ export function ActivationGate({ onActivated }: ActivationGateProps) {
 
   const currentQuestion = String(assessment.latest_question || "").trim();
   const currentQuestionId = String(assessment.last_question_id || "").trim();
-<<<<<<< Updated upstream
-  const canFinish = identityReady && profileReady;
-  const canSubmitTurn = Boolean(runtime.ai_ready && !busy && !startingQuestion && !pendingTurn && answerDraft.trim() && currentQuestion);
-  const quickOptions = useMemo(
-    () => (pendingTurn ? [] : suggestedAnswersForQuestion(assessment.current_focus, currentQuestion)),
-    [assessment.current_focus, currentQuestion, pendingTurn]
-=======
   const stateSyncPaused = busy || finishing || desktopVoiceBusy || desktopVoiceRecording || Boolean(pendingTurn);
   const canFinish = identityReady && profileReady;
   const canSubmitTurn = runtime.ai_ready && !busy && !pendingTurn && Boolean(answerDraft.trim()) && Boolean(currentQuestion);
@@ -371,7 +305,6 @@ export function ActivationGate({ onActivated }: ActivationGateProps) {
   const quickOptions = useMemo(
     () => (pendingTurn ? [] : suggestedAnswersForQuestion(assessment.current_focus, currentQuestion)),
     [pendingTurn, assessment.current_focus, currentQuestion]
->>>>>>> Stashed changes
   );
   const summaryCards = [
     { label: "互动偏好", value: assessment.interaction_preferences.join("、") },
@@ -615,22 +548,14 @@ export function ActivationGate({ onActivated }: ActivationGateProps) {
   useEffect(() => {
     let cancelled = false;
     const timer = window.setInterval(() => {
-<<<<<<< Updated upstream
-      if (cancelled) return;
-      if (busy || startingQuestion || questionRecoveryRef.current) return;
-=======
       if (cancelled || pauseStateSyncRef.current) return;
->>>>>>> Stashed changes
+      if (busy || startingQuestion || questionRecoveryRef.current) return;
       void applyState().catch((err) => {
         if (cancelled) return;
         const normalized = normalizeUiError(err);
         if (normalized) setError(normalized);
       });
-<<<<<<< Updated upstream
     }, 1800);
-=======
-    }, 5000);
->>>>>>> Stashed changes
     return () => {
       cancelled = true;
       window.clearInterval(timer);
@@ -735,61 +660,33 @@ export function ActivationGate({ onActivated }: ActivationGateProps) {
   const handleSubmitTurn = async () => {
     const answer = answerDraft.trim();
     if (!answer) {
-      setError("请先输入这一轮回答。");
+      setError("Please enter an answer for this turn.");
       return;
     }
     if (!currentQuestion) {
-<<<<<<< Updated upstream
-      setError("请先等当前问题加载出来，再提交回答。");
+      setError("Please wait for the current question to load.");
       return;
     }
     if (busy || startingQuestion || pendingTurn) return;
 
     const clientTurnId = createClientTurnId();
     const submittedAtMs = Date.now();
-    const pendingPayload: PendingAssessmentTurn = {
-      clientTurnId,
-      questionId: currentQuestionId || clientTurnId,
-      question: currentQuestion,
-      answer,
-      submittedAtMs,
-    };
 
-    setBusy(true);
-    setError("");
-    setSuccess("");
-    setPendingTurn(pendingPayload);
-=======
-      setError("先等当前问题加载出来，再提交这一轮回答。");
-      return;
-    }
-    if (busy || pendingTurn) return;
-    const clientTurnId = createClientTurnId();
-    const submittedAtMs = Date.now();
-    const requestPayload = {
-      answer,
-      transcript: answer,
-      surface: "desktop" as const,
-      voice_mode: "text" as const,
-      client_turn_id: clientTurnId,
-    };
     setBusy(true);
     setError("");
     setSuccess("");
     setPendingTurn({
       clientTurnId,
-      question: currentQuestion,
       questionId: currentQuestionId || clientTurnId,
+      question: currentQuestion,
       answer,
       submittedAtMs,
     });
->>>>>>> Stashed changes
     setAnswerDraft("");
     removeLocalJson(ASSESSMENT_DRAFT_STORAGE_KEY);
+
     try {
       const startedAt = performance.now();
-      let result;
-<<<<<<< Updated upstream
       const submitCurrentTurn = () =>
         submitAssessmentTurn({
           answer,
@@ -798,10 +695,8 @@ export function ActivationGate({ onActivated }: ActivationGateProps) {
           voice_mode: "text",
           client_turn_id: clientTurnId,
         });
-      const startedAt = performance.now();
-=======
-      const submitCurrentTurn = () => submitAssessmentTurn(requestPayload);
->>>>>>> Stashed changes
+
+      let result: ActivationAssessmentState;
       try {
         result = await submitCurrentTurn();
       } catch (err) {
@@ -811,12 +706,8 @@ export function ActivationGate({ onActivated }: ActivationGateProps) {
           setAssessment({ ...emptyAssessment(), ...restarted });
           result = await submitCurrentTurn();
         } else {
-          result = await submitCurrentTurn();
+          throw err;
         }
-<<<<<<< Updated upstream
-        const restarted = await startAssessment({ surface: "desktop", voice_mode: "text", reset: false });
-        setAssessment({ ...emptyAssessment(), ...restarted });
-        result = await submitCurrentTurn();
       }
 
       const elapsedMs = Math.max(0, performance.now() - startedAt);
@@ -828,40 +719,24 @@ export function ActivationGate({ onActivated }: ActivationGateProps) {
         removeLocalJson(ASSESSMENT_DRAFT_STORAGE_KEY);
       }
 
-=======
-      }
-      const elapsedMs = Math.max(0, performance.now() - startedAt);
-      setLastSubmitDurationMs(elapsedMs);
-      setAssessment({ ...emptyAssessment(), ...result });
->>>>>>> Stashed changes
       if (result.blocking_reason) {
         setError(result.blocking_reason);
       } else if (!answerRecordedInState(result, answer)) {
-        setSuccess("回答已经发出，正在同步到正式建档记录...");
+        setSuccess("Answer submitted. Syncing the latest assessment state...");
         void applyState({ force: true }).catch(() => {});
       } else if (result.just_completed || result.status === "completed" || result.assessment_ready) {
         setProfileReady(true);
-<<<<<<< Updated upstream
         setActiveStep(3);
-        setSuccess("正式建档已完成，偏好与反应画像已写入本地长期记忆。");
-        await applyState();
-      } else if (result.question_changed && String(result.latest_question || "").trim()) {
-        setSuccess(
-          `这一轮回答已记入正式建档。${elapsedMs >= 1000 ? ` 本轮耗时 ${(elapsedMs / 1000).toFixed(1)} 秒。` : ""}`
-        );
-      } else if (answerRecordedInState(result, answer)) {
-        setSuccess(`这一轮回答已记入正式建档。${elapsedMs >= 1000 ? ` 本轮耗时 ${(elapsedMs / 1000).toFixed(1)} 秒。` : ""}`);
-      } else {
-        setSuccess("这一轮回答已经提交成功，记录正在刷新。");
-        void applyState().catch(() => {});
-=======
-        setPendingTurn(null);
-        setSuccess("正式建档已完成，偏好与反应画像已写入本地长期记忆。");
+        setSuccess("Assessment completed and saved.");
         await applyState({ force: true });
+      } else if (result.question_changed && String(result.latest_question || "").trim()) {
+        setSuccess(`Saved this turn.${elapsedMs >= 1000 ? ` Took ${(elapsedMs / 1000).toFixed(1)}s.` : ""}`);
+        await applyState({ force: true });
+      } else if (answerRecordedInState(result, answer)) {
+        setSuccess(`Saved this turn.${elapsedMs >= 1000 ? ` Took ${(elapsedMs / 1000).toFixed(1)}s.` : ""}`);
       } else {
-        setPendingTurn(null);
-        setSuccess(`这一轮回答已计入正式建档。${elapsedMs >= 1000 ? ` 本轮耗时 ${(elapsedMs / 1000).toFixed(1)} 秒。` : ""}`);
->>>>>>> Stashed changes
+        setSuccess("Answer submitted successfully.");
+        void applyState({ force: true }).catch(() => {});
       }
     } catch (err) {
       setPendingTurn(null);
@@ -930,17 +805,6 @@ export function ActivationGate({ onActivated }: ActivationGateProps) {
     } finally {
       setDesktopVoiceBusy(false);
     }
-  };
-
-  const handlePickQuickOption = (option: string) => {
-    const clean = String(option || "").trim();
-    if (!clean) return;
-    setAnswerDraft((current) => {
-      const existing = String(current || "").trim();
-      if (!existing) return clean;
-      if (existing.includes(clean)) return existing;
-      return `${existing}；${clean}`;
-    });
   };
 
   const handleFinishActivation = async () => {
@@ -1053,13 +917,8 @@ export function ActivationGate({ onActivated }: ActivationGateProps) {
           </section>
         ) : null}
 
-<<<<<<< Updated upstream
         {activeStep === 1 ? (
           <section className="mx-auto w-full max-w-[760px] rounded-[32px] bg-[linear-gradient(180deg,rgba(24,21,35,0.98),rgba(18,16,28,0.96))] p-7 shadow-[0_18px_56px_rgba(5,5,12,0.24),inset_0_0_0_1px_rgba(167,139,250,0.1),inset_0_1px_0_rgba(255,255,255,0.025)]">
-=======
-        <div className="grid gap-8 xl:grid-cols-[0.85fr_1.35fr_0.8fr]">
-          <section className="self-start rounded-[32px] border border-violet-500/35 bg-[#161422] p-7 xl:sticky xl:top-6">
->>>>>>> Stashed changes
             <div className="mb-6 flex items-center gap-3 text-[18px] font-bold">
               <UserRound className="h-5 w-5 text-fuchsia-300" />
               1. 名字确认
@@ -1116,24 +975,16 @@ export function ActivationGate({ onActivated }: ActivationGateProps) {
               </div>
             </div>
 
-<<<<<<< Updated upstream
             <div className="rounded-[24px] border border-cyan-400/20 bg-cyan-500/10 p-5 text-cyan-50">
               <div className="flex flex-wrap items-center justify-between gap-3">
                 <div className="font-semibold">当前建档状态</div>
                 <div className="text-sm text-cyan-100/80">一问一答，慢一点也不用重复提交</div>
-=======
-            <div className="rounded-[24px] border border-cyan-400/20 bg-cyan-500/10 p-5 text-[15px] leading-8 text-cyan-50">
-              <div className="font-semibold">当前建档状态</div>
-              <div className="mt-2">
-                机器人会像正常聊天一样一次只问一个问题。你提交后会先把这轮回答保留在本地，再去分析并生成下一题，避免等待时像“没提交上去”。
->>>>>>> Stashed changes
               </div>
               <div className="mt-3 text-[15px] leading-7 text-cyan-50/90">
                 先看当前题，按你平时最自然的反应回答就行。提交后系统会继续分析，再决定下一题。
               </div>
               <div className="mt-4 flex flex-wrap gap-3 text-sm">
                 <span className="rounded-full border border-white/30 px-4 py-1">当前评分：{assessment.scoring_source}</span>
-<<<<<<< Updated upstream
                 <span className="rounded-full border border-white/30 px-4 py-1">
                   当前缺口：{assessment.current_focus || "等待判断"}
                 </span>
@@ -1284,144 +1135,6 @@ export function ActivationGate({ onActivated }: ActivationGateProps) {
                   </div>
                 </div>
               </details>
-=======
-                <span className="rounded-full border border-white/30 px-4 py-1">当前缺口：{assessment.current_focus || "等待判断"}</span>
-                <span className="rounded-full border border-white/30 px-4 py-1">有效回答：{assessment.conversation_count}</span>
-                {lastSubmitDurationMs ? (
-                  <span className="rounded-full border border-white/30 px-4 py-1">上一轮耗时：{(lastSubmitDurationMs / 1000).toFixed(1)}s</span>
-                ) : null}
-              </div>
-            </div>
-
-            <div className="mt-6 rounded-[28px] border border-fuchsia-500/20 bg-[#1b1730] p-5">
-              <div className="flex flex-wrap items-center justify-between gap-3">
-                <div>
-                  <div className="text-sm font-semibold uppercase tracking-[0.2em] text-fuchsia-200/80">当前正在问</div>
-                  <div className="mt-3 text-[22px] font-bold leading-10 text-white">{activeQuestionText}</div>
-                </div>
-                {pendingTurn ? (
-                  <div className="inline-flex items-center gap-2 rounded-full border border-fuchsia-300/30 bg-fuchsia-400/10 px-4 py-2 text-sm text-fuchsia-100">
-                    <LoaderCircle className="h-4 w-4 animate-spin" />
-                    正在生成下一题
-                  </div>
-                ) : null}
-              </div>
-              <div className="mt-3 text-[14px] leading-7 text-slate-300">{activeQuestionHint}</div>
-              {quickOptions.length > 0 ? (
-                <div className="mt-4">
-                  <div className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-400">可以直接点一个再改</div>
-                  <div className="mt-3 flex flex-wrap gap-3">
-                    {quickOptions.map((option) => (
-                      <button
-                        key={option}
-                        type="button"
-                        onClick={() => handlePickQuickOption(option)}
-                        disabled={busy || Boolean(pendingTurn)}
-                        className="rounded-full border border-white/15 bg-white/5 px-4 py-2 text-sm text-slate-100 transition hover:border-fuchsia-300/40 hover:bg-fuchsia-400/10 disabled:cursor-not-allowed disabled:opacity-50"
-                      >
-                        {option}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-              ) : null}
-            </div>
-
-            <div className="mt-6 rounded-[28px] border border-white/10 bg-white/5 p-5">
-              <div className="mb-3 flex items-center justify-between gap-3">
-                <div className="text-sm font-semibold text-slate-300">这一轮回答</div>
-                <div className="text-sm text-slate-500">{busy ? "提交后正在分析" : "像平时聊天一样回答就行"}</div>
-              </div>
-              <textarea
-                value={answerDraft}
-                onChange={(event) => setAnswerDraft(event.target.value)}
-                rows={4}
-                placeholder="直接像聊天一样回答这一题，越贴近日常反应越好。"
-                disabled={!runtime.ai_ready || busy || Boolean(pendingTurn)}
-                className="w-full resize-none bg-transparent text-[18px] leading-8 text-white outline-none placeholder:text-slate-500 disabled:cursor-not-allowed disabled:opacity-60"
-              />
-            </div>
-
-            <div className="mt-5 flex flex-wrap gap-4">
-              <button
-                type="button"
-                onClick={handleSubmitTurn}
-                disabled={!canSubmitTurn}
-                className="rounded-[22px] bg-white px-6 py-4 text-[18px] font-bold text-slate-950 transition enabled:hover:bg-slate-200 disabled:cursor-not-allowed disabled:opacity-50"
-              >
-                {busy ? "正在提交并分析..." : "提交这一轮回答"}
-              </button>
-              <button
-                type="button"
-                onClick={handleDesktopVoiceToggle}
-                disabled={desktopVoiceBusy || Boolean(pendingTurn)}
-                className="rounded-[22px] border border-cyan-400/35 bg-cyan-500/10 px-6 py-4 text-[17px] font-semibold text-cyan-100 transition enabled:hover:bg-cyan-500/15 disabled:cursor-not-allowed disabled:opacity-50"
-              >
-                {desktopVoiceRecording ? (
-                  <span className="inline-flex items-center gap-2">
-                    <PauseCircle className="h-5 w-5" />
-                    停止电脑麦克风录音
-                  </span>
-                ) : (
-                  <span className="inline-flex items-center gap-2">
-                    <Mic className="h-5 w-5" />
-                    用电脑麦克风回答
-                  </span>
-                )}
-              </button>
-            </div>
-
-            {pendingTurn ? (
-              <div className="mt-4 rounded-[20px] border border-cyan-400/20 bg-cyan-500/10 px-4 py-3 text-sm leading-7 text-cyan-50">
-                <span className="font-semibold">已发送的回答：</span>
-                {pendingTurn.answer}
-              </div>
-            ) : null}
-
-            {hasHistory ? (
-              <div className="mt-5 overflow-hidden rounded-[24px] border border-white/10 bg-[#101321]">
-                <button
-                  type="button"
-                  onClick={() => setHistoryExpanded((current) => !current)}
-                  className="flex w-full items-center justify-between px-5 py-4 text-left transition hover:bg-white/5"
-                >
-                  <div>
-                    <div className="text-sm font-semibold text-slate-200">查看之前的建档问答</div>
-                    <div className="mt-1 text-xs text-slate-400">{dialogueItems.length} 条记录，默认收起，避免打断当前回答</div>
-                  </div>
-                  <div className="inline-flex items-center gap-2 text-sm text-slate-300">
-                    <span>{historyExpanded ? "收起" : "展开"}</span>
-                    {historyExpanded ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
-                  </div>
-                </button>
-
-                {historyExpanded ? (
-                  <div className="border-t border-white/10">
-                    <div ref={dialogueViewportRef} className="max-h-[420px] space-y-4 overflow-y-auto px-5 py-5">
-                      {dialogueItems.map((item) => (
-                        <div key={item.key} className={`flex ${item.role === "assistant" ? "justify-start" : "justify-end"}`}>
-                          <div
-                            className={`max-w-[90%] rounded-[24px] border px-5 py-4 shadow-[0_18px_50px_rgba(0,0,0,0.2)] ${
-                              item.role === "assistant"
-                                ? item.loading
-                                  ? "border-fuchsia-400/25 bg-fuchsia-500/10"
-                                  : "border-violet-500/30 bg-violet-500/10"
-                                : "border-cyan-500/30 bg-cyan-500/12"
-                            }`}
-                          >
-                            <div className="flex items-center gap-2 text-sm font-semibold text-slate-300">
-                              <span>{item.role === "assistant" ? "机器人提问" : "你的回答"}</span>
-                              {item.pending ? <span className="rounded-full border border-white/15 px-2 py-0.5 text-[11px] text-slate-300">处理中</span> : null}
-                            </div>
-                            <div className={`mt-2 text-[18px] leading-9 text-white ${item.loading ? "animate-pulse text-slate-200" : ""}`}>{item.text}</div>
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                ) : null}
-              </div>
->>>>>>> Stashed changes
             ) : null}
           </section>
         ) : null}
@@ -1455,21 +1168,13 @@ export function ActivationGate({ onActivated }: ActivationGateProps) {
             <div className="mt-6 grid gap-4">
               {summaryCards.length > 0 ? (
                 summaryCards.map((item) => (
-<<<<<<< Updated upstream
                   <div key={item.label} className="rounded-[24px] border border-white/6 bg-white/[0.035] p-5 shadow-[inset_0_1px_0_rgba(255,255,255,0.025)]">
-=======
-                  <div key={item.label} className="rounded-[22px] border border-white/10 bg-[#141827] p-5">
->>>>>>> Stashed changes
                     <div className="text-sm font-semibold text-slate-300">{item.label}</div>
                     <div className="mt-2 text-[15px] leading-7 text-white">{item.value}</div>
                   </div>
                 ))
               ) : (
-<<<<<<< Updated upstream
                 <div className="rounded-[24px] border border-white/6 bg-white/[0.035] p-5 text-[16px] leading-8 text-slate-400 shadow-[inset_0_1px_0_rgba(255,255,255,0.025)]">
-=======
-                <div className="rounded-[22px] border border-white/10 bg-[#141827] p-5 text-[16px] leading-8 text-slate-400">
->>>>>>> Stashed changes
                   这里会显示 AI 压缩后的长期陪伴画像，而不是八功能分数表。
                 </div>
               )}
@@ -1480,3 +1185,4 @@ export function ActivationGate({ onActivated }: ActivationGateProps) {
     </div>
   );
 }
+

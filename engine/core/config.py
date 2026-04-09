@@ -590,6 +590,23 @@ class PolicyConfig:
             "cooldown_sec": 5.0,
         }
     )
+    emotion_curve_shift: Dict[str, Any] = field(
+        default_factory=lambda: {
+            "enabled": True,
+            "window_sec": 120,
+            "min_span_sec": 18,
+            "min_points": 8,
+            "baseline_points": 6,
+            "recent_points": 4,
+            "min_current_score": 0.46,
+            "delta_thr": 0.14,
+            "jump_thr": 0.18,
+            "volatility_thr": 0.045,
+            "negative_expr_min_confidence": 0.48,
+            "negative_ids": [3, 4, 5, 6, 7],
+            "care_severity_thr": 0.8,
+        }
+    )
 
     @classmethod
     def from_dict(cls, data: Optional[Dict[str, Any]]) -> "PolicyConfig":
@@ -599,6 +616,7 @@ class PolicyConfig:
         peak_to_silence = data.get("peak_to_silence") or {}
         expression_distress = data.get("expression_distress") or {}
         expression_non_neutral_trigger = data.get("expression_non_neutral_trigger") or {}
+        emotion_curve_shift = data.get("emotion_curve_shift") or {}
         return cls(
             scene=str(data.get("scene", "desk")),
             history_window_sec=int(data.get("history_window_sec", 1200)),
@@ -612,6 +630,7 @@ class PolicyConfig:
                 **cls().expression_non_neutral_trigger,
                 **expression_non_neutral_trigger,
             },
+            emotion_curve_shift={**cls().emotion_curve_shift, **emotion_curve_shift},
         )
 
 

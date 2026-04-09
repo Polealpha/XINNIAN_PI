@@ -5,6 +5,7 @@ but random access is not allowed."""
 
 # based on Andrew Kuchling's minigzip.py distributed with the zlib module
 
+import _compression
 import builtins
 import io
 import os
@@ -13,14 +14,12 @@ import sys
 import time
 import weakref
 import zlib
-from compression._common import _streams
 
 __all__ = ["BadGzipFile", "GzipFile", "open", "compress", "decompress"]
 
 FTEXT, FHCRC, FEXTRA, FNAME, FCOMMENT = 1, 2, 4, 8, 16
 
-READ = 'rb'
-WRITE = 'wb'
+READ, WRITE = 1, 2
 
 _COMPRESS_LEVEL_FAST = 1
 _COMPRESS_LEVEL_TRADEOFF = 6
@@ -144,7 +143,7 @@ class _WriteBufferStream(io.RawIOBase):
         return True
 
 
-class GzipFile(_streams.BaseStream):
+class GzipFile(_compression.BaseStream):
     """The GzipFile class simulates most of the methods of a file object with
     the exception of the truncate() method.
 
@@ -186,17 +185,11 @@ class GzipFile(_streams.BaseStream):
         and 9 is slowest and produces the most compression. 0 is no compression
         at all. The default is 9.
 
-        The optional mtime argument is the timestamp requested by gzip. The time
-        is in Unix format, i.e., seconds since 00:00:00 UTC, January 1, 1970.
-        If mtime is omitted or None, the current time is used. Use mtime = 0
-        to generate a compressed stream that does not depend on creation time.
+        The mtime argument is an optional numeric timestamp to be written
+        to the last modification time field in the stream when compressing.
+        If omitted or None, the current time is used.
 
         """
-
-        # Ensure attributes exist at __del__
-        self.mode = None
-        self.fileobj = None
-        self._buffer = None
 
         if mode and ('t' in mode or 'U' in mode):
             raise ValueError("Invalid mode: {!r}".format(mode))
@@ -337,15 +330,11 @@ class GzipFile(_streams.BaseStream):
 
         return length
 
-    def _check_read(self, caller):
-        if self.mode != READ:
-            import errno
-            msg = f"{caller}() on write-only GzipFile object"
-            raise OSError(errno.EBADF, msg)
-
     def read(self, size=-1):
         self._check_not_closed()
-        self._check_read("read")
+        if self.mode != READ:
+            import errno
+            raise OSError(errno.EBADF, "read() on write-only GzipFile object")
         return self._buffer.read(size)
 
     def read1(self, size=-1):
@@ -353,25 +342,19 @@ class GzipFile(_streams.BaseStream):
 
         Reads up to a buffer's worth of data if size is negative."""
         self._check_not_closed()
-        self._check_read("read1")
+        if self.mode != READ:
+            import errno
+            raise OSError(errno.EBADF, "read1() on write-only GzipFile object")
 
         if size < 0:
             size = io.DEFAULT_BUFFER_SIZE
         return self._buffer.read1(size)
 
-    def readinto(self, b):
-        self._check_not_closed()
-        self._check_read("readinto")
-        return self._buffer.readinto(b)
-
-    def readinto1(self, b):
-        self._check_not_closed()
-        self._check_read("readinto1")
-        return self._buffer.readinto1(b)
-
     def peek(self, n):
         self._check_not_closed()
-        self._check_read("peek")
+        if self.mode != READ:
+            import errno
+            raise OSError(errno.EBADF, "peek() on write-only GzipFile object")
         return self._buffer.peek(n)
 
     @property
@@ -381,8 +364,6 @@ class GzipFile(_streams.BaseStream):
     def close(self):
         fileobj = self.fileobj
         if fileobj is None:
-            return
-        if self._buffer is None or self._buffer.closed:
             return
         try:
             if self.mode == WRITE:
@@ -462,13 +443,6 @@ class GzipFile(_streams.BaseStream):
         self._check_not_closed()
         return self._buffer.readline(size)
 
-    def __del__(self):
-        if self.mode == WRITE and not self.closed:
-            import warnings
-            warnings.warn("unclosed GzipFile",
-                          ResourceWarning, source=self, stacklevel=2)
-
-        super().__del__()
 
 def _read_exact(fp, n):
     '''Read exactly *n* bytes from `fp`
@@ -523,7 +497,7 @@ def _read_gzip_header(fp):
     return last_mtime
 
 
-class _GzipReader(_streams.DecompressReader):
+class _GzipReader(_compression.DecompressReader):
     def __init__(self, fp):
         super().__init__(_PaddedFile(fp), zlib._ZlibDecompressor,
                          wbits=-zlib.MAX_WBITS)
@@ -621,21 +595,43 @@ class _GzipReader(_streams.DecompressReader):
         self._new_member = True
 
 
-def compress(data, compresslevel=_COMPRESS_LEVEL_BEST, *, mtime=0):
+def _create_simple_gzip_header(compresslevel: int,
+                               mtime = None) -> bytes:
+    """
+    Write a simple gzip header with no extra fields.
+    :param compresslevel: Compresslevel used to determine the xfl bytes.
+    :param mtime: The mtime (must support conversion to a 32-bit integer).
+    :return: A bytes object representing the gzip header.
+    """
+    if mtime is None:
+        mtime = time.time()
+    if compresslevel == _COMPRESS_LEVEL_BEST:
+        xfl = 2
+    elif compresslevel == _COMPRESS_LEVEL_FAST:
+        xfl = 4
+    else:
+        xfl = 0
+    # Pack ID1 and ID2 magic bytes, method (8=deflate), header flags (no extra
+    # fields added to header), mtime, xfl and os (255 for unknown OS).
+    return struct.pack("<BBBBLBB", 0x1f, 0x8b, 8, 0, int(mtime), xfl, 255)
+
+
+def compress(data, compresslevel=_COMPRESS_LEVEL_BEST, *, mtime=None):
     """Compress data in one shot and return the compressed string.
 
     compresslevel sets the compression level in range of 0-9.
-    mtime can be used to set the modification time.
-    The modification time is set to 0 by default, for reproducibility.
+    mtime can be used to set the modification time. The modification time is
+    set to the current time by default.
     """
-    # Wbits=31 automatically includes a gzip header and trailer.
-    gzip_data = zlib.compress(data, level=compresslevel, wbits=31)
-    if mtime is None:
-        mtime = time.time()
-    # Reuse gzip header created by zlib, replace mtime and OS byte for
-    # consistency.
-    header = struct.pack("<4sLBB", gzip_data, int(mtime), gzip_data[8], 255)
-    return header + gzip_data[10:]
+    if mtime == 0:
+        # Use zlib as it creates the header with 0 mtime by default.
+        # This is faster and with less overhead.
+        return zlib.compress(data, level=compresslevel, wbits=31)
+    header = _create_simple_gzip_header(compresslevel, mtime)
+    trailer = struct.pack("<LL", zlib.crc32(data), (len(data) & 0xffffffff))
+    # Wbits=-15 creates a raw deflate block.
+    return (header + zlib.compress(data, level=compresslevel, wbits=-15) +
+            trailer)
 
 
 def decompress(data):
@@ -667,9 +663,7 @@ def main():
     from argparse import ArgumentParser
     parser = ArgumentParser(description=
         "A simple command line interface for the gzip module: act like gzip, "
-        "but do not delete the input file.",
-        color=True,
-    )
+        "but do not delete the input file.")
     group = parser.add_mutually_exclusive_group()
     group.add_argument('--fast', action='store_true', help='compress faster')
     group.add_argument('--best', action='store_true', help='compress better')

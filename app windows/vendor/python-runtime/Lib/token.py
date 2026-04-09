@@ -60,21 +60,20 @@ ELLIPSIS = 52
 COLONEQUAL = 53
 EXCLAMATION = 54
 OP = 55
-TYPE_IGNORE = 56
-TYPE_COMMENT = 57
-SOFT_KEYWORD = 58
-FSTRING_START = 59
-FSTRING_MIDDLE = 60
-FSTRING_END = 61
-TSTRING_START = 62
-TSTRING_MIDDLE = 63
-TSTRING_END = 64
-COMMENT = 65
-NL = 66
+AWAIT = 56
+ASYNC = 57
+TYPE_IGNORE = 58
+TYPE_COMMENT = 59
+SOFT_KEYWORD = 60
+FSTRING_START = 61
+FSTRING_MIDDLE = 62
+FSTRING_END = 63
+COMMENT = 64
+NL = 65
 # These aren't used by the C tokenizer but are needed for tokenize.py
-ERRORTOKEN = 67
-ENCODING = 68
-N_TOKENS = 69
+ERRORTOKEN = 66
+ENCODING = 67
+N_TOKENS = 68
 # Special definitions for cooperation with parser
 NT_OFFSET = 256
 
@@ -134,11 +133,11 @@ EXACT_TOKEN_TYPES = {
     '~': TILDE,
 }
 
-def ISTERMINAL(x: int) -> bool:
+def ISTERMINAL(x):
     return x < NT_OFFSET
 
-def ISNONTERMINAL(x: int) -> bool:
+def ISNONTERMINAL(x):
     return x >= NT_OFFSET
 
-def ISEOF(x: int) -> bool:
+def ISEOF(x):
     return x == ENDMARKER

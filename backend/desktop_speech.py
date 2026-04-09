@@ -1,12 +1,17 @@
 from __future__ import annotations
 
-import audioop
+from array import array
 import io
 import re
 import time
 import threading
 import wave
 from typing import Any, Dict, Optional
+
+try:
+    import audioop
+except ModuleNotFoundError:
+    audioop = None
 
 from engine.core.config import AsrConfig
 from engine.nlp.asr_module import AsrModule
@@ -253,20 +258,10 @@ class DesktopSpeechService:
             frame_count = int(wav_file.getnframes() or 0)
             pcm = wav_file.readframes(frame_count)
 
-        if sample_width == 1:
-            pcm = audioop.bias(pcm, 1, -128)
-            pcm = audioop.lin2lin(pcm, 1, 2)
-        elif sample_width == 2:
-            pcm = pcm
-        elif sample_width == 4:
-            pcm = audioop.lin2lin(pcm, 4, 2)
-        else:
-            raise ValueError("unsupported_sample_width")
-
-        if channels > 1:
-            pcm = audioop.tomono(pcm, 2, 0.5, 0.5)
+        pcm = self._convert_sample_width(pcm, sample_width)
+        pcm = self._mix_to_mono(pcm, channels)
         if sample_rate != 16000:
-            pcm, _state = audioop.ratecv(pcm, 2, 1, sample_rate, 16000, None)
+            pcm = self._resample_pcm(pcm, sample_rate, 16000)
             sample_rate = 16000
 
         max_frames = max(1, int(DESKTOP_STT_MAX_SEC) * sample_rate)
@@ -355,6 +350,17 @@ class DesktopSpeechService:
         if not pcm:
             return pcm
         target_peak = max(2048, int(DESKTOP_STT_TARGET_PEAK))
+        if audioop is None:
+            samples = array("h")
+            samples.frombytes(pcm)
+            peak = max((abs(int(v)) for v in samples), default=0)
+            if peak <= 0 or peak >= target_peak:
+                return pcm
+            gain = min(6.0, target_peak / max(1.0, float(peak)))
+            if gain <= 1.05:
+                return pcm
+            scaled = array("h", [max(-32768, min(32767, int(round(v * gain)))) for v in samples])
+            return scaled.tobytes()
         try:
             peak = audioop.max(pcm, 2)
         except Exception:
@@ -370,3 +376,54 @@ class DesktopSpeechService:
             return audioop.mul(pcm, 2, gain)
         except Exception:
             return pcm
+
+    def _convert_sample_width(self, pcm: bytes, sample_width: int) -> bytes:
+        if sample_width == 2:
+            return pcm
+        if audioop is not None:
+            if sample_width == 1:
+                return audioop.lin2lin(audioop.bias(pcm, 1, -128), 1, 2)
+            if sample_width == 4:
+                return audioop.lin2lin(pcm, 4, 2)
+        if sample_width == 1:
+            samples = array("B", pcm)
+            converted = array("h", [((int(v) - 128) << 8) for v in samples])
+            return converted.tobytes()
+        if sample_width == 4:
+            ints = array("i")
+            ints.frombytes(pcm)
+            converted = array("h", [max(-32768, min(32767, int(v / 65536))) for v in ints])
+            return converted.tobytes()
+        raise ValueError("unsupported_sample_width")
+
+    def _mix_to_mono(self, pcm: bytes, channels: int) -> bytes:
+        if channels <= 1:
+            return pcm
+        if audioop is not None:
+            return audioop.tomono(pcm, 2, 0.5, 0.5)
+        samples = array("h")
+        samples.frombytes(pcm)
+        mixed = array("h")
+        for start in range(0, len(samples), channels):
+            frame = samples[start:start + channels]
+            if not frame:
+                continue
+            mixed.append(int(sum(int(v) for v in frame) / len(frame)))
+        return mixed.tobytes()
+
+    def _resample_pcm(self, pcm: bytes, src_rate: int, dst_rate: int) -> bytes:
+        if src_rate <= 0 or dst_rate <= 0 or src_rate == dst_rate:
+            return pcm
+        if audioop is not None:
+            converted, _state = audioop.ratecv(pcm, 2, 1, src_rate, dst_rate, None)
+            return converted
+        samples = array("h")
+        samples.frombytes(pcm)
+        if not samples:
+            return pcm
+        target_len = max(1, int(round(len(samples) * dst_rate / src_rate)))
+        resampled = array("h")
+        for i in range(target_len):
+            src_index = min(len(samples) - 1, int(i * src_rate / dst_rate))
+            resampled.append(int(samples[src_index]))
+        return resampled.tobytes()

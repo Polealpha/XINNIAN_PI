@@ -267,11 +267,7 @@ class Element:
 
         """
         # assert iselement(element)
-        try:
-            self._children.remove(subelement)
-        except ValueError:
-            # to align the error message with the C implementation
-            raise ValueError("Element.remove(x): element not found") from None
+        self._children.remove(subelement)
 
     def find(self, path, namespaces=None):
         """Find first matching element by tag name or path.
@@ -527,9 +523,7 @@ class ElementTree:
 
     """
     def __init__(self, element=None, file=None):
-        if element is not None and not iselement(element):
-            raise TypeError('expected an Element, not %s' %
-                            type(element).__name__)
+        # assert element is None or iselement(element)
         self._root = element # first node
         if file:
             self.parse(file)
@@ -545,9 +539,7 @@ class ElementTree:
         with the given element.  Use with care!
 
         """
-        if not iselement(element):
-            raise TypeError('expected an Element, not %s'
-                            % type(element).__name__)
+        # assert iselement(element)
         self._root = element
 
     def parse(self, source, parser=None):
@@ -713,8 +705,6 @@ class ElementTree:
                                     of start/end tags
 
         """
-        if self._root is None:
-            raise TypeError('ElementTree not initialized')
         if not method:
             method = "xml"
         elif method not in _serialize:
@@ -1258,17 +1248,10 @@ def iterparse(source, events=None, parser=None):
             if close_source:
                 source.close()
 
-    gen = iterator(source)
     class IterParseIterator(collections.abc.Iterator):
-        __next__ = gen.__next__
-        def close(self):
-            if close_source:
-                source.close()
-            gen.close()
+        __next__ = iterator(source).__next__
 
         def __del__(self):
-            # TODO: Emit a ResourceWarning if it was not explicitly closed.
-            # (When the close() method will be supported in all maintained Python versions.)
             if close_source:
                 source.close()
 

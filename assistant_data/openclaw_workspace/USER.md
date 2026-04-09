@@ -1,10 +1,25 @@
 # USER.md
 
-The user is building an integrated product with a desktop app, backend services, and a Raspberry Pi robot.
+- Preferred Name: heavensent
+- User ID: 35
+- Role: owner
+- Relation To Robot: primary_user
+- Timezone: Asia/Shanghai
+- Product: 共感智能机器人
+- Identity Summary: heavensent 是当前机器人的主要使用者，后续服务应以这个身份为准。
+- Canonical Memory File: D:\gyhhh\XINNAN\XINNIAN_PI\assistant_data\openclaw_workspace\assistant_data\users\35\memory.md
 
-Preferences:
+## User Profile Snapshot
+- Status: 正式建档画像
+- Summary: ?????????????????????
+- Interaction Preferences: ???????、????????
+- Decision Style: ??????????
+- Stress Response: ?????????????????
+- Comfort Preferences: ???????、??????
+- Avoid Patterns: ????????、?????????
+- Care Guidance: ?????????????????????????????
 
-- Solve the problem directly.
-- Diagnose root causes instead of hand-waving.
-- Keep the official product path stable even when agent mode is aggressive.
-- Make the robot, desktop controls, activation flow, psychometric assessment, and voice pipeline work as one product.
+## Repo Sync
+- Canonical project root: D:\gyhhh\XINNAN\XINNIAN_PI
+- Canonical workspace memory: D:\gyhhh\XINNAN\XINNIAN_PI\assistant_data\openclaw_workspace\assistant_data\users
+- These files are synced from current product data.

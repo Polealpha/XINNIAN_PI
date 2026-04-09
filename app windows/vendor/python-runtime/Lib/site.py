@@ -73,9 +73,8 @@ import sys
 import os
 import builtins
 import _sitebuiltins
-import _io as io
+import io
 import stat
-import errno
 
 # Prefixes for site-packages; add additional prefixes like /usr/local here
 PREFIXES = [sys.prefix, sys.exec_prefix]
@@ -93,12 +92,6 @@ USER_BASE = None
 def _trace(message):
     if sys.flags.verbose:
         print(message, file=sys.stderr)
-
-
-def _warn(*args, **kwargs):
-    import warnings
-
-    warnings.warn(*args, **kwargs)
 
 
 def makepath(*paths):
@@ -288,18 +281,14 @@ def check_enableusersite():
 #
 # See https://bugs.python.org/issue29585
 
-# Copy of sysconfig._get_implementation()
-def _get_implementation():
-    return 'Python'
-
 # Copy of sysconfig._getuserbase()
 def _getuserbase():
     env_base = os.environ.get("PYTHONUSERBASE", None)
     if env_base:
         return env_base
 
-    # Emscripten, iOS, tvOS, VxWorks, WASI, and watchOS have no home directories
-    if sys.platform in {"emscripten", "ios", "tvos", "vxworks", "wasi", "watchos"}:
+    # Emscripten, VxWorks, and WASI have no home directories
+    if sys.platform in {"emscripten", "vxworks", "wasi"}:
         return None
 
     def joinuser(*args):
@@ -307,7 +296,7 @@ def _getuserbase():
 
     if os.name == "nt":
         base = os.environ.get("APPDATA") or "~"
-        return joinuser(base, _get_implementation())
+        return joinuser(base, "Python")
 
     if sys.platform == "darwin" and sys._framework:
         return joinuser("~", "Library", sys._framework,
@@ -319,21 +308,15 @@ def _getuserbase():
 # Same to sysconfig.get_path('purelib', os.name+'_user')
 def _get_path(userbase):
     version = sys.version_info
-    if hasattr(sys, 'abiflags') and 't' in sys.abiflags:
-        abi_thread = 't'
-    else:
-        abi_thread = ''
 
-    implementation = _get_implementation()
-    implementation_lower = implementation.lower()
     if os.name == 'nt':
         ver_nodot = sys.winver.replace('.', '')
-        return f'{userbase}\\{implementation}{ver_nodot}\\site-packages'
+        return f'{userbase}\\Python{ver_nodot}\\site-packages'
 
     if sys.platform == 'darwin' and sys._framework:
-        return f'{userbase}/lib/{implementation_lower}/site-packages'
+        return f'{userbase}/lib/python/site-packages'
 
-    return f'{userbase}/lib/python{version[0]}.{version[1]}{abi_thread}/site-packages'
+    return f'{userbase}/lib/python{version[0]}.{version[1]}/site-packages'
 
 
 def getuserbase():
@@ -399,12 +382,6 @@ def getsitepackages(prefixes=None):
             continue
         seen.add(prefix)
 
-        implementation = _get_implementation().lower()
-        ver = sys.version_info
-        if hasattr(sys, 'abiflags') and 't' in sys.abiflags:
-            abi_thread = 't'
-        else:
-            abi_thread = ''
         if os.sep == '/':
             libdirs = [sys.platlibdir]
             if sys.platlibdir != "lib":
@@ -412,7 +389,7 @@ def getsitepackages(prefixes=None):
 
             for libdir in libdirs:
                 path = os.path.join(prefix, libdir,
-                                    f"{implementation}{ver[0]}.{ver[1]}{abi_thread}",
+                                    "python%d.%d" % sys.version_info[:2],
                                     "site-packages")
                 sitepackages.append(path)
         else:
@@ -449,9 +426,9 @@ def setcopyright():
     """Set 'copyright' and 'credits' in builtins"""
     builtins.copyright = _sitebuiltins._Printer("copyright", sys.copyright)
     builtins.credits = _sitebuiltins._Printer("credits", """\
-Thanks to CWI, CNRI, BeOpen, Zope Corporation, the Python Software
-Foundation, and a cast of thousands for supporting Python
-development.  See www.python.org for more information.""")
+    Thanks to CWI, CNRI, BeOpen, Zope Corporation, the Python Software
+    Foundation, and a cast of thousands for supporting Python
+    development.  See www.python.org for more information.""")
     files, dirs = [], []
     # Not all modules are required to have a __file__ attribute.  See
     # PEP 420 for more details.
@@ -470,76 +447,27 @@ development.  See www.python.org for more information.""")
 def sethelper():
     builtins.help = _sitebuiltins._Helper()
 
-
-def gethistoryfile():
-    """Check if the PYTHON_HISTORY environment variable is set and define
-    it as the .python_history file.  If PYTHON_HISTORY is not set, use the
-    default .python_history file.
-    """
-    if not sys.flags.ignore_environment:
-        history = os.environ.get("PYTHON_HISTORY")
-        if history:
-            return history
-    return os.path.join(os.path.expanduser('~'),
-        '.python_history')
-
-
 def enablerlcompleter():
     """Enable default readline configuration on interactive prompts, by
     registering a sys.__interactivehook__.
-    """
-    sys.__interactivehook__ = register_readline
-
-
-def register_readline():
-    """Configure readline completion on interactive prompts.
 
     If the readline module can be imported, the hook will set the Tab key
     as completion key and register ~/.python_history as history file.
     This can be overridden in the sitecustomize or usercustomize module,
     or in a PYTHONSTARTUP file.
     """
-    if not sys.flags.ignore_environment:
-        PYTHON_BASIC_REPL = os.getenv("PYTHON_BASIC_REPL")
-    else:
-        PYTHON_BASIC_REPL = False
-
-    import atexit
-
-    try:
+    def register_readline():
+        import atexit
         try:
             import readline
+            import rlcompleter
         except ImportError:
-            readline = None
-        else:
-            import rlcompleter  # noqa: F401
-    except ImportError:
-        return
+            return
 
-    try:
-        if PYTHON_BASIC_REPL:
-            CAN_USE_PYREPL = False
-        else:
-            original_path = sys.path
-            sys.path = [p for p in original_path if p != '']
-            try:
-                import _pyrepl.readline
-                if os.name == "nt":
-                    import _pyrepl.windows_console
-                    console_errors = (_pyrepl.windows_console._error,)
-                else:
-                    import _pyrepl.unix_console
-                    console_errors = _pyrepl.unix_console._error
-                from _pyrepl.main import CAN_USE_PYREPL
-            finally:
-                sys.path = original_path
-    except ImportError:
-        return
-
-    if readline is not None:
         # Reading the initialization (config) file may not be enough to set a
         # completion key, so we set one first and then read the file.
-        if readline.backend == 'editline':
+        readline_doc = getattr(readline, '__doc__', '')
+        if readline_doc is not None and 'libedit' in readline_doc:
             readline.parse_and_bind('bind ^I rl_complete')
         else:
             readline.parse_and_bind('tab: complete')
@@ -553,44 +481,30 @@ def register_readline():
             # want to ignore the exception.
             pass
 
-    if readline is None or readline.get_current_history_length() == 0:
-        # If no history was loaded, default to .python_history,
-        # or PYTHON_HISTORY.
-        # The guard is necessary to avoid doubling history size at
-        # each interpreter exit when readline was already configured
-        # through a PYTHONSTARTUP hook, see:
-        # http://bugs.python.org/issue5845#msg198636
-        history = gethistoryfile()
-
-        if CAN_USE_PYREPL:
-            readline_module = _pyrepl.readline
-            exceptions = (OSError, *console_errors)
-        else:
-            if readline is None:
-                return
-            readline_module = readline
-            exceptions = OSError
-
-        try:
-            readline_module.read_history_file(history)
-        except exceptions:
-            pass
-
-        def write_history():
+        if readline.get_current_history_length() == 0:
+            # If no history was loaded, default to .python_history.
+            # The guard is necessary to avoid doubling history size at
+            # each interpreter exit when readline was already configured
+            # through a PYTHONSTARTUP hook, see:
+            # http://bugs.python.org/issue5845#msg198636
+            history = os.path.join(os.path.expanduser('~'),
+                                   '.python_history')
             try:
-                readline_module.write_history_file(history)
-            except FileNotFoundError, PermissionError:
-                # home directory does not exist or is not writable
-                # https://bugs.python.org/issue19891
-                pass
+                readline.read_history_file(history)
             except OSError:
-                if errno.EROFS:
-                    pass  # gh-128066: read-only file system
-                else:
-                    raise
+                pass
 
-        atexit.register(write_history)
+            def write_history():
+                try:
+                    readline.write_history_file(history)
+                except OSError:
+                    # bpo-19891, bpo-41193: Home directory does not exist
+                    # or is not writable, or the filesystem is read-only.
+                    pass
 
+            atexit.register(write_history)
+
+    sys.__interactivehook__ = register_readline
 
 def venv(known_paths):
     global PREFIXES, ENABLE_USER_SITE
@@ -631,17 +545,17 @@ def venv(known_paths):
                     elif key == 'home':
                         sys._home = value
 
-        if sys.prefix != site_prefix:
-            _warn(f'Unexpected value in sys.prefix, expected {site_prefix}, got {sys.prefix}', RuntimeWarning)
-        if sys.exec_prefix != site_prefix:
-            _warn(f'Unexpected value in sys.exec_prefix, expected {site_prefix}, got {sys.exec_prefix}', RuntimeWarning)
+        sys.prefix = sys.exec_prefix = site_prefix
 
         # Doing this here ensures venv takes precedence over user-site
         addsitepackages(known_paths, [sys.prefix])
 
+        # addsitepackages will process site_prefix again if its in PREFIXES,
+        # but that's ok; known_paths will prevent anything being added twice
         if system_site == "true":
-            PREFIXES += [sys.base_prefix, sys.base_exec_prefix]
+            PREFIXES.insert(0, sys.prefix)
         else:
+            PREFIXES = [sys.prefix]
             ENABLE_USER_SITE = False
 
     return known_paths
@@ -651,7 +565,7 @@ def execsitecustomize():
     """Run custom site specific code, if available."""
     try:
         try:
-            import sitecustomize  # noqa: F401
+            import sitecustomize
         except ImportError as exc:
             if exc.name == 'sitecustomize':
                 pass
@@ -671,7 +585,7 @@ def execusercustomize():
     """Run custom user specific code, if available."""
     try:
         try:
-            import usercustomize  # noqa: F401
+            import usercustomize
         except ImportError as exc:
             if exc.name == 'usercustomize':
                 pass

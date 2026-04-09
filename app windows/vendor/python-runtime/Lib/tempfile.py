@@ -180,7 +180,7 @@ def _candidate_tempdir_list():
 
     return dirlist
 
-def _get_default_tempdir(dirlist=None):
+def _get_default_tempdir():
     """Calculate the default directory to use for temporary files.
     This routine should be called exactly once.
 
@@ -190,8 +190,7 @@ def _get_default_tempdir(dirlist=None):
     service, the name of the test file must be randomized."""
 
     namer = _RandomNameSequence()
-    if dirlist is None:
-        dirlist = _candidate_tempdir_list()
+    dirlist = _candidate_tempdir_list()
 
     for dir in dirlist:
         if dir != _os.curdir:
@@ -274,7 +273,7 @@ def _dont_follow_symlinks(func, path, *args):
     # Pass follow_symlinks=False, unless not supported on this platform.
     if func in _os.supports_follow_symlinks:
         func(path, *args, follow_symlinks=False)
-    elif not _os.path.islink(path):
+    elif _os.name == 'nt' or not _os.path.islink(path):
         func(path, *args)
 
 def _resetperms(path):
@@ -438,19 +437,11 @@ class _TemporaryFileCloser:
     cleanup_called = False
     close_called = False
 
-    def __init__(
-        self,
-        file,
-        name,
-        delete=True,
-        delete_on_close=True,
-        warn_message="Implicitly cleaning up unknown file",
-    ):
+    def __init__(self, file, name, delete=True, delete_on_close=True):
         self.file = file
         self.name = name
         self.delete = delete
         self.delete_on_close = delete_on_close
-        self.warn_message = warn_message
 
     def cleanup(self, windows=(_os.name == 'nt'), unlink=_os.unlink):
         if not self.cleanup_called:
@@ -478,10 +469,7 @@ class _TemporaryFileCloser:
                     self.cleanup()
 
     def __del__(self):
-        close_called = self.close_called
         self.cleanup()
-        if not close_called:
-            _warnings.warn(self.warn_message, ResourceWarning)
 
 
 class _TemporaryFileWrapper:
@@ -495,17 +483,8 @@ class _TemporaryFileWrapper:
     def __init__(self, file, name, delete=True, delete_on_close=True):
         self.file = file
         self.name = name
-        self._closer = _TemporaryFileCloser(
-            file,
-            name,
-            delete,
-            delete_on_close,
-            warn_message=f"Implicitly cleaning up {self!r}",
-        )
-
-    def __repr__(self):
-        file = self.__dict__['file']
-        return f"<{type(self).__name__} {file=}>"
+        self._closer = _TemporaryFileCloser(file, name, delete,
+                                            delete_on_close)
 
     def __getattr__(self, name):
         # Attribute lookups are delegated to the underlying file

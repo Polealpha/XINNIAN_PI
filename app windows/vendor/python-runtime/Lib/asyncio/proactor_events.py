@@ -63,7 +63,7 @@ class _ProactorBasePipeTransport(transports._FlowControlMixin,
         self._called_connection_lost = False
         self._eof_written = False
         if self._server is not None:
-            self._server._attach(self)
+            self._server._attach()
         self._loop.call_soon(self._protocol.connection_made, self)
         if waiter is not None:
             # only wake up the waiter when connection_made() has been called
@@ -167,7 +167,7 @@ class _ProactorBasePipeTransport(transports._FlowControlMixin,
             self._sock = None
             server = self._server
             if server is not None:
-                server._detach(self)
+                server._detach()
                 self._server = None
             self._called_connection_lost = True
 
@@ -460,8 +460,6 @@ class _ProactorWritePipeTransport(_ProactorBaseWritePipeTransport):
 class _ProactorDatagramTransport(_ProactorBasePipeTransport,
                                  transports.DatagramTransport):
     max_size = 256 * 1024
-    _header_size = 8
-
     def __init__(self, loop, sock, protocol, address=None,
                  waiter=None, extra=None):
         self._address = address
@@ -489,6 +487,9 @@ class _ProactorDatagramTransport(_ProactorBasePipeTransport,
             raise TypeError('data argument must be bytes-like object (%r)',
                             type(data))
 
+        if not data:
+            return
+
         if self._address is not None and addr not in (None, self._address):
             raise ValueError(
                 f'Invalid address: must be None or {self._address}')
@@ -501,7 +502,7 @@ class _ProactorDatagramTransport(_ProactorBasePipeTransport,
 
         # Ensure that what we buffer is immutable.
         self._buffer.append((bytes(data), addr))
-        self._buffer_size += len(data) + self._header_size
+        self._buffer_size += len(data)
 
         if self._write_fut is None:
             # No current write operations are active, kick one off
@@ -528,7 +529,7 @@ class _ProactorDatagramTransport(_ProactorBasePipeTransport,
                 return
 
             data, addr = self._buffer.popleft()
-            self._buffer_size -= len(data) + self._header_size
+            self._buffer_size -= len(data)
             if self._address is not None:
                 self._write_fut = self._loop._proactor.send(self._sock,
                                                             data)

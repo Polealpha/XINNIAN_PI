@@ -49,8 +49,7 @@ CATEGORIES = {
     r"\S": (IN, [(CATEGORY, CATEGORY_NOT_SPACE)]),
     r"\w": (IN, [(CATEGORY, CATEGORY_WORD)]),
     r"\W": (IN, [(CATEGORY, CATEGORY_NOT_WORD)]),
-    r"\z": (AT, AT_END_STRING), # end of string
-    r"\Z": (AT, AT_END_STRING), # end of string (obsolete)
+    r"\Z": (AT, AT_END_STRING), # end of string
 }
 
 FLAGS = {
@@ -62,11 +61,12 @@ FLAGS = {
     "x": SRE_FLAG_VERBOSE,
     # extensions
     "a": SRE_FLAG_ASCII,
+    "t": SRE_FLAG_TEMPLATE,
     "u": SRE_FLAG_UNICODE,
 }
 
 TYPE_FLAGS = SRE_FLAG_ASCII | SRE_FLAG_LOCALE | SRE_FLAG_UNICODE
-GLOBAL_FLAGS = SRE_FLAG_DEBUG
+GLOBAL_FLAGS = SRE_FLAG_DEBUG | SRE_FLAG_TEMPLATE
 
 # Maximal value returned by SubPattern.getwidth().
 # Must be larger than MAXREPEAT, MAXCODE and sys.maxsize.
@@ -781,10 +781,8 @@ def _parse(source, state, verbose, nested, first=False):
                                            source.tell() - start)
                     if char == "=":
                         subpatternappend((ASSERT, (dir, p)))
-                    elif p:
-                        subpatternappend((ASSERT_NOT, (dir, p)))
                     else:
-                        subpatternappend((FAILURE, ()))
+                        subpatternappend((ASSERT_NOT, (dir, p)))
                     continue
 
                 elif char == "(":
@@ -807,6 +805,14 @@ def _parse(source, state, verbose, nested, first=False):
                         if condgroup not in state.grouprefpos:
                             state.grouprefpos[condgroup] = (
                                 source.tell() - len(condname) - 1
+                            )
+                        if not (condname.isdecimal() and condname.isascii()):
+                            import warnings
+                            warnings.warn(
+                                "bad character in group name %s at position %d" %
+                                (repr(condname) if source.istext else ascii(condname),
+                                 source.tell() - len(condname) - 1),
+                                DeprecationWarning, stacklevel=nested + 6
                             )
                     state.checklookbehindgroup(condgroup, source)
                     item_yes = _parse(source, state, verbose, nested + 1)
@@ -1031,6 +1037,14 @@ def parse_template(source, pattern):
                     if index >= MAXGROUPS:
                         raise s.error("invalid group reference %d" % index,
                                       len(name) + 1)
+                    if not (name.isdecimal() and name.isascii()):
+                        import warnings
+                        warnings.warn(
+                            "bad character in group name %s at position %d" %
+                            (repr(name) if s.istext else ascii(name),
+                             s.tell() - len(name) - 1),
+                            DeprecationWarning, stacklevel=5
+                        )
                 addgroup(index, len(name) + 1)
             elif c == "0":
                 if s.next in OCTDIGITS:

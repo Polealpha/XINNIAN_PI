@@ -1,4 +1,4 @@
-# Copyright (C) 2001 Python Software Foundation
+# Copyright (C) 2001-2010 Python Software Foundation
 # Author: Barry Warsaw
 # Contact: email-sig@python.org
 
@@ -25,6 +25,8 @@ __all__ = [
 import os
 import re
 import time
+import random
+import socket
 import datetime
 import urllib.parse
 
@@ -33,6 +35,9 @@ from email._parseaddr import AddressList as _AddressList
 from email._parseaddr import mktime_tz
 
 from email._parseaddr import parsedate, parsedate_tz, _parsedate_tz
+
+# Intrapackage imports
+from email.charset import Charset
 
 COMMASPACE = ', '
 EMPTYSTRING = ''
@@ -90,8 +95,6 @@ def formataddr(pair, charset='utf-8'):
             name.encode('ascii')
         except UnicodeEncodeError:
             if isinstance(charset, str):
-                # lazy import to improve module import time
-                from email.charset import Charset
                 charset = Charset(charset)
             encoded_name = charset.header_encode(name)
             return "%s <%s>" % (encoded_name, address)
@@ -294,11 +297,6 @@ def make_msgid(idstring=None, domain=None):
     portion of the message id after the '@'.  It defaults to the locally
     defined hostname.
     """
-    # Lazy imports to speedup module import time
-    # (no other functions in email.utils need these modules)
-    import random
-    import socket
-
     timeval = int(time.time()*100)
     pid = os.getpid()
     randint = random.getrandbits(64)
@@ -417,14 +415,8 @@ def decode_params(params):
         for name, continuations in rfc2231_params.items():
             value = []
             extended = False
-            # Sort by number, treating None as 0 if there is no 0,
-            # and ignore it if there is already a 0.
-            has_zero = any(x[0] == 0 for x in continuations)
-            if has_zero:
-                continuations = [x for x in continuations if x[0] is not None]
-            else:
-                continuations = [(x[0] or 0, x[1], x[2]) for x in continuations]
-            continuations.sort(key=lambda x: x[0])
+            # Sort by number
+            continuations.sort()
             # And now append all values in numerical order, converting
             # %-encodings for the encoded segments.  If any of the
             # continuation names ends in a *, then the entire string, after
@@ -472,15 +464,23 @@ def collapse_rfc2231_value(value, errors='replace',
 # better than not having it.
 #
 
-def localtime(dt=None):
+def localtime(dt=None, isdst=None):
     """Return local time as an aware datetime object.
 
     If called without arguments, return current time.  Otherwise *dt*
     argument should be a datetime instance, and it is converted to the
     local time zone according to the system time zone database.  If *dt* is
     naive (that is, dt.tzinfo is None), it is assumed to be in local time.
+    The isdst parameter is ignored.
 
     """
+    if isdst is not None:
+        import warnings
+        warnings._deprecated(
+            "The 'isdst' parameter to 'localtime'",
+            message='{name} is deprecated and slated for removal in Python {remove}',
+            remove=(3, 14),
+            )
     if dt is None:
         dt = datetime.datetime.now()
     return dt.astimezone()

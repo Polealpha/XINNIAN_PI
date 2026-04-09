@@ -1,7 +1,6 @@
 import cython
 from cython.cimports.cpython import PyBuffer_FillInfo, PyBytes_FromString
-from cython.cimports.libc.stdint import int64_t, uint64_t
-from cython.cimports.libc.string import memcpy, strlen
+from cython.cimports.libc.string import memcpy
 
 
 @cython.cclass
@@ -10,7 +9,7 @@ class SubtitleProxy:
         lib.avsubtitle_free(cython.address(self.struct))
 
 
-_cinit_bypass_sentinel = object()
+_cinit_bypass_sentinel = cython.declare(object, object())
 
 
 @cython.cclass
@@ -48,21 +47,18 @@ class SubtitleSet:
         """
         Create a SubtitleSet for encoding.
 
-        Args:
-            text: The subtitle text in ASS dialogue format
-                  (e.g. b"0,0,Default,,0,0,0,,Hello World")
-            start: Start display time as offset from pts (typically 0)
-            end: End display time as offset from pts (i.e., duration)
-            pts: Presentation timestamp in stream time_base units
-            subtitle_format: Subtitle format (default 1 for text)
+        :param text: The subtitle text in ASS dialogue format
+            (e.g. ``b"0,0,Default,,0,0,0,,Hello World"``)
+        :param start: Start display time as offset from pts (typically 0)
+        :param end: End display time as offset from pts (i.e., duration)
+        :param pts: Presentation timestamp in stream time_base units
+        :param subtitle_format: Subtitle format (default 1 for text)
+        :return: A SubtitleSet ready for encoding
 
-        Note:
+        .. note::
             All timing values should be in stream time_base units.
             For MKV (time_base=1/1000), units are milliseconds.
             For MP4 (time_base=1/1000000), units are microseconds.
-
-        Returns:
-            A SubtitleSet ready for encoding
         """
         subset: SubtitleSet = SubtitleSet(_cinit_bypass_sentinel)
 
@@ -293,7 +289,7 @@ class AssSubtitle(Subtitle):
         Extract the dialogue from the ass format. Strip comments.
         """
         comma_count: cython.short = 0
-        i: uint64_t = 0
+        i: cython.Py_ssize_t = 0
         state: cython.bint = False
         ass_text: bytes = self.ass
         char, next_char = cython.declare(cython.char)

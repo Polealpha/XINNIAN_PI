@@ -581,11 +581,20 @@ const resolvePythonCommand = (runtimeRoot) => {
   if (process.env.EMOTION_BRIDGE_PYTHON) {
     return { command: process.env.EMOTION_BRIDGE_PYTHON, args: [] };
   }
-  const bundledPython = process.platform === "win32"
-    ? path.join(runtimeRoot, "python", "python.exe")
-    : path.join(runtimeRoot, "python", "bin", "python3");
-  if (fs.existsSync(bundledPython)) {
-    return { command: bundledPython, args: [] };
+  const bundledPythonCandidates = process.platform === "win32"
+    ? [
+        path.join(runtimeRoot, "python", "python.exe"),
+        path.join(runtimeRoot, "vendor", "python-runtime", "python.exe"),
+        path.join(runtimeRoot, "app windows", "vendor", "python-runtime", "python.exe"),
+      ]
+    : [
+        path.join(runtimeRoot, "python", "bin", "python3"),
+        path.join(runtimeRoot, "vendor", "python-runtime", "bin", "python3"),
+      ];
+  for (const bundledPython of bundledPythonCandidates) {
+    if (fs.existsSync(bundledPython)) {
+      return { command: bundledPython, args: [] };
+    }
   }
   const venvPython = process.platform === "win32"
     ? path.join(runtimeRoot, ".venv", "Scripts", "python.exe")
@@ -603,6 +612,17 @@ const resolvePythonCommand = (runtimeRoot) => {
     return { command: "python3", args: [] };
   }
   return null;
+};
+
+const buildPythonPath = (runtimeRoot) => {
+  const delimiter = process.platform === "win32" ? ";" : ":";
+  const candidates = [
+    runtimeRoot,
+    path.join(runtimeRoot, "vendor", "python-site-packages"),
+    path.join(runtimeRoot, "app windows", "vendor", "python-site-packages"),
+    process.env.PYTHONPATH || "",
+  ].filter((value, index, list) => value && list.indexOf(value) === index);
+  return candidates.join(delimiter);
 };
 
 const isLocalBackendHealthy = async () => {
@@ -669,7 +689,7 @@ const startLocalBackend = () => {
         ...process.env,
         ...buildOpenClawProxyEnv(),
         ...buildOpenClawProviderEnv(),
-        PYTHONPATH: runtimeRoot,
+        PYTHONPATH: buildPythonPath(runtimeRoot),
         OPENCLAW_WORKSPACE_DIR: workspaceDir,
         OPENCLAW_STATE_DIR: stateDir,
         OPENCLAW_GATEWAY_URL: `ws://127.0.0.1:${LOCAL_OPENCLAW_GATEWAY_PORT}`,

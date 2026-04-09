@@ -73,9 +73,6 @@ from xml.parsers.expat import ParserCreate
 PlistFormat = enum.Enum('PlistFormat', 'FMT_XML FMT_BINARY', module=__name__)
 globals().update(PlistFormat.__members__)
 
-# Data larger than this will be read in chunks, to prevent extreme
-# overallocation.
-_MIN_READ_BUF_SIZE = 1 << 20
 
 class UID:
     def __init__(self, data):
@@ -143,7 +140,7 @@ def _decode_base64(s):
 _dateParser = re.compile(r"(?P<year>\d\d\d\d)(?:-(?P<month>\d\d)(?:-(?P<day>\d\d)(?:T(?P<hour>\d\d)(?::(?P<minute>\d\d)(?::(?P<second>\d\d))?)?)?)?)?Z", re.ASCII)
 
 
-def _date_from_string(s, aware_datetime):
+def _date_from_string(s):
     order = ('year', 'month', 'day', 'hour', 'minute', 'second')
     gd = _dateParser.match(s).groupdict()
     lst = []
@@ -152,14 +149,10 @@ def _date_from_string(s, aware_datetime):
         if val is None:
             break
         lst.append(int(val))
-    if aware_datetime:
-        return datetime.datetime(*lst, tzinfo=datetime.UTC)
     return datetime.datetime(*lst)
 
 
-def _date_to_string(d, aware_datetime):
-    if aware_datetime:
-        d = d.astimezone(datetime.UTC)
+def _date_to_string(d):
     return '%04d-%02d-%02dT%02d:%02d:%02dZ' % (
         d.year, d.month, d.day,
         d.hour, d.minute, d.second
@@ -178,12 +171,11 @@ def _escape(text):
     return text
 
 class _PlistParser:
-    def __init__(self, dict_type, aware_datetime=False):
+    def __init__(self, dict_type):
         self.stack = []
         self.current_key = None
         self.root = None
         self._dict_type = dict_type
-        self._aware_datetime = aware_datetime
 
     def parse(self, fileobj):
         self.parser = ParserCreate()
@@ -285,8 +277,7 @@ class _PlistParser:
         self.add_object(_decode_base64(self.get_data()))
 
     def end_date(self):
-        self.add_object(_date_from_string(self.get_data(),
-                                          aware_datetime=self._aware_datetime))
+        self.add_object(_date_from_string(self.get_data()))
 
 
 class _DumbXMLWriter:
@@ -330,14 +321,13 @@ class _DumbXMLWriter:
 class _PlistWriter(_DumbXMLWriter):
     def __init__(
             self, file, indent_level=0, indent=b"\t", writeHeader=1,
-            sort_keys=True, skipkeys=False, aware_datetime=False):
+            sort_keys=True, skipkeys=False):
 
         if writeHeader:
             file.write(PLISTHEADER)
         _DumbXMLWriter.__init__(self, file, indent_level, indent)
         self._sort_keys = sort_keys
         self._skipkeys = skipkeys
-        self._aware_datetime = aware_datetime
 
     def write(self, value):
         self.writeln("<plist version=\"1.0\">")
@@ -370,8 +360,7 @@ class _PlistWriter(_DumbXMLWriter):
             self.write_bytes(value)
 
         elif isinstance(value, datetime.datetime):
-            self.simple_element("date",
-                                _date_to_string(value, self._aware_datetime))
+            self.simple_element("date", _date_to_string(value))
 
         elif isinstance(value, (tuple, list)):
             self.write_array(value)
@@ -472,9 +461,8 @@ class _BinaryPlistParser:
 
     see also: http://opensource.apple.com/source/CF/CF-744.18/CFBinaryPList.c
     """
-    def __init__(self, dict_type, aware_datetime=False):
+    def __init__(self, dict_type):
         self._dict_type = dict_type
-        self._aware_datime = aware_datetime
 
     def parse(self, fp):
         try:
@@ -511,24 +499,12 @@ class _BinaryPlistParser:
 
         return tokenL
 
-    def _read(self, size):
-        cursize = min(size, _MIN_READ_BUF_SIZE)
-        data = self._fp.read(cursize)
-        while True:
-            if len(data) != cursize:
-                raise InvalidFileException
-            if cursize == size:
-                return data
-            delta = min(cursize, size - cursize)
-            data += self._fp.read(delta)
-            cursize += delta
-
     def _read_ints(self, n, size):
-        data = self._read(size * n)
+        data = self._fp.read(size * n)
         if size in _BINARY_FORMAT:
             return struct.unpack(f'>{n}{_BINARY_FORMAT[size]}', data)
         else:
-            if not size:
+            if not size or len(data) != size * n:
                 raise InvalidFileException()
             return tuple(int.from_bytes(data[i: i + size], 'big')
                          for i in range(0, size * n, size))
@@ -580,24 +556,27 @@ class _BinaryPlistParser:
             f = struct.unpack('>d', self._fp.read(8))[0]
             # timestamp 0 of binary plists corresponds to 1/1/2001
             # (year of Mac OS X 10.0), instead of 1/1/1970.
-            if self._aware_datime:
-                epoch = datetime.datetime(2001, 1, 1, tzinfo=datetime.UTC)
-            else:
-                epoch = datetime.datetime(2001, 1, 1)
-            result = epoch + datetime.timedelta(seconds=f)
+            result = (datetime.datetime(2001, 1, 1) +
+                      datetime.timedelta(seconds=f))
 
         elif tokenH == 0x40:  # data
             s = self._get_size(tokenL)
-            result = self._read(s)
+            result = self._fp.read(s)
+            if len(result) != s:
+                raise InvalidFileException()
 
         elif tokenH == 0x50:  # ascii string
             s = self._get_size(tokenL)
-            data = self._read(s)
+            data = self._fp.read(s)
+            if len(data) != s:
+                raise InvalidFileException()
             result = data.decode('ascii')
 
         elif tokenH == 0x60:  # unicode string
             s = self._get_size(tokenL) * 2
-            data = self._read(s)
+            data = self._fp.read(s)
+            if len(data) != s:
+                raise InvalidFileException()
             result = data.decode('utf-16be')
 
         elif tokenH == 0x80:  # UID
@@ -609,8 +588,7 @@ class _BinaryPlistParser:
             obj_refs = self._read_refs(s)
             result = []
             self._objects[ref] = result
-            for x in obj_refs:
-                result.append(self._read_object(x))
+            result.extend(self._read_object(x) for x in obj_refs)
 
         # tokenH == 0xB0 is documented as 'ordset', but is not actually
         # implemented in the Apple reference code.
@@ -651,11 +629,10 @@ def _count_to_size(count):
 _scalars = (str, int, float, datetime.datetime, bytes)
 
 class _BinaryPlistWriter (object):
-    def __init__(self, fp, sort_keys, skipkeys, aware_datetime=False):
+    def __init__(self, fp, sort_keys, skipkeys):
         self._fp = fp
         self._sort_keys = sort_keys
         self._skipkeys = skipkeys
-        self._aware_datetime = aware_datetime
 
     def write(self, value):
 
@@ -801,12 +778,7 @@ class _BinaryPlistWriter (object):
             self._fp.write(struct.pack('>Bd', 0x23, value))
 
         elif isinstance(value, datetime.datetime):
-            if self._aware_datetime:
-                dt = value.astimezone(datetime.UTC)
-                offset = dt - datetime.datetime(2001, 1, 1, tzinfo=datetime.UTC)
-                f = offset.total_seconds()
-            else:
-                f = (value - datetime.datetime(2001, 1, 1)).total_seconds()
+            f = (value - datetime.datetime(2001, 1, 1)).total_seconds()
             self._fp.write(struct.pack('>Bd', 0x33, f))
 
         elif isinstance(value, (bytes, bytearray)):
@@ -890,7 +862,7 @@ _FORMATS={
 }
 
 
-def load(fp, *, fmt=None, dict_type=dict, aware_datetime=False):
+def load(fp, *, fmt=None, dict_type=dict):
     """Read a .plist file. 'fp' should be a readable and binary file object.
     Return the unpacked root object (which usually is a dictionary).
     """
@@ -908,41 +880,32 @@ def load(fp, *, fmt=None, dict_type=dict, aware_datetime=False):
     else:
         P = _FORMATS[fmt]['parser']
 
-    p = P(dict_type=dict_type, aware_datetime=aware_datetime)
+    p = P(dict_type=dict_type)
     return p.parse(fp)
 
 
-def loads(value, *, fmt=None, dict_type=dict, aware_datetime=False):
+def loads(value, *, fmt=None, dict_type=dict):
     """Read a .plist file from a bytes object.
     Return the unpacked root object (which usually is a dictionary).
     """
-    if isinstance(value, str):
-        if fmt == FMT_BINARY:
-            raise TypeError("value must be bytes-like object when fmt is "
-                            "FMT_BINARY")
-        value = value.encode()
     fp = BytesIO(value)
-    return load(fp, fmt=fmt, dict_type=dict_type, aware_datetime=aware_datetime)
+    return load(fp, fmt=fmt, dict_type=dict_type)
 
 
-def dump(value, fp, *, fmt=FMT_XML, sort_keys=True, skipkeys=False,
-         aware_datetime=False):
+def dump(value, fp, *, fmt=FMT_XML, sort_keys=True, skipkeys=False):
     """Write 'value' to a .plist file. 'fp' should be a writable,
     binary file object.
     """
     if fmt not in _FORMATS:
         raise ValueError("Unsupported format: %r"%(fmt,))
 
-    writer = _FORMATS[fmt]["writer"](fp, sort_keys=sort_keys, skipkeys=skipkeys,
-                                     aware_datetime=aware_datetime)
+    writer = _FORMATS[fmt]["writer"](fp, sort_keys=sort_keys, skipkeys=skipkeys)
     writer.write(value)
 
 
-def dumps(value, *, fmt=FMT_XML, skipkeys=False, sort_keys=True,
-          aware_datetime=False):
+def dumps(value, *, fmt=FMT_XML, skipkeys=False, sort_keys=True):
     """Return a bytes object with the contents for a .plist file.
     """
     fp = BytesIO()
-    dump(value, fp, fmt=fmt, skipkeys=skipkeys, sort_keys=sort_keys,
-         aware_datetime=aware_datetime)
+    dump(value, fp, fmt=fmt, skipkeys=skipkeys, sort_keys=sort_keys)
     return fp.getvalue()

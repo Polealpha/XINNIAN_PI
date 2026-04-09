@@ -29,8 +29,8 @@ from .log import logger
 
 __all__ = (
     'SelectorEventLoop', 'ProactorEventLoop', 'IocpProactor',
-    '_DefaultEventLoopPolicy', '_WindowsSelectorEventLoopPolicy',
-    '_WindowsProactorEventLoopPolicy', 'EventLoop',
+    'DefaultEventLoopPolicy', 'WindowsSelectorEventLoopPolicy',
+    'WindowsProactorEventLoopPolicy',
 )
 
 
@@ -315,25 +315,24 @@ class ProactorEventLoop(proactor_events.BaseProactorEventLoop):
             proactor = IocpProactor()
         super().__init__(proactor)
 
-    def _run_forever_setup(self):
-        assert self._self_reading_future is None
-        self.call_soon(self._loop_self_reading)
-        super()._run_forever_setup()
-
-    def _run_forever_cleanup(self):
-        super()._run_forever_cleanup()
-        if self._self_reading_future is not None:
-            ov = self._self_reading_future._ov
-            self._self_reading_future.cancel()
-            # self_reading_future always uses IOCP, so even though it's
-            # been cancelled, we need to make sure that the IOCP message
-            # is received so that the kernel is not holding on to the
-            # memory, possibly causing memory corruption later. Only
-            # unregister it if IO is complete in all respects. Otherwise
-            # we need another _poll() later to complete the IO.
-            if ov is not None and not ov.pending:
-                self._proactor._unregister(ov)
-            self._self_reading_future = None
+    def run_forever(self):
+        try:
+            assert self._self_reading_future is None
+            self.call_soon(self._loop_self_reading)
+            super().run_forever()
+        finally:
+            if self._self_reading_future is not None:
+                ov = self._self_reading_future._ov
+                self._self_reading_future.cancel()
+                # self_reading_future always uses IOCP, so even though it's
+                # been cancelled, we need to make sure that the IOCP message
+                # is received so that the kernel is not holding on to the
+                # memory, possibly causing memory corruption later. Only
+                # unregister it if IO is complete in all respects. Otherwise
+                # we need another _poll() later to complete the IO.
+                if ov is not None and not ov.pending:
+                    self._proactor._unregister(ov)
+                self._self_reading_future = None
 
     async def create_pipe_connection(self, protocol_factory, address):
         f = self._proactor.connect_pipe(address)
@@ -891,13 +890,12 @@ class _WindowsSubprocessTransport(base_subprocess.BaseSubprocessTransport):
 SelectorEventLoop = _WindowsSelectorEventLoop
 
 
-class _WindowsSelectorEventLoopPolicy(events._BaseDefaultEventLoopPolicy):
+class WindowsSelectorEventLoopPolicy(events.BaseDefaultEventLoopPolicy):
     _loop_factory = SelectorEventLoop
 
 
-class _WindowsProactorEventLoopPolicy(events._BaseDefaultEventLoopPolicy):
+class WindowsProactorEventLoopPolicy(events.BaseDefaultEventLoopPolicy):
     _loop_factory = ProactorEventLoop
 
 
-_DefaultEventLoopPolicy = _WindowsProactorEventLoopPolicy
-EventLoop = ProactorEventLoop
+DefaultEventLoopPolicy = WindowsProactorEventLoopPolicy

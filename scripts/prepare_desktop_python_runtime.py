@@ -20,6 +20,9 @@ REQUIRED_RUNTIME_MARKERS = (
     "uvicorn",
     "pydantic",
     "httpx",
+    "numpy",
+    "cv2",
+    "mediapipe",
 )
 
 PYTHON_HOME_EXCLUDES = {
@@ -156,6 +159,14 @@ def target_looks_ready(target_dir: Path) -> bool:
     return all((target_dir / marker).exists() for marker in REQUIRED_RUNTIME_MARKERS)
 
 
+def python_home_looks_ready(target_dir: Path) -> bool:
+    if not target_dir.exists():
+        return False
+    python_exe = target_dir / "python.exe"
+    version_dll = target_dir / f"python{sys.version_info.major}{sys.version_info.minor}.dll"
+    return python_exe.exists() and version_dll.exists()
+
+
 def clean_and_recreate(target_dir: Path) -> None:
     if target_dir.exists():
         stale_dir = target_dir.with_name(f"{target_dir.name}-stale")
@@ -255,7 +266,7 @@ def main() -> int:
 
     if python_home_target is not None:
         python_home_source = Path(sys.base_prefix).resolve()
-        if not (python_home_target / "python.exe").exists():
+        if not python_home_looks_ready(python_home_target):
             copy_python_home(python_home_source, python_home_target)
         else:
             print(f"Reusing existing vendored Python home at {python_home_target}")

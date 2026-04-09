@@ -1,3 +1,5 @@
+#! /usr/bin/env python3
+
 '''SMTP/ESMTP client class.
 
 This should follow RFC 821 (SMTP), RFC 1869 (ESMTP), RFC 2554 (SMTP
@@ -103,7 +105,7 @@ class SMTPSenderRefused(SMTPResponseException):
     """Sender address refused.
 
     In addition to the attributes set by on all SMTPResponseException
-    exceptions, this sets 'sender' to the string that the SMTP refused.
+    exceptions, this sets `sender' to the string that the SMTP refused.
     """
 
     def __init__(self, code, msg, sender):
@@ -176,15 +178,6 @@ def _quote_periods(bindata):
 
 def _fix_eols(data):
     return  re.sub(r'(?:\r\n|\n|\r(?!\n))', CRLF, data)
-
-
-try:
-    hmac.digest(b'', b'', 'md5')
-except ValueError:
-    _have_cram_md5_support = False
-else:
-    _have_cram_md5_support = True
-
 
 try:
     import ssl
@@ -322,7 +315,7 @@ class SMTP:
     def connect(self, host='localhost', port=0, source_address=None):
         """Connect to a host on a given port.
 
-        If the hostname ends with a colon (':') followed by a number, and
+        If the hostname ends with a colon (`:') followed by a number, and
         there is no port specified, that suffix will be stripped off and the
         number interpreted as the port number to use.
 
@@ -353,7 +346,7 @@ class SMTP:
         return (code, msg)
 
     def send(self, s):
-        """Send 's' to the server."""
+        """Send `s' to the server."""
         if self.debuglevel > 0:
             self._print_debug('send:', repr(s))
         if self.sock:
@@ -549,7 +542,7 @@ class SMTP:
                     raise SMTPNotSupportedError(
                         'SMTPUTF8 not supported by server')
             optionlist = ' ' + ' '.join(options)
-        self.putcmd("mail", "from:%s%s" % (quoteaddr(sender), optionlist))
+        self.putcmd("mail", "FROM:%s%s" % (quoteaddr(sender), optionlist))
         return self.getreply()
 
     def rcpt(self, recip, options=()):
@@ -557,7 +550,7 @@ class SMTP:
         optionlist = ''
         if options and self.does_esmtp:
             optionlist = ' ' + ' '.join(options)
-        self.putcmd("rcpt", "to:%s%s" % (quoteaddr(recip), optionlist))
+        self.putcmd("rcpt", "TO:%s%s" % (quoteaddr(recip), optionlist))
         return self.getreply()
 
     def data(self, msg):
@@ -674,11 +667,8 @@ class SMTP:
         # CRAM-MD5 does not support initial-response.
         if challenge is None:
             return None
-        if not _have_cram_md5_support:
-            raise SMTPException("CRAM-MD5 is not supported")
-        password = self.password.encode('ascii')
-        authcode = hmac.HMAC(password, challenge, 'md5')
-        return f"{self.user} {authcode.hexdigest()}"
+        return self.user + " " + hmac.HMAC(
+            self.password.encode('ascii'), challenge, 'md5').hexdigest()
 
     def auth_plain(self, challenge=None):
         """ Authobject to use with PLAIN authentication. Requires self.user and
@@ -730,10 +720,8 @@ class SMTP:
         advertised_authlist = self.esmtp_features["auth"].split()
 
         # Authentication methods we can handle in our preferred order:
-        if _have_cram_md5_support:
-            preferred_auths = ['CRAM-MD5', 'PLAIN', 'LOGIN']
-        else:
-            preferred_auths = ['PLAIN', 'LOGIN']
+        preferred_auths = ['CRAM-MD5', 'PLAIN', 'LOGIN']
+
         # We try the supported authentications in our preferred order, if
         # the server supports them.
         authlist = [auth for auth in preferred_auths
@@ -917,7 +905,7 @@ class SMTP:
         The arguments are as for sendmail, except that msg is an
         email.message.Message object.  If from_addr is None or to_addrs is
         None, these arguments are taken from the headers of the Message as
-        described in RFC 5322 (a ValueError is raised if there is more than
+        described in RFC 2822 (a ValueError is raised if there is more than
         one set of 'Resent-' headers).  Regardless of the values of from_addr and
         to_addr, any Bcc field (or Resent-Bcc field, when the Message is a
         resent) of the Message object won't be transmitted.  The Message
@@ -931,7 +919,7 @@ class SMTP:
         policy.
 
         """
-        # 'Resent-Date' is a mandatory field if the Message is resent (RFC 5322
+        # 'Resent-Date' is a mandatory field if the Message is resent (RFC 2822
         # Section 3.6.6). In such a case, we use the 'Resent-*' fields.  However,
         # if there is more than one 'Resent-' block there's no way to
         # unambiguously determine which one is the most recent in all cases,
@@ -950,7 +938,7 @@ class SMTP:
         else:
             raise ValueError("message has more than one 'Resent-' header block")
         if from_addr is None:
-            # Prefer the sender field per RFC 5322 section 3.6.2.
+            # Prefer the sender field per RFC 2822:3.6.2.
             from_addr = (msg[header_prefix + 'Sender']
                            if (header_prefix + 'Sender') in msg
                            else msg[header_prefix + 'From'])

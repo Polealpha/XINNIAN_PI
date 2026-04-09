@@ -1,3 +1,5 @@
+#!/usr/bin/env python3
+
 # portions copyright 2001, Autonomous Zones Industries, Inc., all rights...
 # err...  reserved and offered to the public under the terms of the
 # Python 2.2 license.
@@ -200,8 +202,7 @@ class CoverageResults:
         for key in other_callers:
             callers[key] = 1
 
-    def write_results(self, show_missing=True, summary=False, coverdir=None, *,
-                      ignore_missing_files=False):
+    def write_results(self, show_missing=True, summary=False, coverdir=None):
         """
         Write the coverage results.
 
@@ -210,9 +211,6 @@ class CoverageResults:
         :param coverdir: If None, the results of each module are placed in its
                          directory, otherwise it is included in the directory
                          specified.
-        :param ignore_missing_files: If True, counts for files that no longer
-                         exist are silently ignored. Otherwise, a missing file
-                         will raise a FileNotFoundError.
         """
         if self.calledfuncs:
             print()
@@ -255,9 +253,6 @@ class CoverageResults:
             if filename.endswith(".pyc"):
                 filename = filename[:-1]
 
-            if ignore_missing_files and not os.path.isfile(filename):
-                continue
-
             if coverdir is None:
                 dir = os.path.dirname(os.path.abspath(filename))
                 modulename = _modname(filename)
@@ -279,13 +274,15 @@ class CoverageResults:
             n_hits, n_lines = self.write_results_file(coverpath, source,
                                                       lnotab, count, encoding)
             if summary and n_lines:
-                sums[modulename] = n_lines, n_hits, modulename, filename
+                percent = int(100 * n_hits / n_lines)
+                sums[modulename] = n_lines, percent, modulename, filename
+
 
         if summary and sums:
             print("lines   cov%   module   (path)")
             for m in sorted(sums):
-                n_lines, n_hits, modulename, filename = sums[m]
-                print(f"{n_lines:5d}   {n_hits/n_lines:.1%}   {modulename}   ({filename})")
+                n_lines, percent, modulename, filename = sums[m]
+                print("%5d   %3d%%   %s   (%s)" % sums[m])
 
         if self.outfile:
             # try and store counts and module info into self.outfile
@@ -399,7 +396,7 @@ class Trace:
         @param countfuncs true iff it should just output a list of
                      (filename, modulename, funcname,) for functions
                      that were called at least once;  This overrides
-                     'count' and 'trace'
+                     `count' and `trace'
         @param ignoremods a list of the names of modules to ignore
         @param ignoredirs a list of the names of directories to ignore
                      all of the (recursive) contents of
@@ -531,7 +528,7 @@ class Trace:
     def globaltrace_lt(self, frame, why, arg):
         """Handler for call events.
 
-        If the code block being entered is to be ignored, returns 'None',
+        If the code block being entered is to be ignored, returns `None',
         else returns self.localtrace.
         """
         if why == 'call':
@@ -604,7 +601,7 @@ class Trace:
 def main():
     import argparse
 
-    parser = argparse.ArgumentParser(color=True)
+    parser = argparse.ArgumentParser()
     parser.add_argument('--version', action='version', version='trace 2.0')
 
     grp = parser.add_argument_group('Main options',

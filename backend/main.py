@@ -4423,10 +4423,11 @@ def emotion_realtime_update(payload: RealtimeScoresResponse) -> RealtimeScoresRe
 @app.post("/api/vision/camera/analyze", response_model=CameraEmotionAnalyzeResponse)
 def camera_emotion_analyze(
     payload: CameraEmotionAnalyzeRequest,
+    request: Request,
     credentials: HTTPAuthorizationCredentials = Depends(bearer_scheme),
     conn: Connection = Depends(get_db),
 ) -> CameraEmotionAnalyzeResponse:
-    _parse_access_token(credentials, conn)
+    _parse_access_token_for_local_desktop(credentials, conn, request)
     timestamp_ms = int(payload.timestamp_ms or int(time.time() * 1000))
     width = int(payload.width or 0)
     height = int(payload.height or 0)

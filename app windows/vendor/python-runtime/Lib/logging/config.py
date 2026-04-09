@@ -83,12 +83,15 @@ def fileConfig(fname, defaults=None, disable_existing_loggers=True, encoding=Non
     formatters = _create_formatters(cp)
 
     # critical section
-    with logging._lock:
+    logging._acquireLock()
+    try:
         _clearExistingHandlers()
 
         # Handlers add themselves to logging._handlers
         handlers = _install_handlers(cp, formatters)
         _install_loggers(cp, handlers, disable_existing_loggers)
+    finally:
+        logging._releaseLock()
 
 
 def _resolve(name):
@@ -375,7 +378,7 @@ class BaseConfigurator(object):
 
     WORD_PATTERN = re.compile(r'^\s*(\w+)\s*')
     DOT_PATTERN = re.compile(r'^\.\s*(\w+)\s*')
-    INDEX_PATTERN = re.compile(r'^\[([^\[\]]*)\]\s*')
+    INDEX_PATTERN = re.compile(r'^\[\s*(\w+)\s*\]\s*')
     DIGIT_PATTERN = re.compile(r'^\d+$')
 
     value_converters = {
@@ -540,7 +543,8 @@ class DictConfigurator(BaseConfigurator):
             raise ValueError("Unsupported version: %s" % config['version'])
         incremental = config.pop('incremental', False)
         EMPTY_DICT = {}
-        with logging._lock:
+        logging._acquireLock()
+        try:
             if incremental:
                 handlers = config.get('handlers', EMPTY_DICT)
                 for name in handlers:
@@ -684,6 +688,8 @@ class DictConfigurator(BaseConfigurator):
                     except Exception as e:
                         raise ValueError('Unable to configure root '
                                          'logger') from e
+        finally:
+            logging._releaseLock()
 
     def configure_formatter(self, config):
         """Configure a formatter from a dictionary."""
@@ -694,9 +700,10 @@ class DictConfigurator(BaseConfigurator):
             except TypeError as te:
                 if "'format'" not in str(te):
                     raise
-                # logging.Formatter and its subclasses expect the `fmt`
-                # parameter instead of `format`. Retry passing configuration
-                # with `fmt`.
+                #Name of parameter changed from fmt to format.
+                #Retry with old name.
+                #This is so that code can be used with older Python versions
+                #(e.g. by Django)
                 config['fmt'] = config.pop('format')
                 config['()'] = factory
                 result = self.configure_custom(config)
@@ -865,8 +872,6 @@ class DictConfigurator(BaseConfigurator):
             else:
                 factory = klass
         kwargs = {k: config[k] for k in config if (k != '.' and valid_ident(k))}
-        # When deprecation ends for using the 'strm' parameter, remove the
-        # "except TypeError ..."
         try:
             result = factory(**kwargs)
         except TypeError as te:
@@ -878,15 +883,6 @@ class DictConfigurator(BaseConfigurator):
             #(e.g. by Django)
             kwargs['strm'] = kwargs.pop('stream')
             result = factory(**kwargs)
-
-            import warnings
-            warnings.warn(
-                "Support for custom logging handlers with the 'strm' argument "
-                "is deprecated and scheduled for removal in Python 3.16. "
-                "Define handlers with the 'stream' argument instead.",
-                DeprecationWarning,
-                stacklevel=2,
-            )
         if formatter:
             result.setFormatter(formatter)
         if level is not None:
@@ -1017,14 +1013,14 @@ def listen(port=DEFAULT_LOGGING_CONFIG_PORT, verify=None):
         A simple TCP socket-based logging config receiver.
         """
 
-        allow_reuse_address = True
-        allow_reuse_port = False
+        allow_reuse_address = 1
 
         def __init__(self, host='localhost', port=DEFAULT_LOGGING_CONFIG_PORT,
                      handler=None, ready=None, verify=None):
             ThreadingTCPServer.__init__(self, (host, port), handler)
-            with logging._lock:
-                self.abort = 0
+            logging._acquireLock()
+            self.abort = 0
+            logging._releaseLock()
             self.timeout = 1
             self.ready = ready
             self.verify = verify
@@ -1038,8 +1034,9 @@ def listen(port=DEFAULT_LOGGING_CONFIG_PORT, verify=None):
                                            self.timeout)
                 if rd:
                     self.handle_request()
-                with logging._lock:
-                    abort = self.abort
+                logging._acquireLock()
+                abort = self.abort
+                logging._releaseLock()
             self.server_close()
 
     class Server(threading.Thread):
@@ -1060,8 +1057,9 @@ def listen(port=DEFAULT_LOGGING_CONFIG_PORT, verify=None):
                 self.port = server.server_address[1]
             self.ready.set()
             global _listener
-            with logging._lock:
-                _listener = server
+            logging._acquireLock()
+            _listener = server
+            logging._releaseLock()
             server.serve_until_stopped()
 
     return Server(ConfigSocketReceiver, ConfigStreamHandler, port, verify)
@@ -1071,7 +1069,10 @@ def stopListening():
     Stop the listening server which was created with a call to listen().
     """
     global _listener
-    with logging._lock:
+    logging._acquireLock()
+    try:
         if _listener:
             _listener.abort = 1
             _listener = None
+    finally:
+        logging._releaseLock()

@@ -227,6 +227,27 @@
       "min_confidence": 0.35,
       "hold_sec": 0.8,
       "cooldown_sec": 5.0
+    },
+    "emotion_curve_shift": {
+      "enabled": true,
+      "window_sec": 120,
+      "min_span_sec": 18,
+      "min_points": 8,
+      "baseline_points": 6,
+      "recent_points": 4,
+      "min_current_score": 0.46,
+      "delta_thr": 0.14,
+      "jump_thr": 0.18,
+      "volatility_thr": 0.045,
+      "negative_expr_min_confidence": 0.48,
+      "negative_ids": [
+        3,
+        4,
+        5,
+        6,
+        7
+      ],
+      "care_severity_thr": 0.8
     }
   }
 }

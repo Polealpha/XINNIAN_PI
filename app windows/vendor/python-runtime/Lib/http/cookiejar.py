@@ -430,7 +430,6 @@ def split_header_words(header_values):
         if pairs: result.append(pairs)
     return result
 
-HEADER_JOIN_TOKEN_RE = re.compile(r"[!#$%&'*+\-.^_`|~0-9A-Za-z]+")
 HEADER_JOIN_ESCAPE_RE = re.compile(r"([\"\\])")
 def join_header_words(lists):
     """Do the inverse (almost) of the conversion done by split_header_words.
@@ -438,10 +437,10 @@ def join_header_words(lists):
     Takes a list of lists of (key, value) pairs and produces a single header
     value.  Attribute values are quoted if needed.
 
-    >>> join_header_words([[("text/plain", None), ("charset", "iso-8859/1")]])
-    'text/plain; charset="iso-8859/1"'
-    >>> join_header_words([[("text/plain", None)], [("charset", "iso-8859/1")]])
-    'text/plain, charset="iso-8859/1"'
+    >>> join_header_words([[("text/plain", None), ("charset", "iso-8859-1")]])
+    'text/plain; charset="iso-8859-1"'
+    >>> join_header_words([[("text/plain", None)], [("charset", "iso-8859-1")]])
+    'text/plain, charset="iso-8859-1"'
 
     """
     headers = []
@@ -449,7 +448,7 @@ def join_header_words(lists):
         attr = []
         for k, v in pairs:
             if v is not None:
-                if not HEADER_JOIN_TOKEN_RE.fullmatch(v):
+                if not re.search(r"^\w+$", v):
                     v = HEADER_JOIN_ESCAPE_RE.sub(r"\\\1", v)  # escape " and \
                     v = '"%s"' % v
                 k = "%s=%s" % (k, v)
@@ -1987,7 +1986,7 @@ class MozillaCookieJar(FileCookieJar):
 
     This class differs from CookieJar only in the format it uses to save and
     load cookies to and from a file.  This class uses the Mozilla/Netscape
-    'cookies.txt' format.  curl and lynx use this file format, too.
+    `cookies.txt' format.  curl and lynx use this file format, too.
 
     Don't expect cookies saved while the browser is running to be noticed by
     the browser (in fact, Mozilla on unix will overwrite your saved cookies if

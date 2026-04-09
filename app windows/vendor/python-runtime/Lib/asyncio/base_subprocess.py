@@ -1,9 +1,6 @@
 import collections
 import subprocess
 import warnings
-import os
-import signal
-import sys
 
 from . import protocols
 from . import transports
@@ -26,7 +23,6 @@ class BaseSubprocessTransport(transports.SubprocessTransport):
         self._pending_calls = collections.deque()
         self._pipes = {}
         self._finished = False
-        self._pipes_connected = False
 
         if stdin == subprocess.PIPE:
             self._pipes[0] = None
@@ -105,12 +101,7 @@ class BaseSubprocessTransport(transports.SubprocessTransport):
         for proto in self._pipes.values():
             if proto is None:
                 continue
-            # See gh-114177
-            # skip closing the pipe if loop is already closed
-            # this can happen e.g. when loop is closed immediately after
-            # process is killed
-            if self._loop and not self._loop.is_closed():
-                proto.pipe.close()
+            proto.pipe.close()
 
         if (self._proc is not None and
                 # has the child process finished?
@@ -124,8 +115,7 @@ class BaseSubprocessTransport(transports.SubprocessTransport):
 
             try:
                 self._proc.kill()
-            except (ProcessLookupError, PermissionError):
-                # the process may have already exited or may be running setuid
+            except ProcessLookupError:
                 pass
 
             # Don't clear the _proc reference yet: _post_init() may still run
@@ -151,31 +141,17 @@ class BaseSubprocessTransport(transports.SubprocessTransport):
         if self._proc is None:
             raise ProcessLookupError()
 
-    if sys.platform == 'win32':
-        def send_signal(self, signal):
-            self._check_proc()
-            self._proc.send_signal(signal)
+    def send_signal(self, signal):
+        self._check_proc()
+        self._proc.send_signal(signal)
 
-        def terminate(self):
-            self._check_proc()
-            self._proc.terminate()
+    def terminate(self):
+        self._check_proc()
+        self._proc.terminate()
 
-        def kill(self):
-            self._check_proc()
-            self._proc.kill()
-    else:
-        def send_signal(self, signal):
-            self._check_proc()
-            try:
-                os.kill(self._proc.pid, signal)
-            except ProcessLookupError:
-                pass
-
-        def terminate(self):
-            self.send_signal(signal.SIGTERM)
-
-        def kill(self):
-            self.send_signal(signal.SIGKILL)
+    def kill(self):
+        self._check_proc()
+        self._proc.kill()
 
     async def _connect_pipes(self, waiter):
         try:
@@ -214,7 +190,6 @@ class BaseSubprocessTransport(transports.SubprocessTransport):
         else:
             if waiter is not None and not waiter.cancelled():
                 waiter.set_result(None)
-            self._pipes_connected = True
 
     def _call(self, cb, *data):
         if self._pending_calls is not None:
@@ -258,15 +233,6 @@ class BaseSubprocessTransport(transports.SubprocessTransport):
         assert not self._finished
         if self._returncode is None:
             return
-        if not self._pipes_connected:
-            # self._pipes_connected can be False if not all pipes were connected
-            # because either the process failed to start or the self._connect_pipes task
-            # got cancelled. In this broken state we consider all pipes disconnected and
-            # to avoid hanging forever in self._wait as otherwise _exit_waiters
-            # would never be woken up, we wake them up here.
-            for waiter in self._exit_waiters:
-                if not waiter.cancelled():
-                    waiter.set_result(self._returncode)
         if all(p is not None and p.disconnected
                for p in self._pipes.values()):
             self._finished = True

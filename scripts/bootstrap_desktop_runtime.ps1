@@ -101,9 +101,26 @@ function Ensure-NpmInstall([string]$AppRoot) {
 }
 
 function Invoke-CheckedPython([string]$RepoRoot, [string]$ScriptRelativePath, [string[]]$Arguments) {
-    $python = Get-Command python -ErrorAction Stop
+    $candidatePaths = @(
+        (Join-Path $env:LocalAppData "Programs\Python\Python312\python.exe"),
+        (Join-Path $env:LocalAppData "Programs\Python\Python311\python.exe")
+    )
+    $resolvedPython = $null
+    foreach ($candidate in $candidatePaths) {
+        if (Test-Path $candidate) {
+            $resolvedPython = $candidate
+            break
+        }
+    }
+    if (-not $resolvedPython) {
+        $python = Get-Command python -ErrorAction Stop
+        if ($python.Source -like "*WindowsApps*") {
+            throw "Found only the WindowsApps python shim. Please install Python 3.12 or Python 3.11 and rerun this script."
+        }
+        $resolvedPython = $python.Source
+    }
     $scriptPath = Join-Path $RepoRoot $ScriptRelativePath
-    & $python.Source $scriptPath @Arguments
+    & $resolvedPython $scriptPath @Arguments
     if ($LASTEXITCODE -ne 0) {
         throw "python $ScriptRelativePath failed with exit code $LASTEXITCODE"
     }

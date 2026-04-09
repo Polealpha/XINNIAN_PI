@@ -1,3 +1,5 @@
+#!/usr/bin/env python3
+
 """ This module tries to retrieve as much platform-identifying data as
     possible. It makes this information available via function APIs.
 
@@ -31,7 +33,6 @@
 #
 #    <see CVS and SVN checkin messages for history>
 #
-#    1.0.9 - added invalidate_caches() function to invalidate cached values
 #    1.0.8 - changed Windows support to read version from kernel32.dll
 #    1.0.7 - added DEV_NULL
 #    1.0.6 - added linux_distribution()
@@ -110,7 +111,7 @@ __copyright__ = """
 
 """
 
-__version__ = '1.0.9'
+__version__ = '1.0.8'
 
 import collections
 import os
@@ -118,10 +119,6 @@ import re
 import sys
 import functools
 import itertools
-try:
-    import _wmi
-except ImportError:
-    _wmi = None
 
 ### Globals & Constants
 
@@ -173,11 +170,6 @@ def libc_ver(executable=None, lib='', version='', chunksize=16384):
 
     """
     if not executable:
-        if sys.platform == "emscripten":
-            # Emscripten's os.confstr reports that it is glibc, so special case
-            # it.
-            ver = ".".join(str(x) for x in sys._emscripten_info.emscripten_version)
-            return ("emscripten", ver)
         try:
             ver = os.confstr('CS_GNU_LIBC_VERSION')
             # parse 'glibc 2.28' as ('glibc', '2.28')
@@ -194,26 +186,22 @@ def libc_ver(executable=None, lib='', version='', chunksize=16384):
             # sys.executable is not set.
             return lib, version
 
-    libc_search = re.compile(br"""
-          (__libc_init)
-        | (GLIBC_([0-9.]+))
-        | (libc(_\w+)?\.so(?:\.(\d[0-9.]*))?)
-        | (musl-([0-9.]+))
-        | ((?:libc\.|ld-)musl(?:-\w+)?.so(?:\.(\d[0-9.]*))?)
-        """,
-        re.ASCII | re.VERBOSE)
+    libc_search = re.compile(b'(__libc_init)'
+                          b'|'
+                          b'(GLIBC_([0-9.]+))'
+                          b'|'
+                          br'(libc(_\w+)?\.so(?:\.(\d[0-9.]*))?)', re.ASCII)
 
     V = _comparable_version
     # We use os.path.realpath()
     # here to work around problems with Cygwin not being
     # able to open symlinks for reading
     executable = os.path.realpath(executable)
-    ver = None
     with open(executable, 'rb') as f:
         binary = f.read(chunksize)
         pos = 0
         while pos < len(binary):
-            if b'libc' in binary or b'GLIBC' in binary or b'musl' in binary:
+            if b'libc' in binary or b'GLIBC' in binary:
                 m = libc_search.search(binary, pos)
             else:
                 m = None
@@ -225,35 +213,26 @@ def libc_ver(executable=None, lib='', version='', chunksize=16384):
                     continue
                 if not m:
                     break
-            decoded_groups = [s.decode('latin1') if s is not None else s
-                              for s in m.groups()]
-            (libcinit, glibc, glibcversion, so, threads, soversion,
-             musl, muslversion, musl_so, musl_sover) = decoded_groups
+            libcinit, glibc, glibcversion, so, threads, soversion = [
+                s.decode('latin1') if s is not None else s
+                for s in m.groups()]
             if libcinit and not lib:
                 lib = 'libc'
             elif glibc:
                 if lib != 'glibc':
                     lib = 'glibc'
-                    ver = glibcversion
-                elif V(glibcversion) > V(ver):
-                    ver = glibcversion
+                    version = glibcversion
+                elif V(glibcversion) > V(version):
+                    version = glibcversion
             elif so:
-                if lib not in ('glibc', 'musl'):
+                if lib != 'glibc':
                     lib = 'libc'
-                    if soversion and (not ver or V(soversion) > V(ver)):
-                        ver = soversion
-                    if threads and ver[-len(threads):] != threads:
-                        ver = ver + threads
-            elif musl:
-                lib = 'musl'
-                if not ver or V(muslversion) > V(ver):
-                    ver = muslversion
-            elif musl_so:
-                lib = 'musl'
-                if musl_sover and (not ver or V(musl_sover) > V(ver)):
-                    ver = musl_sover
+                    if soversion and (not version or V(soversion) > V(version)):
+                        version = soversion
+                    if threads and version[-len(threads):] != threads:
+                        version = version + threads
             pos = m.end()
-    return lib, version if ver is None else ver
+    return lib, version
 
 def _norm_version(version, build=''):
 
@@ -334,26 +313,24 @@ def _syscmd_ver(system='', release='', version='',
         version = _norm_version(version)
     return system, release, version
 
-
-def _wmi_query(table, *keys):
-    global _wmi
-    if not _wmi:
+try:
+    import _wmi
+except ImportError:
+    def _wmi_query(*keys):
         raise OSError("not supported")
-    table = {
-        "OS": "Win32_OperatingSystem",
-        "CPU": "Win32_Processor",
-    }[table]
-    try:
+else:
+    def _wmi_query(table, *keys):
+        table = {
+            "OS": "Win32_OperatingSystem",
+            "CPU": "Win32_Processor",
+        }[table]
         data = _wmi.exec_query("SELECT {} FROM {}".format(
             ",".join(keys),
             table,
         )).split("\0")
-    except OSError:
-        _wmi = None
-        raise OSError("not supported")
-    split_data = (i.partition("=") for i in data)
-    dict_data = {i[0]: i[2] for i in split_data}
-    return (dict_data[k] for k in keys)
+        split_data = (i.partition("=") for i in data)
+        dict_data = {i[0]: i[2] for i in split_data}
+        return (dict_data[k] for k in keys)
 
 
 _WIN32_CLIENT_RELEASES = [
@@ -389,7 +366,10 @@ def win32_is_iot():
 
 def win32_edition():
     try:
-        import winreg
+        try:
+            import winreg
+        except ImportError:
+            import _winreg as winreg
     except ImportError:
         pass
     else:
@@ -448,7 +428,10 @@ def _win32_ver(version, csd, ptype):
                 csd = 'SP' + csd[13:]
 
     try:
-        import winreg
+        try:
+            import winreg
+        except ImportError:
+            import _winreg as winreg
     except ImportError:
         pass
     else:
@@ -515,32 +498,8 @@ def mac_ver(release='', versioninfo=('', '', ''), machine=''):
     # If that also doesn't work return the default values
     return release, versioninfo, machine
 
-
-# A namedtuple for iOS version information.
-IOSVersionInfo = collections.namedtuple(
-    "IOSVersionInfo",
-    ["system", "release", "model", "is_simulator"]
-)
-
-
-def ios_ver(system="", release="", model="", is_simulator=False):
-    """Get iOS version information, and return it as a namedtuple:
-        (system, release, model, is_simulator).
-
-    If values can't be determined, they are set to values provided as
-    parameters.
-    """
-    if sys.platform == "ios":
-        import _ios_support
-        result = _ios_support.get_platform_ios()
-        if result is not None:
-            return IOSVersionInfo(*result)
-
-    return IOSVersionInfo(system, release, model, is_simulator)
-
-
 def _java_getprop(name, default):
-    """This private helper is deprecated in 3.13 and will be removed in 3.15"""
+
     from java.lang import System
     try:
         value = System.getProperty(name)
@@ -562,11 +521,9 @@ def java_ver(release='', vendor='', vminfo=('', '', ''), osinfo=('', '', '')):
         given as parameters (which all default to '').
 
     """
-    import warnings
-    warnings._deprecated('java_ver', remove=(3, 15))
     # Import the needed APIs
     try:
-        import java.lang  # noqa: F401
+        import java.lang
     except ImportError:
         return release, vendor, vminfo, osinfo
 
@@ -584,47 +541,6 @@ def java_ver(release='', vendor='', vminfo=('', '', ''), osinfo=('', '', '')):
     osinfo = os_name, os_version, os_arch
 
     return release, vendor, vminfo, osinfo
-
-
-AndroidVer = collections.namedtuple(
-    "AndroidVer", "release api_level manufacturer model device is_emulator")
-
-def android_ver(release="", api_level=0, manufacturer="", model="", device="",
-                is_emulator=False):
-    if sys.platform == "android":
-        try:
-            from ctypes import CDLL, c_char_p, create_string_buffer
-        except ImportError:
-            pass
-        else:
-            # An NDK developer confirmed that this is an officially-supported
-            # API (https://stackoverflow.com/a/28416743). Use `getattr` to avoid
-            # private name mangling.
-            system_property_get = getattr(CDLL("libc.so"), "__system_property_get")
-            system_property_get.argtypes = (c_char_p, c_char_p)
-
-            def getprop(name, default):
-                # https://android.googlesource.com/platform/bionic/+/refs/tags/android-5.0.0_r1/libc/include/sys/system_properties.h#39
-                PROP_VALUE_MAX = 92
-                buffer = create_string_buffer(PROP_VALUE_MAX)
-                length = system_property_get(name.encode("UTF-8"), buffer)
-                if length == 0:
-                    # This API doesn’t distinguish between an empty property and
-                    # a missing one.
-                    return default
-                else:
-                    return buffer.value.decode("UTF-8", "backslashreplace")
-
-            release = getprop("ro.build.version.release", release)
-            api_level = int(getprop("ro.build.version.sdk", api_level))
-            manufacturer = getprop("ro.product.manufacturer", manufacturer)
-            model = getprop("ro.product.model", model)
-            device = getprop("ro.product.device", device)
-            is_emulator = getprop("ro.kernel.qemu", "0") == "1"
-
-    return AndroidVer(
-        release, api_level, manufacturer, model, device, is_emulator)
-
 
 ### System name aliasing
 
@@ -697,7 +613,7 @@ def _platform(*args):
         if cleaned == platform:
             break
         platform = cleaned
-    while platform and platform[-1] == '-':
+    while platform[-1] == '-':
         platform = platform[:-1]
 
     return platform
@@ -738,7 +654,7 @@ def _syscmd_file(target, default=''):
         default in case the command should fail.
 
     """
-    if sys.platform in {'dos', 'win32', 'win16', 'ios', 'tvos', 'watchos'}:
+    if sys.platform in ('dos', 'win32', 'win16'):
         # XXX Others too ?
         return default
 
@@ -832,8 +748,6 @@ def architecture(executable=sys.executable, bits='', linkage=''):
     # Linkage
     if 'ELF' in fileout:
         linkage = 'ELF'
-    elif 'Mach-O' in fileout:
-        linkage = "Mach-O"
     elif 'PE' in fileout:
         # E.g. Windows uses this format
         if 'Windows' in fileout:
@@ -901,14 +815,6 @@ class _Processor:
         else:
             csid, cpu_number = vms_lib.getsyi('SYI$_CPU', 0)
             return 'Alpha' if cpu_number >= 128 else 'VAX'
-
-    # On the iOS simulator, os.uname returns the architecture as uname.machine.
-    # On device it returns the model name for some reason; but there's only one
-    # CPU architecture for iOS devices, so we know the right answer.
-    def get_ios():
-        if sys.implementation._multiarch.endswith("simulator"):
-            return os.uname().machine
-        return 'arm64'
 
     def from_subprocess():
         """
@@ -1064,15 +970,6 @@ def uname():
         system = 'Windows'
         release = 'Vista'
 
-    # On Android, return the name and version of the OS rather than the kernel.
-    if sys.platform == 'android':
-        system = 'Android'
-        release = android_ver().release
-
-    # Normalize responses on iOS
-    if sys.platform == 'ios':
-        system, release, _, _ = ios_ver()
-
     vals = system, node, release, version, machine
     # Replace 'unknown' values with the more portable ''
     _uname_cache = uname_result(*map(_unknown_as_blank, vals))
@@ -1171,16 +1068,17 @@ def _sys_version(sys_version=None):
     if result is not None:
         return result
 
+    sys_version_parser = re.compile(
+        r'([\w.+]+)\s*'  # "version<space>"
+        r'\(#?([^,]+)'  # "(#buildno"
+        r'(?:,\s*([\w ]*)'  # ", builddate"
+        r'(?:,\s*([\w :]*))?)?\)\s*'  # ", buildtime)<space>"
+        r'\[([^\]]+)\]?', re.ASCII)  # "[compiler]"
+
     if sys.platform.startswith('java'):
         # Jython
-        jython_sys_version_parser = re.compile(
-            r'([\w.+]+)\s*'  # "version<space>"
-            r'\(#?([^,]+)'  # "(#buildno"
-            r'(?:,\s*([\w ]*)'  # ", builddate"
-            r'(?:,\s*([\w :]*))?)?\)\s*'  # ", buildtime)<space>"
-            r'\[([^\]]+)\]?', re.ASCII)  # "[compiler]"
         name = 'Jython'
-        match = jython_sys_version_parser.match(sys_version)
+        match = sys_version_parser.match(sys_version)
         if match is None:
             raise ValueError(
                 'failed to parse Jython sys.version: %s' %
@@ -1207,14 +1105,7 @@ def _sys_version(sys_version=None):
 
     else:
         # CPython
-        cpython_sys_version_parser = re.compile(
-            r'([\w.+]+)\s*'  # "version<space>"
-            r'(?:free-threading build\s+)?' # "free-threading-build<space>"
-            r'\(#?([^,]+)'  # "(#buildno"
-            r'(?:,\s*([\w ]*)'  # ", builddate"
-            r'(?:,\s*([\w :]*))?)?\)\s*'  # ", buildtime)<space>"
-            r'\[([^\]]+)\]?', re.ASCII)  # "[compiler]"
-        match = cpython_sys_version_parser.match(sys_version)
+        match = sys_version_parser.match(sys_version)
         if match is None:
             raise ValueError(
                 'failed to parse CPython sys.version: %s' %
@@ -1358,14 +1249,11 @@ def platform(aliased=False, terse=False):
         system, release, version = system_alias(system, release, version)
 
     if system == 'Darwin':
-        # macOS and iOS both report as a "Darwin" kernel
-        if sys.platform == "ios":
-            system, release, _, _ = ios_ver()
-        else:
-            macos_release = mac_ver()[0]
-            if macos_release:
-                system = 'macOS'
-                release = macos_release
+        # macOS (darwin kernel)
+        macos_release = mac_ver()[0]
+        if macos_release:
+            system = 'macOS'
+            release = macos_release
 
     if system == 'Windows':
         # MS platforms
@@ -1461,55 +1349,11 @@ def freedesktop_os_release():
     return _os_release_cache.copy()
 
 
-def invalidate_caches():
-    """Invalidate the cached results."""
-    global _uname_cache
-    _uname_cache = None
-
-    global _os_release_cache
-    _os_release_cache = None
-
-    _sys_version_cache.clear()
-    _platform_cache.clear()
-
-
 ### Command line interface
 
-def _parse_args(args: list[str] | None):
-    import argparse
-
-    parser = argparse.ArgumentParser(color=True)
-    parser.add_argument("args", nargs="*", choices=["nonaliased", "terse"])
-    parser.add_argument(
-        "--terse",
-        action="store_true",
-        help=(
-            "return only the absolute minimum information needed "
-            "to identify the platform"
-        ),
-    )
-    parser.add_argument(
-        "--nonaliased",
-        dest="aliased",
-        action="store_false",
-        help=(
-            "disable system/OS name aliasing. If aliasing is enabled, "
-            "some platforms report system names different from "
-            "their common names, e.g. SunOS is reported as Solaris"
-        ),
-    )
-
-    return parser.parse_args(args)
-
-
-def _main(args: list[str] | None = None):
-    args = _parse_args(args)
-
-    terse = args.terse or ("terse" in args.args)
-    aliased = args.aliased and ('nonaliased' not in args.args)
-
+if __name__ == '__main__':
+    # Default is to print the aliased verbose platform string
+    terse = ('terse' in sys.argv or '--terse' in sys.argv)
+    aliased = (not 'nonaliased' in sys.argv and not '--nonaliased' in sys.argv)
     print(platform(aliased, terse))
-
-
-if __name__ == "__main__":
-    _main()
+    sys.exit(0)

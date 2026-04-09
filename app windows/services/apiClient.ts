@@ -23,6 +23,7 @@ const LOCAL_PATH_PREFIXES = [
   "/api/llm/",
   "/api/activation/",
   "/api/device/owner/",
+  "/api/vision/",
 ];
 
 const REMOTE_PATH_PREFIXES = [

@@ -1,5 +1,5 @@
 from fractions import Fraction
-from typing import Sequence, TypeVar, Union, overload
+from typing import Sequence, TypeVar, overload
 
 from av.audio import _AudioCodecName
 from av.audio.stream import AudioStream
@@ -39,6 +39,12 @@ class OutputContainer(Container):
         options: dict[str, str] | None = None,
         **kwargs,
     ) -> VideoStream | AudioStream | SubtitleStream: ...
+    def add_mux_stream(
+        self,
+        codec_name: str,
+        rate: Fraction | int | None = None,
+        **kwargs,
+    ) -> Stream: ...
     def add_stream_from_template(
         self, template: _StreamT, opaque: bool | None = None, **kwargs
     ) -> _StreamT: ...

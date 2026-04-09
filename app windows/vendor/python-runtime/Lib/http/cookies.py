@@ -264,19 +264,17 @@ class Morsel(dict):
         "httponly" : "HttpOnly",
         "version"  : "Version",
         "samesite" : "SameSite",
-        "partitioned": "Partitioned",
     }
 
-    _reserved_defaults = dict.fromkeys(_reserved, "")
-
-    _flags = {'secure', 'httponly', 'partitioned'}
+    _flags = {'secure', 'httponly'}
 
     def __init__(self):
         # Set defaults
         self._key = self._value = self._coded_value = None
 
         # Set default attributes
-        dict.update(self, self._reserved_defaults)
+        for key in self._reserved:
+            dict.__setitem__(self, key, "")
 
     @property
     def key(self):

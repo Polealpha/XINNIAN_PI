@@ -1,7 +1,13 @@
-"""turtledemo/clock.py
+#!/usr/bin/env python3
+"""       turtle-example-suite:
+
+           turtledemo/clock.py
 
 Enhanced clock-program, showing date
-and time.
+and time
+  ------------------------------------
+   Press STOP to exit the program!
+  ------------------------------------
 """
 from turtle import *
 from datetime import datetime

@@ -9,15 +9,12 @@ expression.  They cache the compiled regular expressions for speed.
 The function translate(PATTERN) returns a regular expression
 corresponding to PATTERN.  (It does not compile it.)
 """
-
-import functools
-import itertools
 import os
 import posixpath
 import re
+import functools
 
-__all__ = ["filter", "filterfalse", "fnmatch", "fnmatchcase", "translate"]
-
+__all__ = ["filter", "fnmatch", "fnmatchcase", "translate"]
 
 def fnmatch(name, pat):
     """Test whether FILENAME matches PATTERN.
@@ -38,7 +35,6 @@ def fnmatch(name, pat):
     pat = os.path.normcase(pat)
     return fnmatchcase(name, pat)
 
-
 @functools.lru_cache(maxsize=32768, typed=True)
 def _compile_pattern(pat):
     if isinstance(pat, bytes):
@@ -48,7 +44,6 @@ def _compile_pattern(pat):
     else:
         res = translate(pat)
     return re.compile(res).match
-
 
 def filter(names, pat):
     """Construct a list from those elements of the iterable NAMES that match PAT."""
@@ -66,22 +61,6 @@ def filter(names, pat):
                 result.append(name)
     return result
 
-
-def filterfalse(names, pat):
-    """Construct a list from those elements of the iterable NAMES that do not match PAT."""
-    pat = os.path.normcase(pat)
-    match = _compile_pattern(pat)
-    if os.path is posixpath:
-        # normcase on posix is NOP. Optimize it away from the loop.
-        return list(itertools.filterfalse(match, names))
-
-    result = []
-    for name in names:
-        if match(os.path.normcase(name)) is None:
-            result.append(name)
-    return result
-
-
 def fnmatchcase(name, pat):
     """Test whether FILENAME matches PATTERN, including case.
 
@@ -98,32 +77,19 @@ def translate(pat):
     There is no way to quote meta-characters.
     """
 
-    parts, star_indices = _translate(pat, '*', '.')
-    return _join_translated_parts(parts, star_indices)
-
-
-_re_setops_sub = re.compile(r'([&~|])').sub
-_re_escape = functools.lru_cache(maxsize=512)(re.escape)
-
-
-def _translate(pat, star, question_mark):
+    STAR = object()
     res = []
     add = res.append
-    star_indices = []
-
     i, n = 0, len(pat)
     while i < n:
         c = pat[i]
         i = i+1
         if c == '*':
-            # store the position of the wildcard
-            star_indices.append(len(res))
-            add(star)
             # compress consecutive `*` into one
-            while i < n and pat[i] == '*':
-                i += 1
+            if (not res) or res[-1] is not STAR:
+                add(STAR)
         elif c == '?':
-            add(question_mark)
+            add('.')
         elif c == '[':
             j = i
             if j < n and pat[j] == '!':
@@ -162,6 +128,8 @@ def _translate(pat, star, question_mark):
                     # Hyphens that create ranges shouldn't be escaped.
                     stuff = '-'.join(s.replace('\\', r'\\').replace('-', r'\-')
                                      for s in chunks)
+                # Escape set operations (&&, ~~ and ||).
+                stuff = re.sub(r'([&~|])', r'\\\1', stuff)
                 i = j+1
                 if not stuff:
                     # Empty range: never match.
@@ -170,40 +138,48 @@ def _translate(pat, star, question_mark):
                     # Negated empty range: match any character.
                     add('.')
                 else:
-                    # Escape set operations (&&, ~~ and ||).
-                    stuff = _re_setops_sub(r'\\\1', stuff)
                     if stuff[0] == '!':
                         stuff = '^' + stuff[1:]
                     elif stuff[0] in ('^', '['):
                         stuff = '\\' + stuff
                     add(f'[{stuff}]')
         else:
-            add(_re_escape(c))
+            add(re.escape(c))
     assert i == n
-    return res, star_indices
 
-
-def _join_translated_parts(parts, star_indices):
-    if not star_indices:
-        return fr'(?s:{"".join(parts)})\z'
-    iter_star_indices = iter(star_indices)
-    j = next(iter_star_indices)
-    buffer = parts[:j]  # fixed pieces at the start
-    append, extend = buffer.append, buffer.extend
-    i = j + 1
-    for j in iter_star_indices:
-        # Now deal with STAR fixed STAR fixed ...
-        # For an interior `STAR fixed` pairing, we want to do a minimal
-        # .*? match followed by `fixed`, with no possibility of backtracking.
-        # Atomic groups ("(?>...)") allow us to spell that directly.
-        # Note: people rely on the undocumented ability to join multiple
-        # translate() results together via "|" to build large regexps matching
-        # "one of many" shell patterns.
-        append('(?>.*?')
-        extend(parts[i:j])
-        append(')')
-        i = j + 1
-    append('.*')
-    extend(parts[i:])
-    res = ''.join(buffer)
-    return fr'(?s:{res})\z'
+    # Deal with STARs.
+    inp = res
+    res = []
+    add = res.append
+    i, n = 0, len(inp)
+    # Fixed pieces at the start?
+    while i < n and inp[i] is not STAR:
+        add(inp[i])
+        i += 1
+    # Now deal with STAR fixed STAR fixed ...
+    # For an interior `STAR fixed` pairing, we want to do a minimal
+    # .*? match followed by `fixed`, with no possibility of backtracking.
+    # Atomic groups ("(?>...)") allow us to spell that directly.
+    # Note: people rely on the undocumented ability to join multiple
+    # translate() results together via "|" to build large regexps matching
+    # "one of many" shell patterns.
+    while i < n:
+        assert inp[i] is STAR
+        i += 1
+        if i == n:
+            add(".*")
+            break
+        assert inp[i] is not STAR
+        fixed = []
+        while i < n and inp[i] is not STAR:
+            fixed.append(inp[i])
+            i += 1
+        fixed = "".join(fixed)
+        if i == n:
+            add(".*")
+            add(fixed)
+        else:
+            add(f"(?>.*?{fixed})")
+    assert i == n
+    res = "".join(res)
+    return fr'(?s:{res})\Z'

@@ -1512,7 +1512,8 @@ const App: React.FC = () => {
           .toLowerCase();
         const reasonPattern = String(payload?.reason?.pattern || "").trim().toLowerCase();
         const allowManualFallback = contentSource === "manual_fallback" && reasonPattern === "manual";
-        if (contentSource !== "llm" && !allowManualFallback) {
+        const allowTemplateSource = contentSource === "template" || contentSource === "";
+        if (contentSource !== "llm" && !allowManualFallback && !allowTemplateSource) {
           return;
         }
         const plan: CarePlan = {
@@ -1524,6 +1525,7 @@ const App: React.FC = () => {
         };
         const deliveryMode = String(payload?.delivery_mode || "text").toLowerCase();
         if (deliveryMode === "text" || deliveryMode === "both") {
+          setCarePopup(plan);
           showSystemNotification("主动关怀", plan.text);
           if (plan.followup_question) {
             showSystemNotification("轻问一句", plan.followup_question);

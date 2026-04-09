@@ -4,7 +4,7 @@ from datetime import datetime, time as dt_time, timedelta
 import threading
 from collections import deque
 from pathlib import Path
-from typing import Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 from .clock import now_ms
 from .config import EngineConfig
@@ -133,6 +133,7 @@ class EmotionEngine:
             "peak_to_silence": config.policy.peak_to_silence,
             "expression_distress": config.policy.expression_distress,
             "expression_non_neutral_trigger": config.policy.expression_non_neutral_trigger,
+            "emotion_curve_shift": config.policy.emotion_curve_shift,
             "fusion": {"wV": config.fusion.wV, "wA": config.fusion.wA, "wT": config.fusion.wT},
             "templates": self._care_policy.templates if self._care_policy else {},
         }
@@ -430,6 +431,28 @@ class EmotionEngine:
                     timestamp_ms,
                     {"reason": expr_reason, "V": self._V, "A": self._A},
                 )
+            return
+
+        curve_signal = self._curve_shift_signal(timestamp_ms)
+        if curve_signal:
+            curve_decision = TriggerDecision(
+                should_trigger=True,
+                reason="EmotionCurveShift",
+                v=self._V,
+                a=self._A,
+                v_raw=v_raw,
+                a_raw=a_raw,
+                peak_v_count=decision.peak_v_count,
+                peak_a_count=decision.peak_a_count,
+            )
+            if self._allow_trigger(timestamp_ms):
+                self._handle_trigger(timestamp_ms, curve_decision)
+            else:
+                self._emit(
+                    "TriggerCandidate",
+                    timestamp_ms,
+                    {"reason": "EmotionCurveShift", "V": self._V, "A": self._A, "detail": curve_signal},
+                )
 
     def _expression_trigger_reason(self, timestamp_ms: int) -> Optional[str]:
         # Preferred trigger: any non-neutral expression (id != 0) with enough confidence.
@@ -482,6 +505,131 @@ class EmotionEngine:
         self._expr_distress_since_ms = timestamp_ms
         return "ExpressionDistress"
 
+    def _expression_distress_score(self, v_sub: Dict[str, float]) -> float:
+        expr_id = int(v_sub.get("expression_class_id", -1))
+        expr_conf = float(v_sub.get("expression_confidence", 0.0))
+        expr_risk = float(v_sub.get("expression_risk", 0.0))
+        if expr_id not in {3, 4, 5, 6, 7}:
+            return 0.0
+        return max(0.0, min(1.0, max(expr_conf, expr_risk)))
+
+    def _curve_shift_signal(self, timestamp_ms: int) -> Optional[Dict[str, object]]:
+        cfg = dict(self._policy_cfg.get("emotion_curve_shift", {}) or {})
+        if not bool(cfg.get("enabled", True)):
+            return None
+
+        window_ms = max(
+            int(float(cfg.get("window_sec", 120)) * 1000),
+            self._config.runtime.risk_update_interval_ms * 6,
+        )
+        min_span_ms = max(
+            int(float(cfg.get("min_span_sec", 18)) * 1000),
+            self._config.runtime.risk_update_interval_ms * 4,
+        )
+        min_points = max(6, int(cfg.get("min_points", 8)))
+        baseline_points = max(3, int(cfg.get("baseline_points", 6)))
+        recent_points = max(3, int(cfg.get("recent_points", 4)))
+        min_current_score = float(cfg.get("min_current_score", 0.46))
+        delta_thr = float(cfg.get("delta_thr", 0.14))
+        jump_thr = float(cfg.get("jump_thr", 0.18))
+        volatility_thr = float(cfg.get("volatility_thr", 0.045))
+        negative_expr_min_conf = float(cfg.get("negative_expr_min_confidence", 0.48))
+        care_severity_thr = float(cfg.get("care_severity_thr", 0.8))
+        negative_ids = {
+            int(v) for v in (cfg.get("negative_ids", [3, 4, 5, 6, 7]) or [3, 4, 5, 6, 7])
+        }
+
+        history_frames = [fr for fr in self._history if timestamp_ms - fr.ts_ms <= window_ms]
+        current_frame = RiskFrame(
+            ts_ms=timestamp_ms,
+            V=self._V,
+            A=self._A,
+            T=self._T,
+            V_sub=dict(self._last_v_sub),
+            A_sub=dict(self._last_a_sub),
+            T_sub=dict(self._last_t_sub),
+        )
+        series = history_frames + [current_frame]
+        if len(series) < min_points:
+            return None
+        if series[-1].ts_ms - series[0].ts_ms < min_span_ms:
+            return None
+
+        scored: List[float] = []
+        recent_negative_frames = 0
+        baseline_negative = False
+        for idx, fr in enumerate(series):
+            expr_id = int(fr.V_sub.get("expression_class_id", -1))
+            expr_conf = float(fr.V_sub.get("expression_confidence", 0.0))
+            expr_score = self._expression_distress_score(fr.V_sub)
+            score = max(0.0, min(1.0, 0.58 * float(fr.V) + 0.22 * float(fr.A) + 0.20 * expr_score))
+            scored.append(score)
+            is_negative_expr = expr_id in negative_ids and expr_conf >= negative_expr_min_conf
+            if idx >= len(series) - recent_points and is_negative_expr:
+                recent_negative_frames += 1
+            if idx < len(series) - recent_points and is_negative_expr:
+                baseline_negative = True
+
+        baseline_pool = scored[:-recent_points] if len(scored) > recent_points else scored[:-1]
+        if len(baseline_pool) < 2:
+            return None
+        baseline_slice = baseline_pool[-baseline_points:]
+        recent_slice = scored[-recent_points:]
+
+        baseline_avg = sum(baseline_slice) / max(1, len(baseline_slice))
+        recent_avg = sum(recent_slice) / max(1, len(recent_slice))
+        current_score = scored[-1]
+        delta = recent_avg - baseline_avg
+        jump = current_score - min(baseline_slice)
+        recent_diffs = [
+            abs(recent_slice[idx] - recent_slice[idx - 1]) for idx in range(1, len(recent_slice))
+        ]
+        volatility = sum(recent_diffs) / max(1, len(recent_diffs))
+
+        current_expr_id = int(self._last_v_sub.get("expression_class_id", -1))
+        current_expr_conf = float(self._last_v_sub.get("expression_confidence", 0.0))
+        current_negative = current_expr_id in negative_ids and current_expr_conf >= negative_expr_min_conf
+
+        if current_score < min_current_score:
+            return None
+        if delta < delta_thr and jump < jump_thr:
+            return None
+        if volatility < volatility_thr and recent_negative_frames < 2 and not current_negative:
+            return None
+
+        delta_score = min(1.0, max(0.0, delta) / max(delta_thr * 2.0, 1e-6))
+        jump_score = min(1.0, max(0.0, jump) / max(jump_thr * 2.0, 1e-6))
+        volatility_score = min(1.0, max(0.0, volatility) / max(volatility_thr * 2.0, 1e-6))
+        severity = min(
+            1.0,
+            0.42 * current_score
+            + 0.23 * delta_score
+            + 0.20 * jump_score
+            + 0.10 * volatility_score
+            + 0.05 * (1.0 if current_negative and not baseline_negative else 0.0),
+        )
+        level = "care"
+        if severity < care_severity_thr and current_score < max(min_current_score + 0.18, 0.72):
+            level = "nudge"
+
+        return {
+            "pattern": "emotion_curve_shift",
+            "severity": round(severity, 3),
+            "level": level,
+            "explain": {
+                "window_sec": round((series[-1].ts_ms - series[0].ts_ms) / 1000.0, 1),
+                "baseline_score": round(baseline_avg, 3),
+                "recent_score": round(recent_avg, 3),
+                "delta": round(delta, 3),
+                "jump": round(jump, 3),
+                "volatility": round(volatility, 3),
+                "current_score": round(current_score, 3),
+                "current_expression": self._expression_label_from_id(current_expr_id),
+                "current_expression_confidence": round(current_expr_conf, 3),
+                "negative_expression_frames": int(recent_negative_frames),
+            },
+        }
+
     def _handle_trigger(self, timestamp_ms: int, decision) -> None:
         self._cooldown_until_ms = timestamp_ms + self._config.trigger.cooldown_min * 60 * 1000
         self._daily_trigger_count += 1
@@ -496,6 +644,8 @@ class EmotionEngine:
             rollback_sec = int(self._config.trigger.rollback_sec)
             if str(decision.reason) == "ExpressionNonNeutral":
                 rollback_sec = 30
+            elif str(decision.reason) == "EmotionCurveShift":
+                rollback_sec = 45
             if rollback_sec > 0:
                 pcm, start_ts, end_ts = self._ring_buffer.get_last_ms(rollback_sec * 1000)
                 if pcm:
@@ -578,8 +728,22 @@ class EmotionEngine:
                 s_final=s_final,
                 decision=decision,
             )
+        if (
+            str(decision.reason) == "EmotionCurveShift"
+            and (not care_plan or care_plan.decision not in {"NUDGE", "CARE", "GUARD"})
+        ):
+            care_plan = self._build_curve_shift_plan(
+                timestamp_ms=timestamp_ms,
+                frame=frame,
+                transcript=transcript,
+                summary=summary,
+                tags=tags,
+                t_score=t_score,
+                s_final=s_final,
+                decision=decision,
+            )
         if care_plan and care_plan.decision in {"NUDGE", "CARE", "GUARD"}:
-            if not self._is_llm_sourced(care_plan):
+            if not self._allow_care_plan_delivery(care_plan):
                 self._emit(
                     "CarePlanSkipped",
                     timestamp_ms,
@@ -821,6 +985,113 @@ class EmotionEngine:
             event_type="EXPRESSION_NON_NEUTRAL",
         )
 
+    def _build_curve_shift_plan(
+        self,
+        timestamp_ms: int,
+        frame: RiskFrame,
+        transcript: str,
+        summary: str,
+        tags: List[str],
+        t_score: Optional[float],
+        s_final: float,
+        decision,
+    ) -> CarePlan:
+        signal = self._curve_shift_signal(timestamp_ms) or {
+            "pattern": "emotion_curve_shift",
+            "severity": max(0.0, min(1.0, s_final)),
+            "level": "care" if s_final >= 0.72 else "nudge",
+            "explain": {},
+        }
+        explain = signal.get("explain") if isinstance(signal.get("explain"), dict) else {}
+        expr_id = int(frame.V_sub.get("expression_class_id", -1))
+        expr_conf = float(frame.V_sub.get("expression_confidence", 0.0))
+        expr_label = self._expression_label_from_id(expr_id)
+        current_label = str(explain.get("current_expression", expr_label) or expr_label)
+        emotion_label = {
+            "sadness": "低落",
+            "anger": "烦躁",
+            "fear": "紧张",
+            "disgust": "不适",
+            "contempt": "别扭",
+            "surprise": "起伏",
+            "happiness": "开心",
+            "neutral": "波动",
+            "unknown": "波动",
+        }.get(current_label, "波动")
+        default_text = f"我注意到你这会儿情绪起伏明显了些，像是有点{emotion_label}。我在，要不要先慢一下？"
+        followup = ""
+        style = "warm"
+        llm_sourced = False
+        if self._llm and self._llm.enabled:
+            context = {
+                "input_type": "emotion_curve_shift",
+                "scene": self._config.policy.scene,
+                "decision": "CARE" if str(signal.get("level", "nudge")) == "care" else "NUDGE",
+                "level": 2 if str(signal.get("level", "nudge")) == "care" else 1,
+                "expression_modality": {
+                    "label": expr_label,
+                    "confidence": expr_conf,
+                    "note": "这是算法观测到的情绪信号，不是用户原话",
+                },
+                "risk": {
+                    "V": decision.v,
+                    "A": decision.a,
+                    "T": t_score,
+                    "S": s_final,
+                    "pattern": "emotion_curve_shift",
+                },
+                "risk_detail": {
+                    "V_sub": frame.V_sub,
+                    "A_sub": frame.A_sub,
+                    "T_sub": frame.T_sub,
+                    "curve_shift": signal,
+                },
+                "tags": tags + ["curve:emotion_shift", f"expr:{expr_label}"],
+                "transcript_summary": summary or transcript[:120],
+                "constraints": (
+                    "这是主动关怀，原因是近期情绪曲线明显上扬或波动加剧；"
+                    "回复<=100字；先接住状态，再给一个低打扰建议；最多一个问题；不诊断，不说教。"
+                ),
+            }
+            reply = self._llm.generate_care_reply(context) or {}
+            llm_text = str(reply.get("text", "")).strip()
+            if llm_text:
+                default_text = llm_text
+                llm_sourced = True
+            followup = str(reply.get("followup_question", "")).strip()
+            style = str(reply.get("style", "warm")).strip() or "warm"
+        steps = [ScriptStep("SAY", {"text": default_text, "voice": "warm", "priority": 2})]
+        if followup:
+            steps.append(ScriptStep("WAIT", {"duration_ms": 700}))
+            steps.append(ScriptStep("SAY", {"text": followup, "voice": "warm", "priority": 1}))
+        return CarePlan(
+            text=default_text,
+            style=style,
+            motion={},
+            emo={},
+            followup_question=followup,
+            reason={
+                "pattern": "emotion_curve_shift",
+                "severity": signal.get("severity"),
+                "level": signal.get("level"),
+                "explain": explain,
+                "V": decision.v,
+                "A": decision.a,
+                "T": t_score,
+                "S": s_final,
+            },
+            policy={
+                "source": "emotion_curve_shift",
+                "content_source": "llm" if llm_sourced else "template",
+            },
+            decision="CARE" if str(signal.get("level", "nudge")) == "care" else "NUDGE",
+            level=2 if str(signal.get("level", "nudge")) == "care" else 1,
+            steps=steps,
+            cooldown_min=self._config.trigger.cooldown_min,
+            record_event=True,
+            event_type="EMOTION_CURVE_SHIFT",
+        )
+
     def _maybe_llm_rewrite(
         self,
         care_plan: Optional[CarePlan],
@@ -901,6 +1172,15 @@ class EmotionEngine:
             return False
         policy = care_plan.policy if isinstance(care_plan.policy, dict) else {}
         return str(policy.get("content_source", "")).strip().lower() == "llm"
+
+    def _allow_care_plan_delivery(self, care_plan: Optional[CarePlan]) -> bool:
+        if not care_plan:
+            return False
+        if self._is_llm_sourced(care_plan):
+            return True
+        policy = care_plan.policy if isinstance(care_plan.policy, dict) else {}
+        content_source = str(policy.get("content_source", "")).strip().lower()
+        return content_source in {"template", "manual_fallback", ""}
 
     def _allow_trigger(self, timestamp_ms: int) -> bool:
         if self._mode != "normal":
