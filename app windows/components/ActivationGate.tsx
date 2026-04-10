@@ -830,9 +830,10 @@ export function ActivationGate({ onActivated }: ActivationGateProps) {
 
   if (booting) {
     return (
-      <div className="flex min-h-screen items-center justify-center bg-[#0a0a10] text-white">
-        <div className="flex items-center gap-3 rounded-2xl border border-white/10 bg-white/5 px-6 py-4">
-          <LoaderCircle className="h-5 w-5 animate-spin" />
+      <div className="relative flex min-h-screen items-center justify-center overflow-hidden bg-[#09111d] px-6 text-white">
+        <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_18%_20%,rgba(129,140,248,0.16),transparent_24%),radial-gradient(circle_at_82%_12%,rgba(103,232,249,0.1),transparent_18%),linear-gradient(180deg,#09111d_0%,#0a1220_50%,#090f19_100%)]" />
+        <div className="relative flex items-center gap-3 rounded-[1.8rem] border border-white/10 bg-[linear-gradient(180deg,rgba(20,28,46,0.8),rgba(10,15,28,0.92))] px-7 py-5 shadow-[0_24px_60px_rgba(3,8,20,0.3)] backdrop-blur-[18px]">
+          <LoaderCircle className="h-5 w-5 animate-spin text-sky-300" />
           正在加载首次激活状态...
         </div>
       </div>
@@ -840,26 +841,29 @@ export function ActivationGate({ onActivated }: ActivationGateProps) {
   }
 
   return (
-    <div className="h-screen overflow-y-auto overflow-x-hidden bg-[#0a0a10] px-10 py-9 text-white">
-      <div className="mx-auto flex max-w-[1240px] flex-col gap-8 pb-16">
-        <section className="rounded-[36px] bg-[linear-gradient(180deg,rgba(27,24,39,0.98),rgba(20,18,30,0.96))] px-10 py-8 shadow-[0_22px_72px_rgba(5,5,12,0.28),inset_0_0_0_1px_rgba(167,139,250,0.12),inset_0_1px_0_rgba(255,255,255,0.03)]">
+    <div className="relative h-screen overflow-y-auto overflow-x-hidden bg-[#09111d] px-8 py-8 text-white">
+      <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_12%_14%,rgba(129,140,248,0.14),transparent_24%),radial-gradient(circle_at_84%_10%,rgba(103,232,249,0.08),transparent_18%),linear-gradient(180deg,#09111d_0%,#0b1220_54%,#090f19_100%)]" />
+      <div className="relative mx-auto flex max-w-[1280px] flex-col gap-7 pb-16">
+        <section className="relative overflow-hidden rounded-[2.2rem] border border-white/10 bg-[linear-gradient(180deg,rgba(18,25,41,0.84),rgba(10,15,28,0.94))] px-9 py-8 shadow-[0_26px_72px_rgba(3,8,20,0.3),inset_0_1px_0_rgba(255,255,255,0.05)] backdrop-blur-[18px]">
+          <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_top_left,rgba(129,140,248,0.16),transparent_28%),linear-gradient(180deg,rgba(255,255,255,0.03),transparent_30%)]" />
           <div className="flex items-start justify-between gap-6">
-            <div className="flex items-start gap-5">
-              <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-emerald-500/10 text-emerald-300">
+            <div className="relative z-[1] flex items-start gap-5">
+              <div className="flex h-14 w-14 items-center justify-center rounded-[1.2rem] border border-white/10 bg-emerald-400/10 text-emerald-300 shadow-[0_14px_30px_rgba(16,185,129,0.12)]">
                 <ShieldCheck className="h-7 w-7" />
               </div>
               <div>
-                <h1 className="text-[42px] font-black leading-none tracking-tight">首次激活</h1>
-                <div className="mt-3 text-[18px] font-semibold text-white">{stepTitle}</div>
-                <p className="mt-2 max-w-[760px] text-[18px] leading-9 text-slate-200">{stepDescription}</p>
+                <div className="text-[10px] font-black uppercase tracking-[0.34em] text-slate-500">First Activation</div>
+                <h1 className="mt-3 text-[42px] font-black leading-none tracking-[-0.05em] text-white">首次激活</h1>
+                <div className="mt-4 text-[17px] font-semibold text-white">{stepTitle}</div>
+                <p className="mt-2 max-w-[760px] text-[17px] leading-8 text-slate-300">{stepDescription}</p>
               </div>
             </div>
-            <div className="flex flex-wrap items-center gap-3">
+            <div className="relative z-[1] flex flex-wrap items-center gap-3">
               {canGoBack ? (
                 <button
                   type="button"
                   onClick={handleStepBack}
-                  className="inline-flex rounded-[22px] border border-white/15 bg-white/5 px-5 py-3 text-[15px] font-semibold text-white transition hover:bg-white/10"
+                  className="inline-flex rounded-[1.25rem] border border-white/12 bg-white/[0.04] px-5 py-3 text-[15px] font-semibold text-white transition hover:bg-white/[0.08]"
                 >
                   <span className="inline-flex items-center gap-2">
                     <ArrowLeft className="h-4 w-4" />
@@ -872,7 +876,7 @@ export function ActivationGate({ onActivated }: ActivationGateProps) {
                   type="button"
                   onClick={handleFinishActivation}
                   disabled={!canFinish || finishing}
-                  className="rounded-[28px] bg-white/20 px-7 py-5 text-[16px] font-semibold text-white transition enabled:hover:bg-white/30 disabled:cursor-not-allowed disabled:opacity-45"
+                  className="rounded-[1.5rem] border border-white/10 bg-white/[0.1] px-7 py-4 text-[16px] font-semibold text-white transition enabled:hover:bg-white/[0.16] disabled:cursor-not-allowed disabled:opacity-45"
                 >
                   {finishing ? "正在进入桌面..." : "完成激活并进入桌面"}
                 </button>
@@ -918,9 +922,9 @@ export function ActivationGate({ onActivated }: ActivationGateProps) {
         ) : null}
 
         {activeStep === 1 ? (
-          <section className="mx-auto w-full max-w-[760px] rounded-[32px] bg-[linear-gradient(180deg,rgba(24,21,35,0.98),rgba(18,16,28,0.96))] p-7 shadow-[0_18px_56px_rgba(5,5,12,0.24),inset_0_0_0_1px_rgba(167,139,250,0.1),inset_0_1px_0_rgba(255,255,255,0.025)]">
+          <section className="mx-auto w-full max-w-[760px] rounded-[2rem] border border-white/8 bg-[linear-gradient(180deg,rgba(18,25,41,0.88),rgba(10,15,28,0.96))] p-7 shadow-[0_22px_60px_rgba(3,8,20,0.24),inset_0_1px_0_rgba(255,255,255,0.04)] backdrop-blur-[16px]">
             <div className="mb-6 flex items-center gap-3 text-[18px] font-bold">
-              <UserRound className="h-5 w-5 text-fuchsia-300" />
+              <UserRound className="h-5 w-5 text-sky-300" />
               1. 名字确认
             </div>
             <p className="mb-6 text-[16px] leading-8 text-slate-300">
@@ -931,26 +935,26 @@ export function ActivationGate({ onActivated }: ActivationGateProps) {
                 value={preferredName}
                 onChange={(event) => setPreferredName(event.target.value)}
                 placeholder="你的名字"
-                className="w-full rounded-[22px] border border-white/6 bg-[#1b1828] px-5 py-4 text-[18px] font-semibold text-white outline-none placeholder:text-slate-500 ring-1 ring-inset ring-violet-400/6"
+                className="w-full rounded-[1.4rem] border border-white/8 bg-white/[0.04] px-5 py-4 text-[18px] font-semibold text-white outline-none placeholder:text-slate-500"
               />
               <textarea
                 value={introTranscript}
                 onChange={(event) => setIntroTranscript(event.target.value)}
                 rows={5}
                 placeholder="一句自然介绍，例如：我叫京亮，平时需要你提醒我休息，也希望你跟我聊聊天。"
-                className="w-full rounded-[26px] border border-white/6 bg-[#1b1828] px-5 py-4 text-[16px] leading-8 text-white outline-none placeholder:text-slate-500 ring-1 ring-inset ring-violet-400/6"
+                className="w-full rounded-[1.6rem] border border-white/8 bg-white/[0.04] px-5 py-4 text-[16px] leading-8 text-white outline-none placeholder:text-slate-500"
               />
               <button
                 type="button"
                 onClick={handleConfirmIdentity}
                 disabled={busy || startingQuestion}
-                className="w-full rounded-[24px] bg-fuchsia-600 px-6 py-4 text-[18px] font-bold text-white transition enabled:hover:bg-fuchsia-500 disabled:cursor-not-allowed disabled:opacity-50"
+                className="w-full rounded-[1.5rem] bg-white px-6 py-4 text-[18px] font-bold text-slate-950 transition enabled:hover:brightness-[1.02] disabled:cursor-not-allowed disabled:opacity-50"
               >
                 {startingQuestion ? "正在生成第一题..." : "确认名字并开始正式建档"}
               </button>
             </div>
 
-            <div className="mt-6 rounded-[24px] border border-white/6 bg-white/[0.035] p-5 text-[15px] leading-8 text-slate-300 shadow-[inset_0_1px_0_rgba(255,255,255,0.025)]">
+            <div className="mt-6 rounded-[1.6rem] border border-white/8 bg-white/[0.035] p-5 text-[15px] leading-8 text-slate-300 shadow-[inset_0_1px_0_rgba(255,255,255,0.025)]">
               <div className="font-semibold text-white">当前确认姓名：{preferredName.trim() || "未填写"}</div>
               <div className="mt-3">
                 后续结果会直接写入 OpenClaw 本地记忆，普通聊天和主动关怀都会读取同一份画像，而不是再维护一套独立的人设切换。
@@ -960,10 +964,10 @@ export function ActivationGate({ onActivated }: ActivationGateProps) {
         ) : null}
 
         {activeStep === 2 ? (
-          <section className="mx-auto w-full max-w-[1320px] rounded-[32px] bg-[linear-gradient(180deg,rgba(24,21,35,0.98),rgba(18,16,28,0.96))] p-7 shadow-[0_20px_64px_rgba(5,5,12,0.26),inset_0_0_0_1px_rgba(167,139,250,0.1),inset_0_1px_0_rgba(255,255,255,0.025)] xl:p-9">
+          <section className="mx-auto w-full max-w-[1320px] rounded-[2rem] border border-white/8 bg-[linear-gradient(180deg,rgba(18,25,41,0.9),rgba(10,15,28,0.96))] p-7 shadow-[0_24px_64px_rgba(3,8,20,0.26),inset_0_1px_0_rgba(255,255,255,0.04)] backdrop-blur-[16px] xl:p-9">
             <div className="mb-6 flex items-center justify-between gap-4">
               <div className="flex items-center gap-3 text-[18px] font-bold">
-                <Brain className="h-5 w-5 text-violet-300" />
+                <Brain className="h-5 w-5 text-sky-300" />
                 2. 聊天式正式建档
               </div>
               <div className="rounded-full border border-white/15 px-4 py-2 text-sm text-slate-300">
@@ -1010,10 +1014,10 @@ export function ActivationGate({ onActivated }: ActivationGateProps) {
             ) : null}
 
             {currentQuestion ? (
-              <div className="mt-6 rounded-[28px] border border-fuchsia-500/30 bg-[linear-gradient(180deg,rgba(168,85,247,0.14),rgba(91,33,182,0.08))] p-6 shadow-[0_18px_60px_rgba(76,29,149,0.18)]">
+              <div className="mt-6 rounded-[1.8rem] border border-sky-300/18 bg-[linear-gradient(180deg,rgba(125,211,252,0.09),rgba(30,41,59,0.14))] p-6 shadow-[0_18px_48px_rgba(14,165,233,0.08)]">
                 <div className="flex flex-wrap items-start justify-between gap-4">
                   <div>
-                    <div className="text-sm font-semibold text-fuchsia-100/80">当前问题</div>
+                    <div className="text-sm font-semibold text-sky-100/80">当前问题</div>
                     <div className="mt-2 max-w-[760px] text-[28px] font-black leading-[1.5] text-white">{currentQuestion}</div>
                   </div>
                   <div className="rounded-2xl border border-white/6 bg-black/15 px-4 py-3 text-sm leading-7 text-slate-300 shadow-[inset_0_1px_0_rgba(255,255,255,0.025)]">
@@ -1024,7 +1028,7 @@ export function ActivationGate({ onActivated }: ActivationGateProps) {
                 </div>
                 {quickOptions.length > 0 ? (
                   <div className="mt-6 border-t border-white/10 pt-5">
-                    <div className="text-xs font-semibold uppercase tracking-[0.16em] text-fuchsia-100/60">可以先点一个，再按你的话改</div>
+                    <div className="text-xs font-semibold uppercase tracking-[0.16em] text-sky-100/60">可以先点一个，再按你的话改</div>
                     <div className="mt-3 flex flex-wrap gap-3">
                       {quickOptions.map((option) => (
                         <button
@@ -1032,7 +1036,7 @@ export function ActivationGate({ onActivated }: ActivationGateProps) {
                           type="button"
                           onClick={() => handlePickQuickOption(option)}
                           disabled={busy || startingQuestion || Boolean(pendingTurn)}
-                          className="rounded-full border border-white/15 bg-white/8 px-4 py-2 text-sm text-slate-100 transition hover:border-fuchsia-300/40 hover:bg-fuchsia-400/12 disabled:cursor-not-allowed disabled:opacity-50"
+                          className="rounded-full border border-white/15 bg-white/8 px-4 py-2 text-sm text-slate-100 transition hover:border-sky-300/40 hover:bg-sky-400/12 disabled:cursor-not-allowed disabled:opacity-50"
                         >
                           {option}
                         </button>
@@ -1082,7 +1086,7 @@ export function ActivationGate({ onActivated }: ActivationGateProps) {
                   type="button"
                   onClick={handleSubmitTurn}
                   disabled={!canSubmitTurn}
-                  className="rounded-[22px] bg-white px-6 py-4 text-[18px] font-bold text-slate-950 transition enabled:hover:bg-slate-200 disabled:cursor-not-allowed disabled:opacity-50"
+                  className="rounded-[1.4rem] bg-white px-6 py-4 text-[18px] font-bold text-slate-950 transition enabled:hover:brightness-[1.02] disabled:cursor-not-allowed disabled:opacity-50"
                 >
                   {pendingTurn ? "正在同步这一轮回答..." : busy ? "正在提交..." : "提交这一轮回答"}
                 </button>
@@ -1140,7 +1144,7 @@ export function ActivationGate({ onActivated }: ActivationGateProps) {
         ) : null}
 
         {activeStep === 3 ? (
-          <section className="mx-auto w-full max-w-[1320px] rounded-[32px] bg-[linear-gradient(180deg,rgba(24,21,35,0.98),rgba(18,16,28,0.96))] p-7 shadow-[0_20px_64px_rgba(5,5,12,0.26),inset_0_0_0_1px_rgba(167,139,250,0.1),inset_0_1px_0_rgba(255,255,255,0.025)] xl:p-9">
+          <section className="mx-auto w-full max-w-[1320px] rounded-[2rem] border border-white/8 bg-[linear-gradient(180deg,rgba(18,25,41,0.9),rgba(10,15,28,0.96))] p-7 shadow-[0_24px_64px_rgba(3,8,20,0.26),inset_0_1px_0_rgba(255,255,255,0.04)] backdrop-blur-[16px] xl:p-9">
             <div className="mb-6 flex items-center gap-3 text-[18px] font-bold">
               <CheckCircle2 className="h-5 w-5 text-emerald-300" />
               3. 结果与记忆

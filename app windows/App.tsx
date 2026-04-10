@@ -33,7 +33,6 @@ import {
   Camera,
   Settings,
   Terminal,
-  Activity,
   Palette,
   X,
   UserRound,
@@ -2516,7 +2515,7 @@ const App: React.FC = () => {
             onPointerLeave={() => (window as any).desktop?.setFloatInteractive?.(false)}
             className={`float-widget-button ${floatDragging ? "float-widget-button--dragging" : ""}`}
           >
-            <img src={APP_ICON_URL} alt="app icon" className="w-full h-full object-cover rounded-[16px]" />
+            <img src={APP_ICON_URL} alt="app icon" className="h-[82px] w-[82px] object-contain" />
           </button>
         </div>
       </div>
@@ -2624,36 +2623,38 @@ const App: React.FC = () => {
 
   if (shouldBlockDesktop) {
     return (
-      <div className="w-screen h-screen bg-[#070b14] flex items-center justify-center px-8 text-slate-200">
-        <div className="w-full max-w-4xl rounded-[36px] border border-white/10 bg-white/[0.04] p-10 shadow-[0_30px_120px_rgba(0,0,0,0.45)]">
-          <div className="flex items-start justify-between gap-8">
+      <div className="relative flex h-screen w-screen items-center justify-center overflow-hidden px-8 text-slate-200">
+        <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_16%_18%,rgba(129,140,248,0.16),transparent_24%),radial-gradient(circle_at_84%_12%,rgba(103,232,249,0.1),transparent_18%),linear-gradient(180deg,#09111d_0%,#0a1220_50%,#090f19_100%)]" />
+        <div className="relative w-full max-w-4xl overflow-hidden rounded-[2.3rem] border border-white/10 bg-[linear-gradient(180deg,rgba(18,25,41,0.82),rgba(10,15,28,0.95))] p-10 shadow-[0_34px_110px_rgba(3,8,20,0.38),inset_0_1px_0_rgba(255,255,255,0.06)] backdrop-blur-[20px]">
+          <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_top_left,rgba(129,140,248,0.18),transparent_28%),linear-gradient(180deg,rgba(255,255,255,0.03),transparent_28%)]" />
+          <div className="relative flex items-start justify-between gap-8">
             <div>
-              <div className="text-[13px] font-black uppercase tracking-[0.5em] text-cyan-300/70">Engine Boot</div>
-              <h1 className="mt-4 text-4xl font-black text-white">正在连接本地引擎</h1>
+              <div className="text-[11px] font-black uppercase tracking-[0.42em] text-slate-500">Engine Boot</div>
+              <h1 className="mt-4 text-4xl font-black tracking-[-0.05em] text-white">正在连接本地引擎</h1>
               <p className="mt-4 max-w-2xl text-lg leading-8 text-slate-300">
                 登录已经完成。当前会在进入主桌面前先确认本地 backend、OpenClaw gateway 和 provider 全部就绪，避免再出现进入桌面后
                 ENGINE OFFLINE 或固定模板回复的假可用状态。
               </p>
             </div>
-            <div className="h-16 w-16 rounded-2xl border border-cyan-400/30 bg-cyan-400/10 flex items-center justify-center text-cyan-200 text-2xl font-black">
+            <div className="flex h-16 w-16 items-center justify-center rounded-[1.2rem] border border-sky-300/20 bg-sky-400/10 text-2xl font-black text-sky-200 shadow-[0_14px_30px_rgba(56,189,248,0.12)]">
               {runtimeChecked ? "AI" : "..."}
             </div>
           </div>
 
-          <div className="mt-10 grid grid-cols-1 gap-4 md:grid-cols-3">
+          <div className="relative mt-10 grid grid-cols-1 gap-4 md:grid-cols-3">
             {[
               { label: "backend", value: backendStatusLabel },
               { label: "gateway", value: gatewayStatusLabel },
               { label: "provider", value: providerStatusLabel },
             ].map((item) => (
-              <div key={item.label} className="rounded-[24px] border border-white/10 bg-white/[0.03] px-5 py-5">
+              <div key={item.label} className="rounded-[1.6rem] border border-white/10 bg-white/[0.035] px-5 py-5 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)]">
                 <div className="text-[11px] font-black uppercase tracking-[0.35em] text-slate-500">{item.label}</div>
                 <div className="mt-3 text-2xl font-black text-white">{item.value}</div>
               </div>
             ))}
           </div>
 
-          <div className="mt-8 rounded-[24px] border border-amber-300/20 bg-amber-400/10 px-6 py-5 text-[16px] leading-8 text-amber-50">
+          <div className="relative mt-8 rounded-[1.6rem] border border-amber-300/18 bg-amber-400/10 px-6 py-5 text-[16px] leading-8 text-amber-50 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)]">
             {startupBlockingReason}
           </div>
         </div>
@@ -2771,7 +2772,7 @@ const App: React.FC = () => {
         </div>
       )}
 
-      <nav className="ios-sidebar w-24 flex flex-col items-center py-10 gap-8 z-20">
+      <nav className="ios-sidebar w-28 flex flex-col items-center py-8 gap-6 z-20">
         <NavButton
           active={activeTab === Tab.DASHBOARD}
           onClick={() => setActiveTab(Tab.DASHBOARD)}
@@ -2798,11 +2799,6 @@ const App: React.FC = () => {
           icon={Camera}
         />
         <NavButton
-          active={activeTab === Tab.DEVICE}
-          onClick={() => setActiveTab(Tab.DEVICE)}
-          icon={Activity}
-        />
-        <NavButton
           active={activeTab === Tab.CONTROL}
           onClick={() => void openSettingsFromDesktop()}
           icon={Settings}
@@ -2821,31 +2817,36 @@ const App: React.FC = () => {
       </nav>
 
       <section className="flex-1 flex flex-col px-10 pb-10 relative min-h-0">
-        <header className="h-32 flex items-center justify-between" style={{ WebkitAppRegion: "drag" }}>
-          <div className="flex items-center gap-4 animate-pop-in">
-            <div className="text-indigo-400 relative ios-soft-float">
-              <img src={APP_ICON_URL} alt="app icon" className="w-7 h-7 object-cover rounded-xl opacity-95" />
-              <div className="absolute -top-1 -right-1 w-1.5 h-1.5 bg-indigo-400 rounded-full animate-pulse"></div>
+        <header className="pt-6 pb-5" style={{ WebkitAppRegion: "drag" }}>
+          <div className="ios-header-shell relative flex items-center justify-between px-6 py-5">
+            <div className="relative z-[1] flex items-center gap-4 animate-pop-in">
+              <img
+                src={APP_ICON_URL}
+                alt="app icon"
+                className="h-11 w-11 object-contain"
+              />
+              <div className="flex flex-col">
+                <span className="text-[10px] font-black uppercase tracking-[0.24em] text-white/40 leading-none">
+                  情绪陪伴桌面
+                </span>
+                <h1 className="mt-2 text-[1.45rem] font-black tracking-[-0.04em] text-white leading-none">
+                  心念双灵
+                </h1>
+                <span className="mt-2 text-[11px] font-semibold tracking-[0.04em] text-slate-400">
+                  更清晰的情绪状态、趋势与陪伴提醒
+                </span>
+              </div>
             </div>
-            <div className="flex flex-col">
-              <h1 className="text-[12px] font-black uppercase tracking-[0.45em] text-white/55 leading-none">
-                心念双灵
-              </h1>
-              <span className="text-[9px] font-semibold tracking-[0.32em] text-white/20 mt-1">
-                EMORESONANCE V2.5
-              </span>
-            </div>
-          </div>
 
-          <div className="flex items-center gap-6" style={{ WebkitAppRegion: "no-drag" }}>
-            <div className="theme-pill flex items-center gap-3 px-4 py-2 backdrop-blur-xl rounded-full">
+            <div className="relative z-[1] flex items-center gap-3" style={{ WebkitAppRegion: "no-drag" }}>
+            <div className="theme-pill flex items-center gap-3 px-4 py-2.5 rounded-full">
               <div className={`status-dot animate-pulse ${engineOnline ? "" : "status-dot--offline"}`}></div>
               <span className="text-[9px] font-black uppercase tracking-widest">
-                {engineOnline ? "ENGINE ONLINE" : "ENGINE OFFLINE"}
+                {engineOnline ? "引擎在线" : "引擎离线"}
               </span>
             </div>
             <div
-              className={`theme-pill flex items-center gap-2 px-3 py-2 backdrop-blur-xl rounded-full border ${
+              className={`theme-pill flex items-center gap-2 px-3 py-2.5 rounded-full border ${
                 voiceStateActive ? "border-cyan-400/40 text-cyan-200" : "border-white/10 text-slate-400"
               }`}
             >
@@ -2854,12 +2855,12 @@ const App: React.FC = () => {
                   voiceStateActive ? "bg-cyan-300 animate-pulse" : "bg-slate-500"
                 }`}
               />
-              <span className="text-[9px] font-black uppercase tracking-widest">VOICE {voiceStateLabel}</span>
+              <span className="text-[9px] font-black uppercase tracking-widest">语音 {voiceStateLabel}</span>
             </div>
             <div className="relative z-40" ref={themeMenuRef}>
               <button
                 onClick={toggleThemeMenu}
-                className="theme-button flex items-center gap-2 px-3 py-2 rounded-full text-[9px] font-black uppercase tracking-widest transition-all"
+                className="theme-button flex items-center gap-2 px-3 py-2.5 rounded-full text-[9px] font-black uppercase tracking-widest transition-all"
                 style={{ WebkitAppRegion: "no-drag" }}
               >
                 <Palette size={14} />
@@ -2902,9 +2903,10 @@ const App: React.FC = () => {
                 </div>
               )}
             </div>
-            <button className="p-2 theme-icon-button transition-all">
+            <button className="p-2.5 theme-icon-button transition-all">
               <Bell size={18} />
             </button>
+          </div>
           </div>
         </header>
 
@@ -2921,7 +2923,7 @@ const App: React.FC = () => {
         <div className="flex-1 flex flex-col overflow-hidden min-h-0">
           {activeTab === Tab.DASHBOARD && (
             <div className="grid grid-cols-12 gap-6 min-h-full items-start overflow-y-auto pr-2 pb-4 no-scrollbar">
-              <div className="col-span-3 min-h-[760px]">
+              <div className="col-span-4 min-h-[760px]">
                 <AtmosphereView
                   scores={scores}
                   mode={mode}
@@ -2931,7 +2933,7 @@ const App: React.FC = () => {
                   todayRecordCount={Math.max(todayEmotionRecords.length, todayLiveSamples.length)}
                 />
               </div>
-              <div className="col-span-6 min-h-[760px]">
+              <div className="col-span-5 min-h-[760px]">
                 <MoodChart
                   events={events}
                   isGuest={isGuest}
@@ -2949,8 +2951,8 @@ const App: React.FC = () => {
                         今日情绪记录
                       </h3>
                     </div>
-                    <span className="text-[9px] font-black uppercase tracking-[0.24em] text-indigo-300/70">
-                      Today
+                    <span className="text-[9px] font-black uppercase tracking-[0.18em] text-indigo-300/70">
+                      今日
                     </span>
                   </div>
                   <div className="mt-5 grid grid-cols-2 gap-3">
@@ -2998,7 +3000,7 @@ const App: React.FC = () => {
                           </span>
                           {event.live && (
                             <span className="rounded-full bg-cyan-500/16 px-2.5 py-1 text-[9px] font-black text-cyan-200">
-                              LIVE
+                              实时
                             </span>
                           )}
                         </div>
@@ -3459,19 +3461,9 @@ const App: React.FC = () => {
 const NavButton = ({ active, onClick, icon: Icon }: any) => (
   <button
     onClick={onClick}
-    className={`relative p-4 rounded-[1.55rem] transition-all duration-500 group ios-soft-float ${
-      active
-        ? "bg-white/[0.12] text-white shadow-[inset_0_1px_0_rgba(255,255,255,0.08),0_16px_30px_rgba(0,0,0,0.18)]"
-        : "text-slate-500 hover:text-slate-200 hover:bg-white/[0.05] hover:shadow-[0_12px_28px_rgba(0,0,0,0.14)]"
-    }`}
+    className={`ios-nav-button ${active ? "ios-nav-button--active" : ""}`}
   >
-    <Icon size={22} strokeWidth={active ? 2.5 : 2} />
-    {active && (
-      <>
-        <div className="absolute inset-0 rounded-[1.55rem] border border-white/10" />
-        <div className="absolute -left-1 top-1/2 -translate-y-1/2 w-1 h-5 bg-indigo-300 rounded-full shadow-[0_0_14px_rgba(165,180,252,0.9)]"></div>
-      </>
-    )}
+    <Icon size={22} strokeWidth={active ? 2.35 : 2} />
   </button>
 );
 

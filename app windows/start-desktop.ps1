@@ -18,4 +18,20 @@ $env:EMOTION_BRIDGE_PYTHON = $pythonExe
 $pythonPathParts = @($repoRoot, $pythonSitePackages, $env:PYTHONPATH) | Where-Object { $_ -and $_.Trim() }
 $env:PYTHONPATH = [string]::Join(";", $pythonPathParts)
 
+$runningElectron = Get-CimInstance Win32_Process | Where-Object {
+    $_.Name -eq "electron.exe" -and $_.ExecutablePath -eq $electronExe
+}
+
+foreach ($proc in $runningElectron) {
+    try {
+        Stop-Process -Id $proc.ProcessId -Force -ErrorAction Stop
+    } catch {
+        Write-Warning "Failed to stop existing Electron process $($proc.ProcessId): $($_.Exception.Message)"
+    }
+}
+
+if ($runningElectron) {
+    Start-Sleep -Milliseconds 800
+}
+
 Start-Process -FilePath $electronExe -ArgumentList "electron/main.cjs" -WorkingDirectory $appRoot

@@ -56,24 +56,66 @@ export const Login: React.FC<LoginProps> = ({ onLogin }) => {
   };
 
   return (
-    <div className="min-h-screen flex items-center justify-center p-6 relative overflow-hidden">
-      <div className="w-full max-w-md bg-slate-900/60 backdrop-blur-3xl border border-white/10 rounded-[3rem] p-10 shadow-2xl animate-pop-in relative z-10">
-        <div className="flex flex-col items-center mb-10">
-          <div className="w-20 h-20 rounded-3xl flex items-center justify-center text-white mb-6 shadow-xl shadow-black/10 rotate-12 animate-float overflow-hidden">
-            <img src={appIcon} alt="app icon" className="w-full h-full object-cover" />
-          </div>
-          <h1 className="text-3xl font-black text-white tracking-tight">共鸣连接</h1>
-          <p className="text-slate-400 font-bold text-sm mt-2 uppercase tracking-widest">
-            感知情绪 · 连接伙伴
-          </p>
-        </div>
+    <div className="relative flex min-h-screen items-center justify-center overflow-hidden px-6 py-8 text-white">
+      <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_16%_18%,rgba(125,149,255,0.18),transparent_24%),radial-gradient(circle_at_82%_14%,rgba(103,232,249,0.12),transparent_18%),linear-gradient(180deg,#09111d_0%,#0a1220_48%,#090f19_100%)]" />
+      <div className="pointer-events-none absolute inset-x-0 top-0 h-40 bg-[linear-gradient(180deg,rgba(255,255,255,0.04),transparent)]" />
 
-        <div className="flex items-center gap-2 bg-white/5 p-2 rounded-full border border-white/10 mb-6">
+      <div className="relative z-10 w-full max-w-[1080px] rounded-[2.6rem] border border-white/10 bg-[linear-gradient(180deg,rgba(17,24,40,0.78),rgba(8,13,24,0.92))] p-4 shadow-[0_30px_100px_rgba(3,8,20,0.38),inset_0_1px_0_rgba(255,255,255,0.06)] backdrop-blur-[22px]">
+        <div className="grid gap-4 lg:grid-cols-[1.08fr_0.92fr]">
+          <section className="relative overflow-hidden rounded-[2.2rem] border border-white/8 bg-[linear-gradient(180deg,rgba(255,255,255,0.06),rgba(255,255,255,0.025))] px-8 py-9">
+            <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_top_left,rgba(129,140,248,0.18),transparent_28%),radial-gradient(circle_at_88%_18%,rgba(125,211,252,0.12),transparent_20%)]" />
+            <div className="relative">
+              <div className="inline-flex items-center rounded-full border border-white/10 bg-white/[0.04] px-4 py-2 text-[10px] font-black uppercase tracking-[0.34em] text-slate-300">
+                Welcome Back
+              </div>
+              <div className="mt-8 flex items-center gap-5">
+                <div className="ios-brand-mark h-20 w-20 rounded-[1.7rem]">
+                  <img src={appIcon} alt="app icon" className="h-full w-full rounded-[1.5rem] object-cover" />
+                </div>
+                <div>
+                  <h1 className="text-[2.5rem] font-black tracking-[-0.05em] text-white">共鸣连接</h1>
+                  <p className="mt-2 text-sm font-semibold uppercase tracking-[0.28em] text-slate-400">
+                    感知情绪 · 连接伙伴
+                  </p>
+                </div>
+              </div>
+
+              <p className="mt-8 max-w-[32rem] text-[1.05rem] leading-8 text-slate-300">
+                入口页也改成和主桌面同一套语言了。现在会更像系统原生面板，层级更轻，文字更清楚，不再是厚重玻璃和大面积糊光。
+              </p>
+
+              <div className="mt-10 grid gap-3 sm:grid-cols-3">
+                {[
+                  { label: "Connect", value: "更轻的层次" },
+                  { label: "Privacy", value: "本地优先" },
+                  { label: "Clarity", value: "更锐的文字" },
+                ].map((item) => (
+                  <div
+                    key={item.label}
+                    className="rounded-[1.5rem] border border-white/8 bg-white/[0.035] px-4 py-4 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)]"
+                  >
+                    <div className="text-[10px] font-black uppercase tracking-[0.28em] text-slate-500">{item.label}</div>
+                    <div className="mt-2 text-sm font-bold text-white">{item.value}</div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </section>
+
+          <section className="rounded-[2.2rem] border border-white/8 bg-[linear-gradient(180deg,rgba(12,18,32,0.88),rgba(8,13,24,0.96))] px-8 py-8 shadow-[inset_0_1px_0_rgba(255,255,255,0.05)]">
+            <div className="mb-8">
+              <div className="text-[10px] font-black uppercase tracking-[0.32em] text-slate-500">Account Access</div>
+              <div className="mt-3 text-[1.85rem] font-black tracking-[-0.04em] text-white">
+                {isRegister ? "创建你的心境账号" : "进入你的心境空间"}
+              </div>
+            </div>
+
+        <div className="flex items-center gap-2 bg-white/[0.035] p-2 rounded-full border border-white/10 mb-6">
           <button
             type="button"
             onClick={() => setMode("login")}
             className={`flex-1 py-2 rounded-full text-xs font-black uppercase tracking-[0.2em] transition-all ${
-              mode === "login" ? "bg-white text-slate-950" : "text-slate-400"
+              mode === "login" ? "bg-white text-slate-950 shadow-[0_10px_20px_rgba(255,255,255,0.08)]" : "text-slate-400"
             }`}
           >
             登录
@@ -82,7 +124,7 @@ export const Login: React.FC<LoginProps> = ({ onLogin }) => {
             type="button"
             onClick={() => setMode("register")}
             className={`flex-1 py-2 rounded-full text-xs font-black uppercase tracking-[0.2em] transition-all ${
-              mode === "register" ? "bg-white text-slate-950" : "text-slate-400"
+              mode === "register" ? "bg-white text-slate-950 shadow-[0_10px_20px_rgba(255,255,255,0.08)]" : "text-slate-400"
             }`}
           >
             注册
@@ -104,7 +146,7 @@ export const Login: React.FC<LoginProps> = ({ onLogin }) => {
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
                 placeholder="resonance@example.com"
-                className="w-full bg-slate-800/50 border border-white/5 rounded-2xl py-4 pl-14 pr-6 text-white font-bold outline-none focus:ring-2 focus:ring-indigo-500/30 focus:border-indigo-500/50 transition-all placeholder:text-slate-600"
+                className="w-full rounded-[1.4rem] border border-white/8 bg-white/[0.04] py-4 pl-14 pr-6 text-white font-bold outline-none transition-all placeholder:text-slate-600 focus:border-sky-300/30 focus:ring-2 focus:ring-sky-300/15"
               />
             </div>
           </div>
@@ -123,7 +165,7 @@ export const Login: React.FC<LoginProps> = ({ onLogin }) => {
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
                 placeholder="请输入密码"
-                className="w-full bg-slate-800/50 border border-white/5 rounded-2xl py-4 pl-14 pr-6 text-white font-bold outline-none focus:ring-2 focus:ring-indigo-500/30 focus:border-indigo-500/50 transition-all placeholder:text-slate-600"
+                className="w-full rounded-[1.4rem] border border-white/8 bg-white/[0.04] py-4 pl-14 pr-6 text-white font-bold outline-none transition-all placeholder:text-slate-600 focus:border-sky-300/30 focus:ring-2 focus:ring-sky-300/15"
               />
             </div>
           </div>
@@ -143,7 +185,7 @@ export const Login: React.FC<LoginProps> = ({ onLogin }) => {
                   value={confirmPassword}
                   onChange={(e) => setConfirmPassword(e.target.value)}
                   placeholder="再次输入密码"
-                  className="w-full bg-slate-800/50 border border-white/5 rounded-2xl py-4 pl-14 pr-6 text-white font-bold outline-none focus:ring-2 focus:ring-indigo-500/30 focus:border-indigo-500/50 transition-all placeholder:text-slate-600"
+                  className="w-full rounded-[1.4rem] border border-white/8 bg-white/[0.04] py-4 pl-14 pr-6 text-white font-bold outline-none transition-all placeholder:text-slate-600 focus:border-sky-300/30 focus:ring-2 focus:ring-sky-300/15"
                 />
               </div>
             </div>
@@ -166,7 +208,7 @@ export const Login: React.FC<LoginProps> = ({ onLogin }) => {
           <button
             type="submit"
             disabled={loading}
-            className="w-full bg-white text-slate-950 font-black py-4 rounded-2xl mt-8 q-bounce flex items-center justify-center gap-3 shadow-xl hover:shadow-white/10 disabled:opacity-50"
+            className="mt-8 flex w-full items-center justify-center gap-3 rounded-[1.5rem] bg-white py-4 font-black text-slate-950 shadow-[0_18px_34px_rgba(255,255,255,0.12)] transition hover:brightness-[1.02] disabled:opacity-50"
           >
             {loading ? (
               <div className="w-5 h-5 border-2 border-slate-900 border-t-transparent rounded-full animate-spin"></div>
@@ -191,16 +233,15 @@ export const Login: React.FC<LoginProps> = ({ onLogin }) => {
           <div className="flex gap-4">
             <button
               type="button"
-              className="p-4 bg-white/5 rounded-2xl border border-white/5 text-slate-400 hover:text-white hover:bg-white/10 transition-all q-bounce"
+              className="rounded-[1.35rem] border border-white/8 bg-white/[0.04] p-4 text-slate-400 transition-all hover:bg-white/[0.08] hover:text-white"
             >
               <Github size={20} />
             </button>
           </div>
         </div>
+          </section>
+        </div>
       </div>
-
-      <div className="absolute top-1/4 -left-20 w-80 h-80 bg-indigo-600/20 blur-[120px] rounded-full"></div>
-      <div className="absolute bottom-1/4 -right-20 w-80 h-80 bg-fuchsia-600/20 blur-[120px] rounded-full"></div>
     </div>
   );
 };

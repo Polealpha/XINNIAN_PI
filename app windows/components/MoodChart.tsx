@@ -127,14 +127,14 @@ export const MoodChart: React.FC<MoodChartProps> = ({
   }, [points]);
 
   return (
-    <div className="h-full min-h-[760px] rounded-[2.6rem] border border-white/8 bg-[linear-gradient(180deg,rgba(24,31,54,0.74),rgba(12,18,33,0.88))] backdrop-blur-[30px] p-7 shadow-[0_24px_80px_rgba(0,0,0,0.28),inset_0_1px_0_rgba(255,255,255,0.08)] flex flex-col overflow-hidden animate-rise" style={{ animationDelay: "70ms" }}>
+    <div className="h-full min-h-[760px] rounded-[2.4rem] border border-white/10 bg-[linear-gradient(180deg,rgba(18,25,41,0.92),rgba(9,14,24,0.98))] p-6 shadow-[0_26px_80px_rgba(3,8,20,0.34),inset_0_1px_0_rgba(255,255,255,0.06)] flex flex-col overflow-hidden animate-rise" style={{ animationDelay: "70ms" }}>
       <div className="flex items-start justify-between gap-5">
         <div>
-          <h2 className="text-[2rem] font-black tracking-[-0.04em] text-white">情绪韵律看板</h2>
-          <div className="mt-2 flex items-center gap-3 text-[10px] font-semibold tracking-[0.18em] text-slate-500">
-            <span>Temporal Emotional Dynamics</span>
+          <h2 className="text-[2.2rem] font-black tracking-[-0.05em] text-white">情绪韵律看板</h2>
+          <div className="mt-2 flex items-center gap-3 text-[11px] font-semibold tracking-[0.12em] text-slate-500">
+            <span>实时情绪波动走势</span>
             <span className="h-1 w-1 rounded-full bg-indigo-300/60" />
-            <span className="text-indigo-300">{range === "DATE" ? "History" : "Real-time"}</span>
+            <span className="text-indigo-300">{range === "DATE" ? "历史回看" : "实时采样"}</span>
             {loading && <span className="text-white/40">加载中</span>}
           </div>
         </div>
@@ -200,7 +200,7 @@ export const MoodChart: React.FC<MoodChartProps> = ({
           当前识别：<span className="font-black text-white">{stats.label}</span>
         </div>
         <div className="text-[10px] font-semibold tracking-[0.18em] text-slate-500">
-          {riskSource === "ws" ? "WS LIVE" : riskSource === "poll" ? "POLLING" : "STANDBY"}
+          {riskSource === "ws" ? "实时推送" : riskSource === "poll" ? "轮询刷新" : "等待数据"}
           {riskUpdatedAt
             ? ` · ${new Date(riskUpdatedAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`
             : ""}
