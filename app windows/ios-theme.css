@@ -1,11 +1,22 @@
 :root {
   color-scheme: dark;
   --ios-ease: cubic-bezier(0.22, 1, 0.36, 1);
+  --ios-bg: #0a0c13;
+  --ios-bg-elevated: #171a24;
+  --ios-bg-soft: #242838;
   --ios-border: rgba(255, 255, 255, 0.08);
   --ios-border-strong: rgba(255, 255, 255, 0.14);
-  --ios-fill: rgba(255, 255, 255, 0.035);
-  --ios-fill-strong: rgba(255, 255, 255, 0.06);
-  --ios-shadow: 0 24px 60px rgba(3, 8, 20, 0.28);
+  --ios-fill: rgba(255, 255, 255, 0.045);
+  --ios-fill-strong: rgba(255, 255, 255, 0.075);
+  --ios-shadow: 0 28px 60px rgba(2, 6, 18, 0.28);
+  --ios-accent: #9aa7ff;
+  --ios-accent-soft: rgba(154, 167, 255, 0.2);
+  --ios-care: #7fd7ff;
+  --ios-care-soft: rgba(127, 215, 255, 0.16);
+  --ios-warm: #ffcadf;
+  --ios-warm-soft: rgba(255, 202, 223, 0.14);
+  --ios-glass: rgba(22, 25, 36, 0.68);
+  --ios-glass-strong: rgba(28, 31, 44, 0.78);
 }
 
 html,
@@ -17,62 +28,274 @@ body,
 body {
   margin: 0;
   background:
-    radial-gradient(circle at 14% 14%, rgba(113, 139, 255, 0.15), transparent 26%),
-    radial-gradient(circle at 78% 10%, rgba(103, 232, 249, 0.08), transparent 18%),
-    radial-gradient(circle at 50% 100%, rgba(79, 70, 229, 0.06), transparent 22%),
-    linear-gradient(180deg, #0c1220 0%, #0a111c 50%, #090f19 100%);
+    radial-gradient(circle at 8% 12%, rgba(255, 203, 225, 0.18), transparent 24%),
+    radial-gradient(circle at 78% 10%, rgba(145, 224, 255, 0.15), transparent 18%),
+    radial-gradient(circle at 56% 86%, rgba(166, 175, 255, 0.1), transparent 18%),
+    linear-gradient(180deg, #090b12 0%, #0d1018 42%, #0a0c13 100%);
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
   letter-spacing: -0.01em;
+  font-family: "SF Pro Display", "PingFang SC", "Microsoft YaHei", sans-serif;
+}
+
+@keyframes iosAmbientDrift {
+  0% {
+    transform: translate3d(-4%, -3%, 0) scale(1);
+    opacity: 0.54;
+  }
+  50% {
+    transform: translate3d(4%, 3%, 0) scale(1.08);
+    opacity: 0.96;
+  }
+  100% {
+    transform: translate3d(-3%, -4%, 0) scale(1.04);
+    opacity: 0.62;
+  }
+}
+
+@keyframes iosLiquidFloat {
+  0% {
+    transform: translate3d(-8%, -6%, 0) scale(0.94);
+    opacity: 0.38;
+  }
+  50% {
+    transform: translate3d(8%, 7%, 0) scale(1.12);
+    opacity: 0.68;
+  }
+  100% {
+    transform: translate3d(-6%, 10%, 0) scale(1.04);
+    opacity: 0.46;
+  }
+}
+
+@keyframes iosLiquidDriftPrimary {
+  0% {
+    transform: translate3d(-7%, -5%, 0) scale(0.98);
+    opacity: 0.2;
+  }
+  25% {
+    transform: translate3d(-1%, -3%, 0) scale(1.01);
+    opacity: 0.28;
+  }
+  55% {
+    transform: translate3d(5%, 2%, 0) scale(1.04);
+    opacity: 0.34;
+  }
+  100% {
+    transform: translate3d(2%, 6%, 0) scale(1);
+    opacity: 0.22;
+  }
+}
+
+@keyframes iosLiquidDriftSecondary {
+  0% {
+    transform: translate3d(6%, 5%, 0) scale(1);
+    opacity: 0.12;
+  }
+  35% {
+    transform: translate3d(1%, 0%, 0) scale(1.04);
+    opacity: 0.18;
+  }
+  70% {
+    transform: translate3d(-5%, -4%, 0) scale(1.06);
+    opacity: 0.24;
+  }
+  100% {
+    transform: translate3d(-2%, -6%, 0) scale(1.01);
+    opacity: 0.14;
+  }
+}
+
+@keyframes iosBorderBreath {
+  0%,
+  100% {
+    border-color: rgba(255, 255, 255, 0.08);
+    box-shadow:
+      inset 0 1px 0 rgba(255, 255, 255, 0.06),
+      0 8px 18px rgba(2, 6, 18, 0.08);
+  }
+  50% {
+    border-color: rgba(255, 255, 255, 0.18);
+    box-shadow:
+      inset 0 1px 0 rgba(255, 255, 255, 0.12),
+      0 16px 30px rgba(2, 6, 18, 0.16);
+  }
+}
+
+@keyframes iosActiveGlow {
+  0%,
+  100% {
+    box-shadow:
+      inset 0 1px 0 rgba(255, 255, 255, 0.08),
+      0 16px 28px rgba(74, 86, 156, 0.22);
+  }
+  50% {
+    box-shadow:
+      inset 0 1px 0 rgba(255, 255, 255, 0.14),
+      0 22px 38px rgba(103, 116, 205, 0.36);
+  }
+}
+
+@keyframes iosSoftPulse {
+  0%,
+  100% {
+    transform: scale(1);
+    opacity: 0.55;
+  }
+  50% {
+    transform: scale(1.08);
+    opacity: 0.9;
+  }
+}
+
+@keyframes iosFocusLiquidA {
+  0% {
+    transform: translate3d(-12%, -8%, 0) scale(0.92);
+    opacity: 0.42;
+  }
+  35% {
+    transform: translate3d(10%, -2%, 0) scale(1.12);
+    opacity: 0.72;
+  }
+  70% {
+    transform: translate3d(14%, 12%, 0) scale(1.18);
+    opacity: 0.64;
+  }
+  100% {
+    transform: translate3d(-6%, 16%, 0) scale(0.98);
+    opacity: 0.46;
+  }
+}
+
+@keyframes iosFocusLiquidB {
+  0% {
+    transform: translate3d(14%, 8%, 0) scale(0.96);
+    opacity: 0.28;
+  }
+  45% {
+    transform: translate3d(-10%, 4%, 0) scale(1.18);
+    opacity: 0.56;
+  }
+  100% {
+    transform: translate3d(6%, -12%, 0) scale(1.02);
+    opacity: 0.34;
+  }
+}
+
+@keyframes iosFocusLiquidC {
+  0% {
+    transform: translate3d(0%, 12%, 0) scale(0.9);
+    opacity: 0.2;
+  }
+  50% {
+    transform: translate3d(-12%, -10%, 0) scale(1.08);
+    opacity: 0.38;
+  }
+  100% {
+    transform: translate3d(12%, 8%, 0) scale(0.98);
+    opacity: 0.26;
+  }
 }
 
 .ios-page-shell {
   position: relative;
   isolation: isolate;
   background:
-    radial-gradient(circle at top left, rgba(119, 144, 255, 0.08), transparent 20%),
-    radial-gradient(circle at bottom right, rgba(24, 123, 160, 0.05), transparent 18%),
-    linear-gradient(180deg, rgba(9, 14, 27, 0.98), rgba(9, 14, 27, 1));
+    radial-gradient(circle at top left, rgba(255, 203, 225, 0.12), transparent 22%),
+    radial-gradient(circle at bottom right, rgba(145, 224, 255, 0.08), transparent 18%),
+    linear-gradient(180deg, rgba(10, 12, 18, 0.99), rgba(11, 14, 22, 1));
+}
+
+.ios-page-shell::before {
+  content: "";
+  position: absolute;
+  inset: -12%;
+  pointer-events: none;
+  background:
+    radial-gradient(circle at 20% 22%, rgba(255, 203, 225, 0.18), transparent 20%),
+    radial-gradient(circle at 82% 18%, rgba(145, 224, 255, 0.14), transparent 18%),
+    radial-gradient(circle at 65% 78%, rgba(166, 175, 255, 0.12), transparent 18%);
+  filter: blur(28px);
+  animation: iosAmbientDrift 14s ease-in-out infinite alternate;
 }
 
 .ios-shell {
+  position: relative;
   background:
-    radial-gradient(circle at 12% 14%, rgba(83, 109, 192, 0.08), transparent 20%),
-    radial-gradient(circle at 76% 10%, rgba(56, 189, 248, 0.06), transparent 16%),
-    radial-gradient(circle at 82% 82%, rgba(79, 70, 229, 0.04), transparent 14%);
+    radial-gradient(circle at 18% 14%, rgba(255, 203, 225, 0.1), transparent 18%),
+    radial-gradient(circle at 82% 10%, rgba(145, 224, 255, 0.08), transparent 12%),
+    radial-gradient(circle at 72% 82%, rgba(166, 175, 255, 0.06), transparent 18%);
+}
+
+.ios-shell::after {
+  content: "";
+  position: absolute;
+  inset: -10%;
+  pointer-events: none;
+  background:
+    radial-gradient(circle at 18% 12%, rgba(255, 255, 255, 0.11), transparent 18%),
+    radial-gradient(circle at 84% 22%, rgba(255, 255, 255, 0.06), transparent 14%);
+  filter: blur(42px);
+  animation: iosAmbientDrift 16s ease-in-out infinite reverse;
 }
 
 .ios-sidebar {
   position: relative;
-  background: linear-gradient(180deg, rgba(14, 20, 34, 0.78), rgba(8, 12, 22, 0.9));
-  border-right: 1px solid rgba(255, 255, 255, 0.07);
-  box-shadow: inset -1px 0 0 rgba(255, 255, 255, 0.02), 18px 0 50px rgba(3, 8, 20, 0.22);
-  backdrop-filter: blur(18px) saturate(108%);
+  background:
+    radial-gradient(circle at 50% 8%, rgba(255, 203, 225, 0.12), transparent 22%),
+    radial-gradient(circle at 20% 100%, rgba(145, 224, 255, 0.08), transparent 24%),
+    linear-gradient(180deg, rgba(18, 21, 31, 0.86), rgba(10, 12, 18, 0.94));
+  border-right: 1px solid rgba(255, 255, 255, 0.05);
+  box-shadow:
+    inset -1px 0 0 rgba(255, 255, 255, 0.03),
+    18px 0 34px rgba(0, 0, 0, 0.16);
+  backdrop-filter: blur(24px) saturate(135%);
 }
 
 .ios-sidebar::before {
   content: "";
   position: absolute;
-  inset: 18px 12px;
-  border-radius: 2rem;
-  border: 1px solid rgba(255, 255, 255, 0.05);
-  background: linear-gradient(180deg, rgba(255, 255, 255, 0.04), rgba(255, 255, 255, 0.015));
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04);
+  inset: 12px 10px;
+  border-radius: 1.9rem;
+  border: 1px solid rgba(255, 255, 255, 0.045);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.045), rgba(255, 255, 255, 0.01)),
+    radial-gradient(circle at top, rgba(255, 203, 225, 0.08), transparent 24%);
   pointer-events: none;
+}
+
+.ios-sidebar::after {
+  content: "";
+  position: absolute;
+  left: 16px;
+  right: 16px;
+  bottom: 20px;
+  height: 140px;
+  border-radius: 2rem;
+  pointer-events: none;
+  background:
+    radial-gradient(circle at center, rgba(145, 224, 255, 0.12), transparent 58%),
+    radial-gradient(circle at 30% 40%, rgba(255, 203, 225, 0.1), transparent 52%);
+  filter: blur(28px);
+  animation: iosAmbientDrift 12s ease-in-out infinite;
 }
 
 .ios-nav-button {
   position: relative;
   z-index: 1;
   display: inline-flex;
+  flex-direction: column;
   align-items: center;
   justify-content: center;
-  padding: 0.95rem;
-  border-radius: 1.4rem;
-  color: rgba(148, 163, 184, 0.8);
-  border: 1px solid transparent;
-  background: rgba(255, 255, 255, 0.015);
+  width: 4rem;
+  min-height: 4.55rem;
+  padding: 0.7rem 0 0.55rem;
+  border-radius: 1.35rem;
+  color: rgba(191, 202, 222, 0.72);
+  border: 1px solid rgba(255, 255, 255, 0.04);
+  background: rgba(255, 255, 255, 0.03);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.025);
   transition:
     transform 320ms var(--ios-ease),
     background 320ms var(--ios-ease),
@@ -84,75 +307,108 @@ body {
 .ios-nav-button:hover {
   transform: translateY(-1px);
   color: rgba(241, 245, 249, 0.92);
-  background: rgba(255, 255, 255, 0.045);
-  border-color: rgba(255, 255, 255, 0.08);
+  background: rgba(255, 255, 255, 0.06);
+  border-color: rgba(255, 255, 255, 0.1);
 }
 
 .ios-nav-button--active {
   color: white;
-  background: linear-gradient(180deg, rgba(255, 255, 255, 0.12), rgba(255, 255, 255, 0.06));
-  border-color: rgba(255, 255, 255, 0.1);
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08), 0 14px 28px rgba(2, 6, 17, 0.18);
+  background:
+    radial-gradient(circle at top, rgba(255, 203, 225, 0.18), transparent 55%),
+    linear-gradient(180deg, rgba(154, 167, 255, 0.34), rgba(154, 167, 255, 0.12)),
+    rgba(255, 255, 255, 0.05);
+  border-color: rgba(196, 206, 255, 0.22);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.08),
+    0 16px 28px rgba(74, 86, 156, 0.22);
+  animation: iosActiveGlow 4.6s ease-in-out infinite;
 }
 
 .ios-nav-button--active::after {
   content: "";
   position: absolute;
-  left: -10px;
+  left: -8px;
   top: 50%;
-  width: 3px;
-  height: 22px;
+  width: 2px;
+  height: 18px;
   transform: translateY(-50%);
   border-radius: 999px;
-  background: linear-gradient(180deg, rgba(191, 219, 254, 0.98), rgba(125, 211, 252, 0.82));
-  box-shadow: 0 0 16px rgba(147, 197, 253, 0.55);
+  background: linear-gradient(180deg, rgba(191, 219, 254, 0.94), rgba(125, 211, 252, 0.72));
+  animation: iosSoftPulse 2.8s ease-in-out infinite;
+}
+
+.ios-nav-button__label {
+  margin-top: 0.42rem;
+  font-size: 0.58rem;
+  line-height: 1;
+  font-weight: 800;
+  letter-spacing: 0.16em;
 }
 
 .ios-float-card {
-  background: linear-gradient(180deg, rgba(18, 25, 41, 0.92), rgba(10, 15, 28, 0.97));
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  box-shadow: var(--ios-shadow), inset 0 1px 0 rgba(255, 255, 255, 0.05);
-  backdrop-filter: blur(16px) saturate(112%);
+  background:
+    radial-gradient(circle at top left, rgba(255, 203, 225, 0.14), transparent 24%),
+    radial-gradient(circle at top right, rgba(145, 224, 255, 0.08), transparent 18%),
+    linear-gradient(180deg, rgba(32, 35, 48, 0.78), rgba(20, 23, 33, 0.86));
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  box-shadow:
+    0 22px 48px rgba(4, 8, 20, 0.2),
+    inset 0 1px 0 rgba(255, 255, 255, 0.08),
+    inset 0 -1px 0 rgba(255, 255, 255, 0.02);
+  backdrop-filter: blur(22px) saturate(150%);
   transition: transform 340ms var(--ios-ease), box-shadow 340ms var(--ios-ease), border-color 340ms var(--ios-ease);
 }
 
 .ios-float-card-soft {
-  background: linear-gradient(180deg, rgba(19, 26, 42, 0.88), rgba(12, 17, 30, 0.94));
-  border: 1px solid rgba(255, 255, 255, 0.07);
-  box-shadow: 0 16px 36px rgba(0, 0, 0, 0.2), inset 0 1px 0 rgba(255, 255, 255, 0.045);
-  backdrop-filter: blur(14px) saturate(108%);
+  background:
+    radial-gradient(circle at top left, rgba(145, 224, 255, 0.1), transparent 16%),
+    radial-gradient(circle at bottom right, rgba(255, 203, 225, 0.08), transparent 18%),
+    linear-gradient(180deg, rgba(28, 32, 44, 0.72), rgba(22, 24, 32, 0.82));
+  border: 1px solid rgba(255, 255, 255, 0.09);
+  box-shadow:
+    0 16px 34px rgba(4, 8, 20, 0.18),
+    inset 0 1px 0 rgba(255, 255, 255, 0.06);
+  backdrop-filter: blur(20px) saturate(150%);
   transition: transform 320ms var(--ios-ease), box-shadow 320ms var(--ios-ease), border-color 320ms var(--ios-ease);
 }
 
 .ios-list-card {
-  background: linear-gradient(180deg, rgba(18, 24, 40, 0.82), rgba(12, 17, 30, 0.92));
-  border: 1px solid rgba(255, 255, 255, 0.07);
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04), 0 12px 26px rgba(2, 6, 17, 0.1);
-  backdrop-filter: blur(12px);
+  background: linear-gradient(180deg, rgba(34, 38, 49, 0.58), rgba(26, 29, 39, 0.78));
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.05),
+    0 8px 18px rgba(0, 0, 0, 0.08);
+  backdrop-filter: blur(18px) saturate(145%);
   transition: transform 300ms var(--ios-ease), border-color 300ms var(--ios-ease), background 300ms var(--ios-ease);
 }
 
 .ios-metric-card {
-  background: linear-gradient(180deg, rgba(17, 23, 39, 0.78), rgba(12, 18, 30, 0.9));
-  border: 1px solid rgba(255, 255, 255, 0.07);
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04), 0 10px 24px rgba(2, 6, 17, 0.08);
-  backdrop-filter: blur(12px);
+  background: linear-gradient(180deg, rgba(36, 40, 52, 0.54), rgba(24, 27, 36, 0.74));
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.05),
+    0 8px 18px rgba(0, 0, 0, 0.07);
+  backdrop-filter: blur(18px) saturate(145%);
   transition: transform 300ms var(--ios-ease), border-color 300ms var(--ios-ease), background 300ms var(--ios-ease);
 }
 
 .theme-pill {
-  background: linear-gradient(180deg, rgba(24, 33, 54, 0.82), rgba(14, 20, 34, 0.9));
+  background: rgba(255, 255, 255, 0.045);
   border: 1px solid rgba(255, 255, 255, 0.08);
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.05), 0 12px 28px rgba(2, 6, 17, 0.15);
-  backdrop-filter: blur(14px) saturate(110%);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.05),
+    0 4px 12px rgba(0, 0, 0, 0.04);
+  backdrop-filter: blur(18px) saturate(150%);
   transition: transform 280ms var(--ios-ease), box-shadow 280ms var(--ios-ease), border-color 280ms var(--ios-ease);
 }
 
 .theme-button {
-  background: linear-gradient(180deg, rgba(24, 33, 55, 0.86), rgba(16, 22, 37, 0.94));
+  background: linear-gradient(180deg, rgba(41, 46, 61, 0.76), rgba(27, 31, 42, 0.86));
   border: 1px solid rgba(255, 255, 255, 0.09);
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.05), 0 12px 24px rgba(2, 6, 17, 0.16);
-  backdrop-filter: blur(14px) saturate(110%);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.05),
+    0 12px 26px rgba(0, 0, 0, 0.1);
+  backdrop-filter: blur(20px) saturate(145%);
   transition: transform 280ms var(--ios-ease), box-shadow 280ms var(--ios-ease), border-color 280ms var(--ios-ease);
 }
 
@@ -163,10 +419,10 @@ body {
 }
 
 .theme-icon-button {
-  background: linear-gradient(180deg, rgba(21, 28, 46, 0.84), rgba(14, 20, 34, 0.92));
+  background: rgba(255, 255, 255, 0.04);
   border: 1px solid rgba(255, 255, 255, 0.08);
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04), 0 12px 22px rgba(2, 6, 17, 0.14);
-  backdrop-filter: blur(12px);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04);
+  backdrop-filter: blur(18px) saturate(145%);
   border-radius: 9999px;
   transition: transform 280ms var(--ios-ease), box-shadow 280ms var(--ios-ease), border-color 280ms var(--ios-ease);
 }
@@ -174,10 +430,28 @@ body {
 .ios-header-shell {
   position: relative;
   border: 1px solid rgba(255, 255, 255, 0.08);
-  border-radius: 2rem;
-  background: linear-gradient(180deg, rgba(20, 29, 47, 0.74), rgba(10, 15, 27, 0.88));
-  box-shadow: 0 24px 60px rgba(3, 8, 20, 0.22), inset 0 1px 0 rgba(255, 255, 255, 0.05);
-  backdrop-filter: blur(18px) saturate(112%);
+  border-radius: 1.8rem;
+  background:
+    radial-gradient(circle at left top, rgba(255, 203, 225, 0.16), transparent 20%),
+    radial-gradient(circle at 78% 22%, rgba(145, 224, 255, 0.12), transparent 18%),
+    linear-gradient(180deg, rgba(28, 31, 43, 0.72), rgba(17, 19, 27, 0.84));
+  box-shadow:
+    0 18px 38px rgba(2, 6, 18, 0.18),
+    inset 0 1px 0 rgba(255, 255, 255, 0.08);
+  backdrop-filter: blur(26px) saturate(145%);
+}
+
+.ios-header-shell--flat {
+  border-color: rgba(255, 255, 255, 0.06);
+  border-radius: 1.7rem;
+  background:
+    radial-gradient(circle at left top, rgba(255, 203, 225, 0.14), transparent 18%),
+    radial-gradient(circle at 80% 18%, rgba(145, 224, 255, 0.11), transparent 18%),
+    linear-gradient(180deg, rgba(24, 27, 38, 0.68), rgba(16, 18, 25, 0.84));
+  box-shadow:
+    0 16px 34px rgba(2, 6, 18, 0.16),
+    inset 0 1px 0 rgba(255, 255, 255, 0.07);
+  backdrop-filter: blur(26px) saturate(145%);
 }
 
 .ios-header-shell::before {
@@ -187,8 +461,138 @@ body {
   border-radius: inherit;
   pointer-events: none;
   background:
-    radial-gradient(circle at top left, rgba(148, 163, 255, 0.14), transparent 28%),
-    linear-gradient(180deg, rgba(255, 255, 255, 0.03), transparent 36%);
+    radial-gradient(circle at top left, rgba(148, 163, 255, 0.08), transparent 24%),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.02), transparent 28%);
+}
+
+.ios-header-shell::after,
+.ios-float-card::after,
+.ios-float-card-soft::after,
+.ios-surface-hero::after,
+.ios-surface-subtle::after,
+.ios-surface-panel::after,
+.ios-feed-shell::after {
+  content: "";
+  position: absolute;
+  inset: -22%;
+  pointer-events: none;
+  border-radius: inherit;
+  background:
+    radial-gradient(ellipse at 22% 28%, rgba(255, 255, 255, 0.12), transparent 22%),
+    radial-gradient(ellipse at 74% 30%, rgba(143, 220, 255, 0.18), transparent 22%),
+    radial-gradient(ellipse at 54% 74%, rgba(255, 203, 225, 0.16), transparent 26%),
+    radial-gradient(ellipse at 42% 48%, rgba(198, 222, 255, 0.09), transparent 28%);
+  filter: blur(34px) saturate(118%);
+  mix-blend-mode: screen;
+  opacity: 0.36;
+}
+
+.ios-header-shell,
+.ios-float-card,
+.ios-float-card-soft,
+.ios-surface-hero,
+.ios-surface-subtle,
+.ios-surface-panel,
+.ios-feed-shell {
+  isolation: isolate;
+}
+
+.ios-header-shell > *,
+.ios-float-card > *,
+.ios-float-card-soft > *,
+.ios-surface-hero > *,
+.ios-surface-subtle > *,
+.ios-surface-panel > *,
+.ios-feed-shell > * {
+  position: relative;
+  z-index: 2;
+}
+
+.ios-surface-hero .ios-liquid-blob,
+.ios-surface-panel .ios-liquid-blob,
+.ios-feed-shell .ios-liquid-blob,
+.ios-header-shell .ios-liquid-blob {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 1;
+  overflow: hidden;
+  border-radius: inherit;
+}
+
+.ios-surface-hero .ios-liquid-blob,
+.ios-feed-shell .ios-liquid-blob {
+  background: none;
+  filter: none;
+  opacity: 1;
+  mix-blend-mode: normal;
+}
+
+.ios-surface-panel .ios-liquid-blob,
+.ios-header-shell .ios-liquid-blob {
+  background: none;
+  filter: none;
+  opacity: 1;
+  mix-blend-mode: normal;
+}
+
+.ios-surface-hero .ios-liquid-blob::before,
+.ios-surface-panel .ios-liquid-blob::before,
+.ios-feed-shell .ios-liquid-blob::before,
+.ios-header-shell .ios-liquid-blob::before {
+  content: "";
+  position: absolute;
+  inset: -24%;
+  border-radius: 50%;
+  background:
+    radial-gradient(circle, rgba(153, 223, 255, 0.42) 0%, rgba(153, 223, 255, 0.18) 34%, transparent 70%);
+  filter: blur(26px);
+  opacity: 0.92;
+  will-change: transform, opacity;
+  animation: iosLiquidDriftPrimary 18s cubic-bezier(0.42, 0, 0.2, 1) infinite alternate;
+}
+
+.ios-surface-hero .ios-liquid-blob::after,
+.ios-surface-panel .ios-liquid-blob::after,
+.ios-feed-shell .ios-liquid-blob::after,
+.ios-header-shell .ios-liquid-blob::after {
+  content: "";
+  position: absolute;
+  inset: -28%;
+  border-radius: 50%;
+  background:
+    radial-gradient(circle, rgba(255, 206, 226, 0.36) 0%, rgba(255, 206, 226, 0.14) 34%, transparent 70%);
+  filter: blur(34px);
+  opacity: 0.76;
+  will-change: transform, opacity;
+  animation: iosLiquidDriftSecondary 24s cubic-bezier(0.42, 0, 0.2, 1) infinite alternate;
+}
+
+.ios-liquid-blob--focus::before {
+  inset: -18%;
+  background:
+    radial-gradient(circle, rgba(153, 223, 255, 0.52) 0%, rgba(153, 223, 255, 0.22) 36%, transparent 72%);
+  filter: blur(24px);
+  opacity: 1;
+  animation: iosLiquidDriftPrimary 14s cubic-bezier(0.42, 0, 0.2, 1) infinite alternate;
+}
+
+.ios-liquid-blob--focus::after {
+  inset: -22%;
+  background:
+    radial-gradient(circle, rgba(255, 206, 226, 0.44) 0%, rgba(255, 206, 226, 0.16) 36%, transparent 72%);
+  filter: blur(30px);
+  opacity: 0.88;
+  animation: iosLiquidDriftSecondary 18s cubic-bezier(0.42, 0, 0.2, 1) infinite alternate;
+}
+
+.ios-liquid-blob--focus {
+  background:
+    radial-gradient(circle at 62% 34%, rgba(153, 223, 255, 0.22), transparent 22%),
+    radial-gradient(circle at 40% 70%, rgba(255, 206, 226, 0.18), transparent 24%);
+  filter: blur(22px);
+  opacity: 0.92;
+  mix-blend-mode: screen;
 }
 
 .ios-brand-mark {
@@ -198,25 +602,42 @@ body {
   justify-content: center;
   width: 3rem;
   height: 3rem;
-  border-radius: 1.1rem;
-  border: 1px solid rgba(255, 255, 255, 0.12);
-  background: linear-gradient(180deg, rgba(32, 43, 72, 0.95), rgba(18, 26, 46, 0.98));
-  box-shadow: 0 14px 28px rgba(2, 6, 17, 0.2), inset 0 1px 0 rgba(255, 255, 255, 0.08);
+  border-radius: 0.95rem;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: linear-gradient(180deg, rgba(25, 29, 38, 0.98), rgba(17, 20, 27, 1));
+  box-shadow: 0 8px 18px rgba(0, 0, 0, 0.12), inset 0 1px 0 rgba(255, 255, 255, 0.04);
+  overflow: hidden;
 }
 
 .ios-brand-mark::after {
   content: "";
   position: absolute;
   inset: -10px;
-  border-radius: 1.4rem;
-  background: radial-gradient(circle, rgba(129, 140, 248, 0.18), transparent 65%);
+  border-radius: 1.2rem;
+  background: radial-gradient(circle, rgba(129, 140, 248, 0.1), transparent 65%);
   z-index: -1;
+}
+
+.ios-brand-mark--header {
+  width: 2.9rem;
+  height: 2.9rem;
+  border-radius: 1rem;
+  background: linear-gradient(180deg, rgba(22, 26, 35, 0.96), rgba(16, 19, 27, 0.98));
+  box-shadow: 0 10px 18px rgba(0, 0, 0, 0.12), inset 0 1px 0 rgba(255, 255, 255, 0.04);
+}
+
+.ios-brand-mark__image {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  border-radius: inherit;
+  transform: scale(0.98);
 }
 
 .ios-float-card:hover,
 .ios-float-card-soft:hover {
-  transform: translateY(-2px);
-  border-color: rgba(255, 255, 255, 0.14);
+  transform: translateY(-1px);
+  border-color: rgba(255, 255, 255, 0.1);
 }
 
 .ios-list-card:hover,
@@ -227,11 +648,249 @@ body {
 }
 
 .status-dot {
-  box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.08), 0 0 10px rgba(99, 102, 241, 0.18);
+  box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.05);
+}
+
+.ios-surface-hero {
+  position: relative;
+  overflow: hidden;
+  background:
+    radial-gradient(circle at 16% 18%, rgba(255, 211, 228, 0.2), transparent 24%),
+    radial-gradient(circle at 84% 18%, rgba(143, 220, 255, 0.16), transparent 18%),
+    linear-gradient(180deg, rgba(42, 46, 61, 0.74), rgba(20, 23, 33, 0.88));
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  box-shadow:
+    0 22px 44px rgba(3, 7, 18, 0.18),
+    inset 0 1px 0 rgba(255, 255, 255, 0.1),
+    inset 0 -1px 0 rgba(255, 255, 255, 0.02);
+  backdrop-filter: blur(26px) saturate(160%);
+}
+
+.ios-surface-hero--focus-stage {
+  background:
+    radial-gradient(circle at 66% 30%, rgba(153, 223, 255, 0.3), transparent 30%),
+    radial-gradient(circle at 28% 18%, rgba(255, 211, 228, 0.22), transparent 26%),
+    radial-gradient(circle at 54% 62%, rgba(205, 225, 255, 0.14), transparent 34%),
+    linear-gradient(180deg, rgba(44, 47, 62, 0.76), rgba(20, 23, 33, 0.9));
+  box-shadow:
+    0 28px 60px rgba(3, 7, 18, 0.22),
+    inset 0 1px 0 rgba(255, 255, 255, 0.12),
+    inset 0 -1px 0 rgba(255, 255, 255, 0.02);
+}
+
+.ios-surface-hero--focus-stage::before {
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.12), transparent 22%),
+    radial-gradient(circle at 66% 22%, rgba(153, 223, 255, 0.18), transparent 20%),
+    radial-gradient(circle at 24% 14%, rgba(255, 211, 228, 0.14), transparent 18%);
+}
+
+.ios-surface-hero > .ios-focus-liquid-stage {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  pointer-events: none;
+  overflow: hidden;
+  border-radius: inherit;
+}
+
+.ios-focus-liquid {
+  position: absolute;
+  border-radius: 999px;
+  mix-blend-mode: screen;
+  filter: blur(36px);
+  opacity: 0.56;
+  will-change: transform, opacity;
+}
+
+.ios-focus-liquid--a {
+  width: 28rem;
+  height: 28rem;
+  left: 44%;
+  top: 6%;
+  background: radial-gradient(circle, rgba(146, 224, 255, 0.62) 0%, rgba(146, 224, 255, 0.22) 40%, transparent 72%);
+  animation: iosFocusLiquidA 9s cubic-bezier(0.42, 0, 0.2, 1) infinite alternate;
+}
+
+.ios-focus-liquid--b {
+  width: 22rem;
+  height: 22rem;
+  left: 18%;
+  top: 34%;
+  background: radial-gradient(circle, rgba(255, 208, 227, 0.56) 0%, rgba(255, 208, 227, 0.18) 42%, transparent 72%);
+  animation: iosFocusLiquidB 11s cubic-bezier(0.42, 0, 0.2, 1) infinite alternate;
+}
+
+.ios-focus-liquid--c {
+  width: 18rem;
+  height: 18rem;
+  left: 56%;
+  top: 52%;
+  background: radial-gradient(circle, rgba(203, 225, 255, 0.34) 0%, rgba(203, 225, 255, 0.12) 42%, transparent 74%);
+  animation: iosFocusLiquidC 13s cubic-bezier(0.42, 0, 0.2, 1) infinite alternate;
+}
+
+.ios-surface-hero::before,
+.ios-surface-subtle::before,
+.ios-surface-panel::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  pointer-events: none;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.08), transparent 26%);
+}
+
+.ios-surface-subtle {
+  position: relative;
+  overflow: hidden;
+  background:
+    radial-gradient(circle at top left, rgba(255, 210, 228, 0.12), transparent 20%),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.08), rgba(255, 255, 255, 0.035));
+  border: 1px solid rgba(255, 255, 255, 0.09);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.08),
+    0 14px 28px rgba(2, 6, 18, 0.1);
+  backdrop-filter: blur(22px) saturate(155%);
+}
+
+.ios-surface-panel {
+  position: relative;
+  overflow: hidden;
+  background:
+    radial-gradient(circle at 82% 12%, rgba(143, 220, 255, 0.1), transparent 18%),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.065), rgba(255, 255, 255, 0.028));
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.06),
+    0 10px 24px rgba(2, 6, 18, 0.08);
+  backdrop-filter: blur(20px) saturate(150%);
+}
+
+.ios-chip-soft {
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.1), rgba(255, 255, 255, 0.04));
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.07);
+  backdrop-filter: blur(18px) saturate(155%);
+}
+
+.ios-chip-warm {
+  border: 1px solid rgba(255, 217, 233, 0.14);
+  background:
+    linear-gradient(180deg, rgba(255, 214, 230, 0.16), rgba(255, 214, 230, 0.08));
+  color: rgba(255, 245, 250, 0.9);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.09);
+}
+
+.ios-segmented {
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.07), rgba(255, 255, 255, 0.035));
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.06),
+    0 10px 20px rgba(3, 7, 18, 0.08);
+  backdrop-filter: blur(20px) saturate(150%);
+}
+
+.ios-segmented__item--active {
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.98), rgba(247, 249, 255, 0.9));
+  color: #121521;
+  box-shadow:
+    0 10px 20px rgba(255, 255, 255, 0.14),
+    inset 0 1px 0 rgba(255, 255, 255, 0.8);
+}
+
+.ios-header-pill {
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.065), rgba(255, 255, 255, 0.035));
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.06),
+    0 8px 18px rgba(2, 6, 18, 0.08);
+  backdrop-filter: blur(18px) saturate(150%);
+}
+
+.ios-feed-shell {
+  background:
+    radial-gradient(circle at top left, rgba(255, 210, 228, 0.12), transparent 18%),
+    radial-gradient(circle at 82% 14%, rgba(143, 220, 255, 0.08), transparent 18%),
+    linear-gradient(180deg, rgba(34, 37, 50, 0.76), rgba(19, 22, 31, 0.88));
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  box-shadow:
+    0 18px 40px rgba(2, 6, 18, 0.16),
+    inset 0 1px 0 rgba(255, 255, 255, 0.08);
+  backdrop-filter: blur(24px) saturate(155%);
+}
+
+.ios-header-shell::after,
+.ios-surface-hero::after,
+.ios-feed-shell::after {
+  opacity: 0.68;
+  filter: blur(42px) saturate(120%);
+}
+
+.ios-surface-panel::after,
+.ios-surface-subtle::after,
+.ios-float-card::after,
+.ios-float-card-soft::after {
+  opacity: 0.4;
+  filter: blur(30px) saturate(116%);
+}
+
+.ios-surface-hero::before,
+.ios-surface-subtle::before,
+.ios-surface-panel::before {
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.09), transparent 24%),
+    radial-gradient(circle at 28% 8%, rgba(255, 255, 255, 0.08), transparent 18%);
+}
+
+.ios-surface-hero,
+.ios-surface-subtle,
+.ios-surface-panel,
+.ios-float-card,
+.ios-float-card-soft,
+.ios-feed-shell,
+.ios-header-shell,
+.ios-header-pill,
+.ios-nav-button {
+  will-change: transform, box-shadow, border-color;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ios-page-shell::before,
+  .ios-shell::after,
+  .ios-sidebar::after,
+  .ios-header-shell::after,
+  .ios-float-card::after,
+  .ios-float-card-soft::after,
+  .ios-surface-hero::after,
+  .ios-surface-subtle::after,
+  .ios-surface-panel::after,
+  .ios-feed-shell::after,
+  .ios-surface-hero .ios-liquid-blob::before,
+  .ios-surface-hero .ios-liquid-blob::after,
+  .ios-surface-panel .ios-liquid-blob::before,
+  .ios-surface-panel .ios-liquid-blob::after,
+  .ios-feed-shell .ios-liquid-blob::before,
+  .ios-feed-shell .ios-liquid-blob::after,
+  .ios-header-shell .ios-liquid-blob::before,
+  .ios-header-shell .ios-liquid-blob::after,
+  .ios-focus-liquid--a,
+  .ios-focus-liquid--b,
+  .ios-focus-liquid--c,
+  .ios-nav-button--active,
+  .ios-surface-subtle,
+  .ios-surface-panel,
+  .ios-header-pill {
+    animation: none !important;
+  }
 }
 
 .status-dot--offline {
-  box-shadow: 0 0 0 3px rgba(248, 113, 113, 0.08), 0 0 10px rgba(248, 113, 113, 0.16);
+  box-shadow: 0 0 0 3px rgba(248, 113, 113, 0.05);
 }
 
 .ios-chat-shell {
@@ -242,10 +901,13 @@ body {
   overflow: hidden;
   border: 1px solid rgba(255, 255, 255, 0.08);
   background:
-    radial-gradient(circle at top, rgba(96, 115, 198, 0.06), transparent 22%),
-    linear-gradient(180deg, rgba(18, 25, 42, 0.94), rgba(10, 15, 28, 0.98));
-  box-shadow: 0 20px 46px rgba(0, 0, 0, 0.24), inset 0 1px 0 rgba(255, 255, 255, 0.05);
-  backdrop-filter: blur(12px) saturate(110%);
+    radial-gradient(circle at top left, rgba(255, 203, 225, 0.16), transparent 18%),
+    radial-gradient(circle at bottom right, rgba(145, 224, 255, 0.1), transparent 16%),
+    linear-gradient(180deg, rgba(30, 34, 46, 0.74), rgba(19, 22, 31, 0.88));
+  box-shadow:
+    0 24px 54px rgba(2, 6, 18, 0.18),
+    inset 0 1px 0 rgba(255, 255, 255, 0.06);
+  backdrop-filter: blur(22px) saturate(150%);
 }
 
 .ios-chat-shell::before {
@@ -254,16 +916,16 @@ body {
   inset: 0;
   pointer-events: none;
   background:
-    radial-gradient(circle at top left, rgba(56, 189, 248, 0.035), transparent 18%),
-    radial-gradient(circle at bottom right, rgba(79, 70, 229, 0.03), transparent 16%);
+    radial-gradient(circle at top left, rgba(56, 189, 248, 0.02), transparent 16%),
+    radial-gradient(circle at bottom right, rgba(79, 70, 229, 0.018), transparent 14%);
 }
 
 .ios-chat-header {
   position: relative;
   z-index: 1;
-  background: linear-gradient(180deg, rgba(255, 255, 255, 0.04), rgba(255, 255, 255, 0.012));
-  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
-  backdrop-filter: blur(8px);
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.024), rgba(255, 255, 255, 0.005));
+  border-bottom: 1px solid rgba(255, 255, 255, 0.045);
+  backdrop-filter: blur(10px);
 }
 
 .ios-chat-thread {
@@ -272,78 +934,84 @@ body {
 }
 
 .ios-chat-avatar {
-  box-shadow: 0 16px 36px rgba(0, 0, 0, 0.24), inset 0 1px 0 rgba(255, 255, 255, 0.08);
+  box-shadow: 0 12px 24px rgba(0, 0, 0, 0.14), inset 0 1px 0 rgba(255, 255, 255, 0.06);
 }
 
 .ios-chat-avatar--assistant {
-  background: linear-gradient(180deg, rgba(123, 142, 255, 0.95), rgba(95, 112, 242, 0.88));
+  background: linear-gradient(180deg, rgba(255, 183, 212, 0.96), rgba(154, 156, 255, 0.92));
   color: white;
-  animation: iosGlow 4.8s ease-in-out infinite;
 }
 
 .ios-chat-avatar--user {
-  background: linear-gradient(180deg, rgba(255, 255, 255, 0.16), rgba(255, 255, 255, 0.08));
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.13), rgba(255, 255, 255, 0.06));
   color: rgba(226, 232, 240, 0.95);
-  border: 1px solid rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.06);
 }
 
 .ios-chat-bubble {
-  border-radius: 1.8rem;
-  line-height: 1.8;
-  font-weight: 650;
+  border-radius: 1.65rem;
+  line-height: 1.7;
+  font-weight: 600;
   letter-spacing: -0.01em;
-  box-shadow: 0 12px 24px rgba(0, 0, 0, 0.14), inset 0 1px 0 rgba(255, 255, 255, 0.04);
+  box-shadow: 0 14px 30px rgba(0, 0, 0, 0.1), inset 0 1px 0 rgba(255, 255, 255, 0.04);
   transition: transform 280ms var(--ios-ease), box-shadow 280ms var(--ios-ease), border-color 280ms var(--ios-ease);
 }
 
 .ios-chat-bubble:hover {
   transform: translateY(-1px);
-  box-shadow: 0 16px 30px rgba(0, 0, 0, 0.18), inset 0 1px 0 rgba(255, 255, 255, 0.05);
+  box-shadow: 0 10px 20px rgba(0, 0, 0, 0.1), inset 0 1px 0 rgba(255, 255, 255, 0.04);
 }
 
 .ios-chat-bubble--assistant {
-  background: linear-gradient(180deg, rgba(24, 32, 54, 0.94), rgba(18, 24, 40, 0.98));
+  background:
+    radial-gradient(circle at top left, rgba(255, 183, 212, 0.07), transparent 24%),
+    radial-gradient(circle at bottom right, rgba(117, 219, 255, 0.06), transparent 18%),
+    linear-gradient(180deg, rgba(34, 37, 50, 0.99), rgba(24, 27, 35, 1));
   border: 1px solid rgba(255, 255, 255, 0.07);
   color: rgba(241, 245, 249, 0.96);
-  border-top-left-radius: 0.7rem;
+  border-top-left-radius: 0.75rem;
 }
 
 .ios-chat-bubble--user {
-  background: linear-gradient(180deg, rgba(111, 132, 255, 0.95), rgba(94, 112, 242, 0.9));
+  background:
+    linear-gradient(180deg, rgba(167, 153, 255, 0.98), rgba(118, 124, 227, 0.94));
   color: white;
-  border: 1px solid rgba(196, 205, 255, 0.18);
-  border-top-right-radius: 0.7rem;
+  border: 1px solid rgba(196, 205, 255, 0.16);
+  border-top-right-radius: 0.75rem;
 }
 
 .ios-ghost-chip {
-  background: linear-gradient(180deg, rgba(22, 30, 50, 0.92), rgba(15, 21, 36, 0.96));
-  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.075);
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04);
-  backdrop-filter: blur(8px);
+  backdrop-filter: blur(10px);
 }
 
 .ios-chat-composer {
   position: relative;
   z-index: 1;
-  background: linear-gradient(180deg, rgba(255, 255, 255, 0.03), rgba(255, 255, 255, 0.012));
-  border-top: 1px solid rgba(255, 255, 255, 0.06);
-  backdrop-filter: blur(8px);
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.014), rgba(255, 255, 255, 0.004));
+  border-top: 1px solid rgba(255, 255, 255, 0.05);
+  backdrop-filter: blur(10px);
 }
 
 .ios-chat-composer-bar {
-  background: linear-gradient(180deg, rgba(19, 27, 45, 0.95), rgba(13, 19, 32, 0.98));
+  background:
+    radial-gradient(circle at left top, rgba(255, 183, 212, 0.1), transparent 20%),
+    radial-gradient(circle at right top, rgba(117, 219, 255, 0.08), transparent 18%),
+    linear-gradient(180deg, rgba(31, 35, 47, 0.99), rgba(23, 26, 35, 1));
   border: 1px solid rgba(255, 255, 255, 0.08);
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04), 0 12px 24px rgba(0, 0, 0, 0.16);
-  backdrop-filter: blur(8px);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.035), 0 18px 34px rgba(0, 0, 0, 0.14);
+  backdrop-filter: blur(12px);
   transition: border-color 280ms var(--ios-ease), box-shadow 280ms var(--ios-ease), transform 280ms var(--ios-ease);
 }
 
 .ios-chat-composer-bar:focus-within {
-  border-color: rgba(129, 140, 248, 0.24);
+  border-color: rgba(129, 140, 248, 0.18);
   box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.05),
-    0 16px 30px rgba(0, 0, 0, 0.18),
-    0 0 0 4px rgba(99, 102, 241, 0.06);
+    inset 0 1px 0 rgba(255, 255, 255, 0.04),
+    0 12px 24px rgba(0, 0, 0, 0.12),
+    0 0 0 4px rgba(99, 102, 241, 0.04);
 }
 
 .ios-chat-input {
@@ -351,22 +1019,22 @@ body {
 }
 
 .ios-send-button {
-  background: linear-gradient(180deg, rgba(121, 140, 255, 0.98), rgba(98, 116, 242, 0.92));
+  background: linear-gradient(180deg, rgba(165, 151, 255, 0.98), rgba(104, 112, 217, 0.94));
   color: white;
-  box-shadow: 0 14px 28px rgba(95, 112, 242, 0.28), inset 0 1px 0 rgba(255, 255, 255, 0.24);
+  box-shadow: 0 10px 18px rgba(104, 112, 217, 0.22), inset 0 1px 0 rgba(255, 255, 255, 0.18);
   transition: transform 260ms var(--ios-ease), box-shadow 260ms var(--ios-ease), filter 260ms var(--ios-ease);
 }
 
 .ios-send-button:hover {
   transform: translateY(-1px) scale(1.02);
   filter: brightness(1.02);
-  box-shadow: 0 18px 36px rgba(95, 112, 242, 0.34), inset 0 1px 0 rgba(255, 255, 255, 0.24);
+  box-shadow: 0 12px 24px rgba(104, 112, 217, 0.26), inset 0 1px 0 rgba(255, 255, 255, 0.18);
 }
 
 .ios-typing {
-  background: linear-gradient(180deg, rgba(255, 255, 255, 0.07), rgba(255, 255, 255, 0.035));
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.05);
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.05), rgba(255, 255, 255, 0.025));
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04);
 }
 
 .ios-typing-dot {
@@ -390,10 +1058,6 @@ body {
   animation: iosRise 720ms var(--ios-ease) both;
 }
 
-.ios-soft-float {
-  animation: iosFloat 8s ease-in-out infinite;
-}
-
 @keyframes iosPopIn {
   0% {
     opacity: 0;
@@ -413,26 +1077,6 @@ body {
   100% {
     opacity: 1;
     transform: translateY(0);
-  }
-}
-
-@keyframes iosFloat {
-  0%,
-  100% {
-    transform: translateY(0px);
-  }
-  50% {
-    transform: translateY(-6px);
-  }
-}
-
-@keyframes iosGlow {
-  0%,
-  100% {
-    box-shadow: 0 16px 36px rgba(0, 0, 0, 0.24), inset 0 1px 0 rgba(255, 255, 255, 0.08);
-  }
-  50% {
-    box-shadow: 0 20px 42px rgba(83, 104, 255, 0.26), inset 0 1px 0 rgba(255, 255, 255, 0.12);
   }
 }
 
