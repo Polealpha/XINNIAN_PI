@@ -18,7 +18,7 @@ from typing import Any, Dict, List, Optional
 
 from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, UploadFile, status, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse, StreamingResponse
+from fastapi.responses import HTMLResponse, StreamingResponse, Response, RedirectResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from fastapi.staticfiles import StaticFiles
 from sqlite3 import Connection
@@ -148,6 +148,7 @@ from .settings import (
     ALLOW_UNVERIFIED_LOCAL_DESKTOP_TOKENS,
     ASSISTANT_BRIDGE_TOKEN,
     ASSISTANT_BRIDGE_USER_ID,
+    DEFAULT_ROBOT_DEVICE_IP,
     AUTH_SECRET_KEY,
     OPENCLAW_PREFERRED_CODE_MODEL,
     OPENCLAW_PREFERRED_MODE,
@@ -3202,6 +3203,82 @@ def _post_device_json(device_ip: str, path: str, payload: Dict[str, object], tim
     raise ValueError("Invalid device payload")
 
 
+def _resolve_device_target_for_local_proxy(
+    conn: Connection,
+    device_id: Optional[str] = None,
+    device_ip: Optional[str] = None,
+) -> tuple[str, str]:
+    normalized_device_id = str(device_id or "").strip()
+    if normalized_device_id.lower() in {"", "unbound", "unknown", "none", "null"}:
+        normalized_device_id = ""
+
+    resolved_ip = str(device_ip or "").strip()
+    if resolved_ip:
+        resolved_id = str(normalized_device_id or "direct")
+        return resolved_id, resolved_ip
+
+    user_id = _get_default_user_id(conn)
+    selected: Dict[str, Any] = {}
+    if user_id is not None:
+        if normalized_device_id:
+            selected = _get_device(conn, int(user_id), normalized_device_id)
+        else:
+            devices = _list_devices(conn, int(user_id))
+            if devices:
+                selected = devices[0]
+
+    if not selected:
+        row = conn.execute(
+            """
+            SELECT *
+            FROM devices
+            ORDER BY COALESCE(last_seen_ms, updated_at) DESC, updated_at DESC
+            LIMIT 1
+            """
+        ).fetchone()
+        if row:
+            selected = dict(row)
+    if not selected:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Device not bound yet")
+
+    resolved_id = str(selected.get("device_id") or normalized_device_id or "unknown")
+    resolved_ip = str(selected.get("device_ip") or "").strip()
+    if not resolved_ip:
+        cached = selected.get("status_json")
+        if cached:
+            try:
+                cached_status = json.loads(str(cached) or "{}")
+                resolved_ip = str(cached_status.get("ip") or "").strip()
+            except Exception:
+                resolved_ip = ""
+    if not resolved_ip:
+        resolved_ip = str(DEFAULT_ROBOT_DEVICE_IP or "").strip()
+    if not resolved_ip:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Device IP missing")
+    return resolved_id, resolved_ip
+
+
+def _fetch_device_json_best_effort(
+    device_ip: str,
+    paths: List[str],
+    timeout_sec: float = 1.5,
+) -> tuple[Dict[str, Any], str]:
+    last_exc: Optional[Exception] = None
+    for path in paths:
+        try:
+            response = httpx.get(f"http://{device_ip}{path}", timeout=timeout_sec)
+            response.raise_for_status()
+            payload = response.json()
+            if isinstance(payload, dict):
+                return payload, path
+        except Exception as exc:
+            last_exc = exc
+    raise HTTPException(
+        status_code=status.HTTP_502_BAD_GATEWAY,
+        detail=f"Device state unavailable: {last_exc or 'unknown error'}",
+    )
+
+
 def _emotion_type_from_tags(tags: List[str], s_value: float) -> str:
     tags_lower = [str(tag).lower() for tag in tags]
     if any(tag in tags_lower for tag in ("anger", "angry")):
@@ -4975,6 +5052,7 @@ def device_list(
 
 @app.get("/api/device/status", response_model=DeviceStatusResponse)
 def device_status(
+    request: Request,
     device_id: Optional[str] = None,
     device_ip: Optional[str] = None,
     probe: bool = False,
@@ -4982,16 +5060,30 @@ def device_status(
     conn: Connection = Depends(get_db),
 ) -> DeviceStatusResponse:
     user = _parse_access_token(credentials, conn)
+    normalized_device_id = str(device_id or "").strip()
+    if normalized_device_id.lower() in {"", "unbound", "unknown", "none", "null"}:
+        normalized_device_id = ""
     selected = {}
-    if device_id:
-        selected = _get_device(conn, int(user["id"]), device_id)
+    if normalized_device_id:
+        selected = _get_device(conn, int(user["id"]), normalized_device_id)
     else:
         devices = _list_devices(conn, int(user["id"]))
         if devices:
             selected = devices[0]
+    if not selected and _is_local_request(request):
+        row = conn.execute(
+            """
+            SELECT *
+            FROM devices
+            ORDER BY COALESCE(last_seen_ms, updated_at) DESC, updated_at DESC
+            LIMIT 1
+            """
+        ).fetchone()
+        if row:
+            selected = dict(row)
     if not selected and not device_ip:
         return DeviceStatusResponse(
-            device_id=device_id or "unbound",
+            device_id=normalized_device_id or "unbound",
             device_ip=None,
             device_mac=None,
             online=False,
@@ -5005,7 +5097,7 @@ def device_status(
             error="Device not bound yet",
         )
 
-    resolved_id = device_id or selected.get("device_id", "unknown")
+    resolved_id = normalized_device_id or selected.get("device_id", "unknown")
     resolved_ip = device_ip or selected.get("device_ip")
     resolved_mac = selected.get("device_mac")
     cached_status = None
@@ -5032,6 +5124,8 @@ def device_status(
             bool(strategy["missing_profile"]),
             strategy["last_switch_reason"],
         )
+    if not resolved_ip:
+        resolved_ip = str(DEFAULT_ROBOT_DEVICE_IP or "").strip()
     if not resolved_ip:
         return DeviceStatusResponse(
             device_id=resolved_id,
@@ -5113,6 +5207,138 @@ def device_status(
             status=None,
             error=str(exc),
         )
+
+
+@app.get("/api/device/snapshot")
+def device_snapshot_proxy(
+    request: Request,
+    device_id: Optional[str] = None,
+    device_ip: Optional[str] = None,
+    conn: Connection = Depends(get_db),
+) -> Response:
+    if not _is_local_request(request):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Local access only")
+    _, resolved_ip = _resolve_device_target_for_local_proxy(conn, device_id=device_id, device_ip=device_ip)
+    candidates = [
+        "/camera/preview.jpg",
+        "/snapshot",
+        "/camera/preview.jpeg",
+    ]
+    last_exc: Optional[Exception] = None
+    for path in candidates:
+        try:
+            response = httpx.get(f"http://{resolved_ip}{path}", timeout=2.5)
+            response.raise_for_status()
+            media_type = response.headers.get("content-type", "image/jpeg")
+            return Response(
+                content=response.content,
+                media_type=media_type,
+                headers={
+                    "Cache-Control": "no-cache, no-store, must-revalidate",
+                    "Pragma": "no-cache",
+                    "Expires": "0",
+                },
+            )
+        except Exception as exc:
+            last_exc = exc
+    raise HTTPException(
+        status_code=status.HTTP_502_BAD_GATEWAY,
+        detail=f"snapshot unavailable: {last_exc or 'unknown error'}",
+    )
+
+
+@app.get("/api/device/stream")
+def device_stream_proxy(
+    request: Request,
+    device_id: Optional[str] = None,
+    device_ip: Optional[str] = None,
+    conn: Connection = Depends(get_db),
+):
+    if not _is_local_request(request):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Local access only")
+    _, resolved_ip = _resolve_device_target_for_local_proxy(conn, device_id=device_id, device_ip=device_ip)
+    return RedirectResponse(
+        url=f"http://{resolved_ip}/stream",
+        status_code=status.HTTP_307_TEMPORARY_REDIRECT,
+        headers={"Cache-Control": "no-cache, no-store, must-revalidate"},
+    )
+
+
+@app.get("/api/device/camera/state")
+def device_camera_state_proxy(
+    request: Request,
+    device_id: Optional[str] = None,
+    device_ip: Optional[str] = None,
+    conn: Connection = Depends(get_db),
+) -> Dict[str, Any]:
+    if not _is_local_request(request):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Local access only")
+    resolved_id, resolved_ip = _resolve_device_target_for_local_proxy(conn, device_id=device_id, device_ip=device_ip)
+    state_payload, source_path = _fetch_device_json_best_effort(
+        resolved_ip,
+        paths=["/camera/state", "/status"],
+    )
+    normalized_state = state_payload
+    nested_camera_state = state_payload.get("camera_state")
+    if isinstance(nested_camera_state, dict):
+        normalized_state = dict(nested_camera_state)
+        if "updated_ms" not in normalized_state:
+            normalized_state["updated_ms"] = (
+                state_payload.get("updated_ms")
+                or state_payload.get("timestamp_ms")
+                or state_payload.get("ts_ms")
+                or normalized_state.get("last_frame_ts_ms")
+            )
+    now_ms = int(time.time() * 1000)
+    updated_ms = int(
+        normalized_state.get("updated_ms")
+        or normalized_state.get("last_frame_ts_ms")
+        or state_payload.get("updated_ms")
+        or state_payload.get("timestamp_ms")
+        or state_payload.get("ts_ms")
+        or now_ms
+    )
+    has_frame = bool(
+        normalized_state.get("has_frame")
+        or normalized_state.get("preview_available")
+        or normalized_state.get("preview_bytes")
+        or normalized_state.get("stream_ok")
+        or normalized_state.get("camera_ready")
+        or normalized_state.get("ready")
+        or normalized_state.get("video_ok")
+    )
+    if "camera_ready" in normalized_state:
+        camera_ready = bool(normalized_state.get("camera_ready"))
+    elif "ready" in normalized_state:
+        camera_ready = bool(normalized_state.get("ready"))
+    else:
+        camera_ready = bool(has_frame)
+    return {
+        "ok": True,
+        "device_id": resolved_id,
+        "device_ip": resolved_ip,
+        "camera_ready": camera_ready,
+        "has_frame": has_frame,
+        "updated_ms": updated_ms,
+        "source": source_path,
+        "camera_state": normalized_state,
+        "raw": state_payload,
+    }
+
+
+@app.get("/api/device/meta")
+def device_meta_proxy(
+    request: Request,
+    device_id: Optional[str] = None,
+    device_ip: Optional[str] = None,
+    conn: Connection = Depends(get_db),
+) -> Dict[str, Any]:
+    return device_camera_state_proxy(
+        request=request,
+        device_id=device_id,
+        device_ip=device_ip,
+        conn=conn,
+    )
 
 
 @app.get("/api/device/settings", response_model=DeviceSettingsResponse)
