@@ -18,6 +18,8 @@ export const getWsBase = () => {
 };
 
 const LOCAL_PATH_PREFIXES = [
+  "/api/auth/",
+  "/api/user/",
   "/api/assistant/",
   "/api/desktop/",
   "/api/llm/",
@@ -27,8 +29,6 @@ const LOCAL_PATH_PREFIXES = [
 ];
 
 const REMOTE_PATH_PREFIXES = [
-  "/api/auth/",
-  "/api/user/",
   "/api/chat/",
   "/api/device/",
   "/api/client/",
@@ -88,7 +88,7 @@ const refreshAccessToken = async () => {
   if (!refreshToken) {
     throw new Error("No refresh token");
   }
-  const response = await fetch(`${DEVICE_SYNC_API_BASE}/api/auth/refresh`, {
+  const response = await fetch(`${LOCAL_API_BASE}/api/auth/refresh`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ refresh_token: refreshToken }),

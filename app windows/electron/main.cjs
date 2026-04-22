@@ -214,6 +214,8 @@ const readJsonIfExists = (pathname) => {
 const loadOpenClawProviderConfig = () => {
   const fileConfig = readJsonIfExists(resolveOpenClawProviderConfigPath()) || {};
   const modelId = String(fileConfig.modelId || LOCAL_OPENCLAW_PROVIDER.modelId).trim() || LOCAL_OPENCLAW_PROVIDER.modelId;
+  const contextWindow = Math.max(1024, Number(fileConfig.contextWindow) || 204800);
+  const maxTokens = Math.max(256, Number(fileConfig.maxTokens) || 131072);
   const apiKey = String(
     process.env.ZAI_API_KEY ||
       process.env.Z_AI_API_KEY ||
@@ -227,6 +229,10 @@ const loadOpenClawProviderConfig = () => {
     baseUrl: String(fileConfig.baseUrl || LOCAL_OPENCLAW_PROVIDER.baseUrl).trim() || LOCAL_OPENCLAW_PROVIDER.baseUrl,
     modelId,
     modelRef: `zai/${modelId}`,
+    modelName: String(fileConfig.modelName || modelId).trim() || modelId,
+    contextWindow,
+    maxTokens: Math.min(maxTokens, contextWindow),
+    reasoning: fileConfig.reasoning !== false,
     thinkingDefault: String(fileConfig.thinkingDefault || LOCAL_OPENCLAW_PROVIDER.thinkingDefault).trim() || LOCAL_OPENCLAW_PROVIDER.thinkingDefault,
     apiKey,
   };
@@ -319,11 +325,11 @@ const ensureAgentModelsConfig = (agentDir, providerConfig) => {
     models: [
       {
         id: providerConfig.modelId,
-        name: "GLM-5",
-        reasoning: true,
+        name: providerConfig.modelName,
+        reasoning: providerConfig.reasoning,
         input: ["text"],
-        contextWindow: 204800,
-        maxTokens: 131072,
+        contextWindow: providerConfig.contextWindow,
+        maxTokens: providerConfig.maxTokens,
         cost: {
           input: 0,
           output: 0,
@@ -514,11 +520,11 @@ const ensureOpenClawState = (stateDir) => {
       models: [
         {
           id: providerConfig.modelId,
-          name: "GLM-5",
-          reasoning: true,
+          name: providerConfig.modelName,
+          reasoning: providerConfig.reasoning,
           input: ["text"],
-          contextWindow: 204800,
-          maxTokens: 131072,
+          contextWindow: providerConfig.contextWindow,
+          maxTokens: providerConfig.maxTokens,
         },
       ],
     },
@@ -988,6 +994,8 @@ const loadWindowWithQuery = (win, query) => {
   return win.loadFile(indexPath, { query: { [query.split("=")[0]]: query.split("=")[1] } });
 };
 
+const clamp = (value, min, max) => Math.min(Math.max(value, min), max);
+
 const positionChatWindow = () => {
   if (!floatWindow || !chatWindow) return;
   const floatBounds = floatWindow.getBounds();
@@ -1059,8 +1067,8 @@ const createFloatWindow = () => {
     console.error(msg);
     showWindowFatal(win, "悬浮窗加载失败", msg);
   });
-  // Let clicks pass through except when explicitly enabled from renderer.
-  win.setIgnoreMouseEvents(true, { forward: true });
+  // Keep the float widget directly interactive; renderer handles click vs drag.
+  win.setIgnoreMouseEvents(false);
   const primary = screen.getPrimaryDisplay();
   const { x, y, width, height } = primary.workArea;
   win.setPosition(Math.round(x + width - 88), Math.round(y + height - 132), false);
@@ -1232,9 +1240,8 @@ ipcMain.on("float-show", () => {
 
 ipcMain.on("float-set-interactive", (_event, enabled) => {
   if (!floatWindow || floatWindow.isDestroyed()) return;
-  const shouldEnable = Boolean(enabled);
-  // When interactive, capture mouse. When not, pass through.
-  floatWindow.setIgnoreMouseEvents(!shouldEnable, { forward: true });
+  // Keep compatibility with older renderers, but the widget stays interactive now.
+  return;
 });
 
 ipcMain.on("float-drag-move", (_event, payload) => {
@@ -1258,9 +1265,6 @@ ipcMain.on("float-drag-move", (_event, payload) => {
 
 ipcMain.on("float-drag-end", () => {
   floatDragState = null;
-  if (floatWindow && !floatWindow.isDestroyed()) {
-    floatWindow.setIgnoreMouseEvents(true, { forward: true });
-  }
   if (chatWindow && chatWindow.isVisible()) {
     positionChatWindow();
   }

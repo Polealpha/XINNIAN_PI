@@ -89,6 +89,10 @@ export const DashboardWorkbench: React.FC<DashboardWorkbenchProps> = ({
   const reminderItems = reminders.slice(0, 3);
   const runtimeReady = Boolean(assistantRuntime?.gateway_ready && assistantRuntime?.provider_network_ok);
   const cameraReady = Boolean(deviceStatus?.status?.camera_ready);
+  const actionCardClass =
+    "ios-workbench-card rounded-[1.6rem] px-4 py-4 text-left transition hover:-translate-y-[1px]";
+  const statusCardClass = "ios-workbench-mini rounded-[1.55rem] px-4 py-3.5";
+  const sectionCardClass = "ios-workbench-section rounded-[1.7rem] px-4 py-4";
 
   return (
     <div className="ios-surface-hero relative rounded-[2.35rem] p-5 animate-rise flex flex-col gap-4">
@@ -117,7 +121,7 @@ export const DashboardWorkbench: React.FC<DashboardWorkbenchProps> = ({
       <div className="grid grid-cols-2 gap-3">
         <button
           onClick={onOpenChat}
-          className="rounded-[1.6rem] border border-white/10 bg-white/[0.04] px-4 py-4 text-left transition hover:bg-white/[0.08]"
+          className={actionCardClass}
         >
           <div className="flex items-center gap-2 text-slate-200">
             <MessageSquareHeart size={15} className="text-indigo-300" />
@@ -127,7 +131,7 @@ export const DashboardWorkbench: React.FC<DashboardWorkbenchProps> = ({
         </button>
         <button
           onClick={onOpenCamera}
-          className="rounded-[1.6rem] border border-white/10 bg-white/[0.04] px-4 py-4 text-left transition hover:bg-white/[0.08]"
+          className={actionCardClass}
         >
           <div className="flex items-center gap-2 text-slate-200">
             <Camera size={15} className="text-cyan-300" />
@@ -137,7 +141,7 @@ export const DashboardWorkbench: React.FC<DashboardWorkbenchProps> = ({
         </button>
         <button
           onClick={onOpenFocus}
-          className="rounded-[1.6rem] border border-white/10 bg-white/[0.04] px-4 py-4 text-left transition hover:bg-white/[0.08]"
+          className={actionCardClass}
         >
           <div className="flex items-center gap-2 text-slate-200">
             <ListChecks size={15} className="text-emerald-300" />
@@ -147,7 +151,7 @@ export const DashboardWorkbench: React.FC<DashboardWorkbenchProps> = ({
         </button>
         <button
           onClick={onOpenSettings}
-          className="rounded-[1.6rem] border border-white/10 bg-white/[0.04] px-4 py-4 text-left transition hover:bg-white/[0.08]"
+          className={actionCardClass}
         >
           <div className="flex items-center gap-2 text-slate-200">
             <Settings size={15} className="text-slate-300" />
@@ -160,7 +164,7 @@ export const DashboardWorkbench: React.FC<DashboardWorkbenchProps> = ({
       <div className="grid grid-cols-2 gap-3">
         <button
           onClick={onToggleCamera}
-          className={`rounded-[1.5rem] border px-4 py-3 text-left transition ${statusTone(cameraEnabled)}`}
+          className={`ios-workbench-card ios-workbench-card--status rounded-[1.5rem] px-4 py-3 text-left transition ${statusTone(cameraEnabled)}`}
         >
           <div className="flex items-center justify-between gap-3">
             <div className="flex items-center gap-2">
@@ -175,7 +179,7 @@ export const DashboardWorkbench: React.FC<DashboardWorkbenchProps> = ({
         </button>
         <button
           onClick={onToggleAudio}
-          className={`rounded-[1.5rem] border px-4 py-3 text-left transition ${statusTone(audioEnabled)}`}
+          className={`ios-workbench-card ios-workbench-card--status rounded-[1.5rem] px-4 py-3 text-left transition ${statusTone(audioEnabled)}`}
         >
           <div className="flex items-center justify-between gap-3">
             <div className="flex items-center gap-2">
@@ -189,21 +193,21 @@ export const DashboardWorkbench: React.FC<DashboardWorkbenchProps> = ({
       </div>
 
       <div className="grid grid-cols-3 gap-3">
-        <div className="ios-metric-card rounded-[1.55rem] px-4 py-3.5">
+        <div className={statusCardClass}>
           <div className="text-[10px] font-black uppercase tracking-[0.2em] text-slate-500">本地引擎</div>
           <div className="mt-2 text-sm font-black text-white">{runtimeReady ? "在线" : "待处理"}</div>
         </div>
-        <div className="ios-metric-card rounded-[1.55rem] px-4 py-3.5">
+        <div className={statusCardClass}>
           <div className="text-[10px] font-black uppercase tracking-[0.2em] text-slate-500">设备状态</div>
           <div className="mt-2 text-sm font-black text-white">{deviceStatus?.online ? "在线" : "离线"}</div>
         </div>
-        <div className="ios-metric-card rounded-[1.55rem] px-4 py-3.5">
+        <div className={statusCardClass}>
           <div className="text-[10px] font-black uppercase tracking-[0.2em] text-slate-500">关怀策略</div>
           <div className="mt-2 text-sm font-black text-white">{careModeLabel(careDeliveryStrategy)}</div>
         </div>
       </div>
 
-      <div className="rounded-[1.7rem] border border-white/10 bg-white/[0.035] px-4 py-4">
+      <div className={sectionCardClass}>
         <div className="flex items-center justify-between gap-3">
           <div className="flex items-center gap-2">
             <Sparkles size={14} className="text-amber-300" />
@@ -220,14 +224,14 @@ export const DashboardWorkbench: React.FC<DashboardWorkbenchProps> = ({
           {insightText || latestCareText || "这里会显示今天的情绪总结、主动关怀结果，或者你刚刚生成的首页洞察。"}
         </div>
         {latestCareQuestion && (
-          <div className="mt-3 rounded-[1.2rem] border border-white/10 bg-white/[0.03] px-3.5 py-3 text-[11px] font-semibold text-slate-300">
+          <div className="ios-workbench-chip mt-3 rounded-[1.2rem] px-3.5 py-3 text-[11px] font-semibold text-slate-300">
             追问：{latestCareQuestion}
           </div>
         )}
       </div>
 
       <div className="grid grid-cols-2 gap-3">
-        <div className="rounded-[1.7rem] border border-white/10 bg-white/[0.03] px-4 py-4">
+        <div className={sectionCardClass}>
           <div className="flex items-center gap-2 text-[11px] font-black uppercase tracking-[0.2em] text-slate-400">
             <ListChecks size={13} className="text-emerald-300" />
             今日任务
@@ -248,7 +252,7 @@ export const DashboardWorkbench: React.FC<DashboardWorkbenchProps> = ({
           </div>
         </div>
 
-        <div className="rounded-[1.7rem] border border-white/10 bg-white/[0.03] px-4 py-4">
+        <div className={sectionCardClass}>
           <div className="flex items-center gap-2 text-[11px] font-black uppercase tracking-[0.2em] text-slate-400">
             <Bell size={13} className="text-indigo-300" />
             到期提醒

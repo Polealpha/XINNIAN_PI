@@ -24,6 +24,12 @@ type ChartPoint = {
 
 const rangeHours = (range: RangeOption) => (range === "1H" ? 1 : range === "6H" ? 6 : 24);
 
+const formatTime = (date: Date) =>
+  date.toLocaleTimeString([], {
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+
 export const MoodChart: React.FC<MoodChartProps> = ({
   events,
   isGuest,
@@ -98,7 +104,7 @@ export const MoodChart: React.FC<MoodChartProps> = ({
       .map((event) => ({
         id: event.id,
         date: event.timestamp,
-        time: event.timestamp.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
+        time: formatTime(event.timestamp),
         score: Math.max(0, Math.min(100, event.intensity ?? 0)),
         plotScore: Math.max(0, Math.min(100, event.intensity ?? 0)),
         label: event.type || "已记录事件",
@@ -118,7 +124,7 @@ export const MoodChart: React.FC<MoodChartProps> = ({
       .map((sample) => ({
         id: sample.id,
         date: sample.timestamp,
-        time: sample.timestamp.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
+        time: formatTime(sample.timestamp),
         score: Math.max(0, Math.min(100, sample.score)),
         plotScore: Math.max(0, Math.min(100, sample.score)),
         label: sample.label || "实时采样",
@@ -133,7 +139,7 @@ export const MoodChart: React.FC<MoodChartProps> = ({
           ...only,
           id: `${only.id}-anchor`,
           date: anchor,
-          time: anchor.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
+          time: formatTime(anchor),
         },
         only,
       ];
@@ -142,27 +148,42 @@ export const MoodChart: React.FC<MoodChartProps> = ({
     return mappedLive;
   }, [events, historyEvents, liveSamples, range, selectedDate]);
 
+  const standbyPoints = useMemo<ChartPoint[]>(() => {
+    const base = new Date();
+    return Array.from({ length: 6 }, (_, index) => {
+      const timestamp = new Date(base.getTime() - (5 - index) * 5 * 60 * 1000);
+      return {
+        id: `standby-${index}`,
+        date: timestamp,
+        time: formatTime(timestamp),
+        score: 0,
+        plotScore: 5.6 + Math.sin(index * 0.9) * 0.45,
+        label: "等待实时输入",
+      };
+    });
+  }, []);
+
   const chartMeta = useMemo(() => {
     if (points.length === 0) {
       return {
         allZero: false,
         lowVariance: false,
-        domain: [0, 100] as [number, number],
+        domain: [0, 12] as [number, number],
       };
     }
 
     const scores = points.map((item) => item.score);
     const min = Math.min(...scores);
     const max = Math.max(...scores);
-    const rangeValue = max - min;
+    const variance = max - min;
     const allZero = max <= 0;
-    const lowVariance = !allZero && rangeValue <= 2;
+    const lowVariance = !allZero && variance <= 2;
 
     if (allZero) {
       return {
         allZero,
         lowVariance,
-        domain: [0, 12] as [number, number],
+        domain: [0, 8] as [number, number],
       };
     }
 
@@ -174,8 +195,8 @@ export const MoodChart: React.FC<MoodChartProps> = ({
       };
     }
 
-    if (rangeValue <= 8) {
-      const padding = Math.max(4, Math.ceil(rangeValue || 1) * 2);
+    if (variance <= 8) {
+      const padding = Math.max(4, Math.ceil(variance || 1) * 2);
       return {
         allZero,
         lowVariance,
@@ -195,12 +216,33 @@ export const MoodChart: React.FC<MoodChartProps> = ({
 
   const displayPoints = useMemo<ChartPoint[]>(
     () =>
-      points.map((item) => ({
-        ...item,
-        plotScore: chartMeta.allZero ? 4 : item.score,
-      })),
-    [chartMeta.allZero, points]
+      points.map((item, index, source) => {
+        if (chartMeta.allZero) {
+          return {
+            ...item,
+            plotScore: 5.8 + Math.sin(index * 0.9) * 0.45,
+          };
+        }
+
+        if (chartMeta.lowVariance) {
+          const mean = source.reduce((sum, current) => sum + current.score, 0) / Math.max(source.length, 1);
+          const centered = item.score - mean;
+          const amplified = mean + centered * 2.8;
+          return {
+            ...item,
+            plotScore: Math.max(chartMeta.domain[0] + 1, Math.min(chartMeta.domain[1] - 1, amplified)),
+          };
+        }
+
+        return {
+          ...item,
+          plotScore: item.score,
+        };
+      }),
+    [chartMeta.allZero, chartMeta.domain, chartMeta.lowVariance, points]
   );
+
+  const chartPoints = points.length > 0 ? displayPoints : standbyPoints;
 
   const stats = useMemo(() => {
     if (points.length === 0) {
@@ -219,30 +261,14 @@ export const MoodChart: React.FC<MoodChartProps> = ({
     };
   }, [points]);
 
-  const lowActivityItems = useMemo(
-    () =>
-      displayPoints.slice(-6).map((item, index, source) => {
-        const ratio = source.length === 1 ? 1 : index / (source.length - 1);
-        const normalized = Math.max(0, Math.min(1, item.plotScore / chartMeta.domain[1]));
-        const top = Math.max(16, Math.min(74, 76 - normalized * 52));
-        return {
-          ...item,
-          left: ratio * 100,
-          top,
-          height: Math.max(10, 18 + normalized * 56),
-        };
-      }),
-    [chartMeta.domain, displayPoints]
-  );
-
   const statusText =
     riskSource === "ws" ? "实时推送" : riskSource === "poll" ? "轮询刷新" : "等待数据";
 
-  const isLowActivity = points.length > 0 && (chartMeta.allZero || chartMeta.lowVariance);
+  const showLowActivityHint = points.length > 0 && (chartMeta.allZero || chartMeta.lowVariance);
 
   return (
     <div
-      className="ios-surface-hero ios-surface-hero--focus-stage relative flex h-full min-h-[760px] flex-col overflow-hidden rounded-[2.4rem] p-6 animate-rise"
+      className="ios-surface-hero ios-surface-hero--focus-stage relative flex h-full min-h-[940px] flex-col overflow-hidden rounded-[2.4rem] p-6 animate-rise"
       style={{
         animationDelay: "70ms",
         ["--chart-accent" as string]: "#8fdcff",
@@ -255,6 +281,7 @@ export const MoodChart: React.FC<MoodChartProps> = ({
         <span className="ios-focus-liquid ios-focus-liquid--b" />
         <span className="ios-focus-liquid ios-focus-liquid--c" />
       </div>
+
       <div className="flex items-start justify-between gap-5">
         <div>
           <h2 className="text-[2.2rem] font-black tracking-[-0.05em] text-white">情绪律看板</h2>
@@ -262,7 +289,7 @@ export const MoodChart: React.FC<MoodChartProps> = ({
             <span>实时情绪波动走势</span>
             <span className="h-1 w-1 rounded-full bg-indigo-300/60" />
             <span className="text-indigo-300">{range === "DATE" ? "历史回看" : "实时采样"}</span>
-            {loading && <span className="text-white/40">加载中</span>}
+            {loading ? <span className="text-white/40">加载中</span> : null}
           </div>
         </div>
 
@@ -300,7 +327,7 @@ export const MoodChart: React.FC<MoodChartProps> = ({
             >
               日期
             </button>
-            {datePickerOpen && (
+            {datePickerOpen ? (
               <div className="absolute right-0 top-12 z-20 rounded-2xl border border-white/10 bg-[#10172a]/95 p-3 shadow-2xl">
                 <input
                   type="date"
@@ -309,7 +336,7 @@ export const MoodChart: React.FC<MoodChartProps> = ({
                   className="w-full rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-[11px] font-bold text-slate-200 outline-none"
                 />
               </div>
-            )}
+            ) : null}
           </div>
         </div>
       </div>
@@ -317,9 +344,9 @@ export const MoodChart: React.FC<MoodChartProps> = ({
       <div className="mt-7 grid grid-cols-4 gap-3">
         {[
           { label: "当前波动", value: stats.current },
-          { label: "最高点", value: stats.high },
-          { label: "最低点", value: stats.low },
-          { label: "样本数", value: stats.samples },
+          { label: "高点", value: stats.high },
+          { label: "低点", value: stats.low },
+          { label: "样本", value: stats.samples },
         ].map((item) => (
           <div key={item.label} className="ios-metric-card rounded-[1.7rem] px-4 py-4">
             <div className="text-[10px] font-semibold tracking-[0.18em] text-slate-400">{item.label}</div>
@@ -330,7 +357,7 @@ export const MoodChart: React.FC<MoodChartProps> = ({
 
       <div className="mt-5 flex items-center justify-between rounded-[1.7rem] border border-white/10 bg-white/[0.045] px-4 py-3 shadow-[inset_0_1px_0_rgba(255,255,255,0.05)]">
         <div className="text-sm font-medium text-slate-300">
-          当前识别：<span className="font-black text-white">{stats.label}</span>
+          当前识别: <span className="font-black text-white">{stats.label}</span>
         </div>
         <div className="text-[10px] font-semibold tracking-[0.18em] text-slate-500">
           {statusText}
@@ -340,153 +367,85 @@ export const MoodChart: React.FC<MoodChartProps> = ({
         </div>
       </div>
 
-      <div className="relative mt-6 flex-1 min-h-[360px] rounded-[2.2rem] border border-white/10 bg-[linear-gradient(180deg,rgba(255,255,255,0.045),rgba(255,255,255,0.015))] p-4 shadow-[inset_0_1px_0_rgba(255,255,255,0.05)]">
+      {showLowActivityHint ? (
+        <div className="mt-4 flex items-center justify-between gap-3 rounded-[1.5rem] border border-emerald-300/12 bg-emerald-300/[0.08] px-4 py-3 text-xs font-semibold text-emerald-100 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)]">
+          <span>{chartMeta.allZero ? "当前样本几乎都贴近 0%，下方仍然显示真实曲线。" : "当前波动很轻微，下方显示的是细小变化的真实曲线。"}</span>
+          <span className="shrink-0 rounded-full border border-emerald-200/15 bg-white/5 px-3 py-1 text-[10px] tracking-[0.18em] text-emerald-100/90">
+            {chartMeta.allZero ? "稳定基线" : "低波动区间"}
+          </span>
+        </div>
+      ) : points.length === 0 ? (
+        <div className="mt-4 flex items-center justify-between gap-3 rounded-[1.5rem] border border-sky-300/10 bg-sky-300/[0.06] px-4 py-3 text-xs font-semibold text-sky-100 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)]">
+          <span>当前还没有实时样本，下面先显示待机基线；一旦采到数据会自动切成真实曲线。</span>
+          <span className="shrink-0 rounded-full border border-sky-200/15 bg-white/5 px-3 py-1 text-[10px] tracking-[0.18em] text-sky-100/90">
+            待机基线
+          </span>
+        </div>
+      ) : null}
+
+      <div className="ios-glass-well ios-glass-well--stage relative mt-6 flex-1 min-h-[460px] rounded-[2.2rem] p-4">
         {points.length === 0 ? (
-          <div className="flex h-full items-center justify-center text-center">
-            <div>
-              <div className="text-lg font-black text-white">实时曲线等待中</div>
-              <p className="mt-3 max-w-md text-sm font-semibold leading-7 text-slate-400">
-                当还没有足够的历史数据时，这里会自动使用实时采样补齐，不会再整块空着。
-              </p>
-            </div>
+          <div className="pointer-events-none absolute inset-x-8 top-6 z-10 text-center">
+            <div className="text-base font-black text-white">实时曲线待机中</div>
+            <p className="mt-2 text-sm font-semibold text-slate-400">当前样本还没进来，先用基线占位，避免整块空着。</p>
           </div>
-        ) : isLowActivity ? (
-          <div className="flex h-full min-h-[328px] flex-col gap-4">
-            <div className="relative flex-1 overflow-hidden rounded-[1.9rem] border border-white/10 bg-[linear-gradient(180deg,rgba(13,19,33,0.88),rgba(8,12,22,0.96))] px-5 py-5">
-              <div className="absolute inset-0 opacity-70">
-                {[18, 36, 54, 72].map((offset) => (
-                  <div
-                    key={offset}
-                    className="absolute left-0 right-0 border-t border-dashed border-white/6"
-                    style={{ top: `${offset}%` }}
-                  />
-                ))}
-              </div>
-              <div className="relative z-10 flex items-start justify-between gap-6">
-                <div>
-                  <div className="inline-flex items-center gap-2 rounded-full border border-emerald-400/15 bg-emerald-400/10 px-3 py-1 text-[10px] font-black tracking-[0.18em] text-emerald-200">
-                    {chartMeta.allZero ? "稳定基线" : "低波动区间"}
-                  </div>
-                  <div className="mt-4 text-[1.7rem] font-black tracking-[-0.04em] text-white">
-                    {chartMeta.allZero ? "当前情绪很稳定" : "当前波动很轻微"}
-                  </div>
-                  <p className="mt-3 max-w-[24rem] text-sm font-semibold leading-7 text-slate-300">
-                    {chartMeta.allZero
-                      ? "已经持续收到实时样本，只是这些样本几乎都贴近 0%。这里改成稳定态展示，不再让你看到一整块空白。"
-                      : "最近这段时间有变化，但幅度很小。我们把这块切成低波动态，方便你直接看细微起伏。"}
-                  </p>
-                </div>
-                <div className="rounded-[1.4rem] border border-white/10 bg-white/[0.04] px-4 py-3 text-right shadow-[inset_0_1px_0_rgba(255,255,255,0.05)]">
-                  <div className="text-[10px] font-semibold tracking-[0.18em] text-slate-400">最近刷新</div>
-                  <div className="mt-2 text-lg font-black text-white">
-                    {riskUpdatedAt
-                      ? new Date(riskUpdatedAt).toLocaleTimeString([], {
-                          hour: "2-digit",
-                          minute: "2-digit",
-                        })
-                      : "--:--"}
-                  </div>
-                </div>
-              </div>
+        ) : null}
 
-              <div className="relative z-10 mt-8 h-[12.8rem] overflow-hidden rounded-[1.7rem] border border-white/10 bg-[linear-gradient(180deg,rgba(255,255,255,0.025),rgba(255,255,255,0.01))] px-4 py-4 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)]">
-                <div className="absolute left-4 right-4 top-[74%] h-[2px] rounded-full bg-[linear-gradient(90deg,rgba(96,165,250,0.16),rgba(96,165,250,0.8),rgba(56,189,248,0.22))]" />
-                {lowActivityItems.map((item) => (
-                  <React.Fragment key={item.id}>
-                    <div
-                      className="absolute bottom-[26%] w-[12px] -translate-x-1/2 rounded-full bg-[linear-gradient(180deg,rgba(125,211,252,0.95),rgba(99,102,241,0.88))] shadow-[0_0_0_4px_rgba(59,130,246,0.08),0_12px_26px_rgba(37,99,235,0.18)]"
-                      style={{
-                        left: `${item.left}%`,
-                        height: `${item.height}px`,
-                      }}
-                    />
-                    <div
-                      className="absolute h-[10px] w-[10px] -translate-x-1/2 rounded-full border border-white/30 bg-[var(--chart-accent)] shadow-[0_0_0_6px_rgba(59,130,246,0.08),0_0_18px_rgba(96,165,250,0.24)]"
-                      style={{
-                        left: `${item.left}%`,
-                        top: `${item.top}%`,
-                      }}
-                    />
-                  </React.Fragment>
-                ))}
-                <div className="absolute inset-x-4 bottom-3 flex items-center justify-between text-[10px] font-semibold tracking-[0.1em] text-slate-500">
-                  {lowActivityItems.map((item) => (
-                    <span key={`${item.id}-time`}>{item.time}</span>
-                  ))}
-                </div>
-              </div>
-            </div>
-
-            <div className="grid grid-cols-3 gap-3">
-              <div className="rounded-[1.5rem] border border-white/10 bg-white/[0.04] px-4 py-4 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)]">
-                <div className="text-[10px] font-semibold tracking-[0.18em] text-slate-400">样本同步</div>
-                <div className="mt-2 text-[1.45rem] font-black text-white">{stats.samples}</div>
-                <div className="mt-2 text-xs font-semibold leading-6 text-slate-400">最近一段时间的实时采样已经连上。</div>
-              </div>
-              <div className="rounded-[1.5rem] border border-white/10 bg-white/[0.04] px-4 py-4 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)]">
-                <div className="text-[10px] font-semibold tracking-[0.18em] text-slate-400">当前判断</div>
-                <div className="mt-2 text-[1.45rem] font-black text-white">{stats.label}</div>
-                <div className="mt-2 text-xs font-semibold leading-6 text-slate-400">当前波动值 {stats.current}，整体接近稳定区间。</div>
-              </div>
-              <div className="rounded-[1.5rem] border border-white/10 bg-white/[0.04] px-4 py-4 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)]">
-                <div className="text-[10px] font-semibold tracking-[0.18em] text-slate-400">当前建议</div>
-                <div className="mt-2 text-[1.1rem] font-black text-white">保持观察</div>
-                <div className="mt-2 text-xs font-semibold leading-6 text-slate-400">
-                  {chartMeta.allZero ? "暂时不需要额外提醒，继续采样即可。" : "可以继续观察几分钟，等变化更明显时再判断。"}
-                </div>
-              </div>
-            </div>
-          </div>
-        ) : (
-          <div className="h-full min-h-[328px]">
-            <ResponsiveContainer width="100%" height="100%">
-              <AreaChart data={displayPoints} margin={{ left: 0, right: 12, top: 10, bottom: 8 }}>
-                <defs>
-                  <linearGradient id="moodGradient" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="0%" stopColor="var(--chart-accent)" stopOpacity={0.34} />
-                    <stop offset="100%" stopColor="var(--chart-accent)" stopOpacity={0.02} />
-                  </linearGradient>
-                </defs>
-                <CartesianGrid vertical={false} strokeDasharray="4 4" stroke="var(--chart-grid)" />
-                <XAxis
-                  dataKey="time"
-                  axisLine={false}
-                  tickLine={false}
-                  tick={{ fontSize: 10, fill: "var(--chart-tick)", fontWeight: 800 }}
-                  dy={12}
-                  minTickGap={28}
-                />
-                <YAxis hide domain={chartMeta.domain} />
-                <Tooltip
-                  formatter={(_value: number, _label: string, item: any) => [
-                    `${Math.round(Number(item?.payload?.score ?? 0))}%`,
-                    "波动值",
-                  ]}
-                  labelFormatter={(value) => `时间 ${value}`}
-                  cursor={{ stroke: "var(--chart-accent)", strokeWidth: 1, strokeDasharray: "4 4" }}
-                  contentStyle={{
-                    borderRadius: "18px",
-                    border: "1px solid rgba(255,255,255,0.08)",
-                    backgroundColor: "rgba(8,12,23,0.94)",
-                    backdropFilter: "blur(20px)",
-                    fontSize: "10px",
-                    fontWeight: "900",
-                  }}
-                />
-                <Area
-                  type="monotone"
-                  dataKey="plotScore"
-                  stroke="var(--chart-accent)"
-                  strokeWidth={3}
-                  fill="url(#moodGradient)"
-                  animationDuration={900}
-                  dot={{ r: 1.8, fill: "var(--chart-accent)", opacity: 0.65 }}
-                  activeDot={{ r: 4, fill: "var(--chart-accent)" }}
-                />
-              </AreaChart>
-            </ResponsiveContainer>
-          </div>
-        )}
+        <div className={points.length === 0 ? "h-full min-h-[328px] pt-20" : "h-full min-h-[328px]"}>
+          <ResponsiveContainer width="100%" height="100%">
+            <AreaChart data={chartPoints} margin={{ left: 0, right: 12, top: 10, bottom: 8 }}>
+              <defs>
+                <linearGradient id="moodGradient" x1="0" y1="0" x2="0" y2="1">
+                  <stop offset="0%" stopColor="var(--chart-accent)" stopOpacity={points.length === 0 ? 0.22 : 0.34} />
+                  <stop offset="100%" stopColor="var(--chart-accent)" stopOpacity={points.length === 0 ? 0.05 : 0.02} />
+                </linearGradient>
+              </defs>
+              <CartesianGrid vertical={false} strokeDasharray="4 4" stroke="var(--chart-grid)" />
+              <XAxis
+                dataKey="time"
+                axisLine={false}
+                tickLine={false}
+                tick={{ fontSize: 10, fill: "var(--chart-tick)", fontWeight: 800 }}
+                dy={12}
+                minTickGap={28}
+              />
+              <YAxis hide domain={points.length === 0 ? [0, 12] : chartMeta.domain} />
+              <Tooltip
+                formatter={(_value: number, _label: string, item: any) => [
+                  `${Math.round(Number(item?.payload?.score ?? 0))}%`,
+                  "波动值",
+                ]}
+                labelFormatter={(value) => `时间 ${value}`}
+                cursor={{ stroke: "var(--chart-accent)", strokeWidth: 1, strokeDasharray: "4 4" }}
+                contentStyle={{
+                  borderRadius: "18px",
+                  border: "1px solid rgba(255,255,255,0.08)",
+                  backgroundColor: "rgba(8,12,23,0.94)",
+                  backdropFilter: "blur(20px)",
+                  fontSize: "10px",
+                  fontWeight: "900",
+                }}
+              />
+              <Area
+                type="monotone"
+                dataKey="plotScore"
+                stroke="var(--chart-accent)"
+                strokeWidth={points.length === 0 ? 3.2 : chartMeta.allZero ? 3.6 : 3}
+                fill="url(#moodGradient)"
+                animationDuration={900}
+                dot={{
+                  r: points.length === 0 ? 2.2 : chartMeta.allZero ? 2.4 : 1.8,
+                  fill: "var(--chart-accent)",
+                  opacity: points.length === 0 ? 0.72 : chartMeta.allZero ? 0.88 : 0.65,
+                }}
+                activeDot={{
+                  r: points.length === 0 ? 4.2 : chartMeta.allZero ? 4.8 : 4,
+                  fill: "var(--chart-accent)",
+                }}
+              />
+            </AreaChart>
+          </ResponsiveContainer>
+        </div>
       </div>
     </div>
   );

@@ -192,16 +192,17 @@
         height: 100%;
       }
       .float-widget-shell {
-        width: 80px;
-        height: 80px;
+        width: 100%;
+        height: 100%;
         display: flex;
         align-items: center;
         justify-content: center;
       }
       .float-widget-button {
-        width: 80px;
-        height: 80px;
+        width: 100%;
+        height: 100%;
         border: none;
+        border-radius: 26px;
         background: transparent;
         color: var(--accent);
         box-shadow: none;
@@ -210,6 +211,7 @@
         justify-content: center;
         transition: transform 0.25s ease, box-shadow 0.25s ease;
         cursor: grab;
+        overflow: hidden;
       }
       .float-widget-button:active {
         cursor: grabbing;
@@ -219,6 +221,13 @@
       }
       .float-widget-button:hover {
         transform: translateY(-1px) scale(1.02);
+      }
+      .float-widget-icon {
+        width: 80px;
+        height: 80px;
+        object-fit: cover;
+        border-radius: 26px;
+        box-shadow: 0 14px 30px rgba(4, 8, 18, 0.28);
       }
       .float-chat-panel {
         width: 430px;

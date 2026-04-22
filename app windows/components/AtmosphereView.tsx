@@ -60,11 +60,11 @@ export const AtmosphereView: React.FC<AtmosphereViewProps> = ({
   ];
 
   return (
-    <div className="ios-surface-hero relative h-full min-h-[820px] overflow-y-auto rounded-[2.6rem] p-6 pr-4 animate-rise no-scrollbar">
+    <div className="ios-surface-hero relative h-full min-h-[940px] overflow-hidden rounded-[2.6rem] p-6 animate-rise">
       <div className="ios-liquid-blob" />
       <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_top_left,rgba(255,204,224,0.14),transparent_26%),radial-gradient(circle_at_bottom_right,rgba(132,223,255,0.08),transparent_18%),linear-gradient(180deg,rgba(255,255,255,0.04),transparent_24%)]" />
 
-      <div className="relative flex min-h-full flex-col">
+      <div className="relative flex h-full flex-col">
         <div className="flex items-center justify-between gap-3">
           <span className="ios-chip-soft inline-flex items-center gap-2 rounded-full px-3.5 py-2 text-[10px] font-black tracking-[0.24em] text-slate-200">
             <Waves size={11} className="text-sky-300" />
@@ -125,7 +125,7 @@ export const AtmosphereView: React.FC<AtmosphereViewProps> = ({
           </div>
         </div>
 
-        <div className="ios-surface-subtle mt-4 rounded-[2rem] p-4">
+        <div className="ios-glass-well mt-4 rounded-[2rem] p-4">
           <div className="text-[11px] font-bold tracking-[0.24em] text-slate-500">风险维度</div>
           <div className="mt-3 space-y-3">
             {riskItems.map((item) => (
@@ -142,7 +142,7 @@ export const AtmosphereView: React.FC<AtmosphereViewProps> = ({
           </div>
         </div>
 
-        <div className="ios-surface-panel mt-4 rounded-[1.8rem] px-4 py-3">
+        <div className="ios-glass-well ios-glass-well--soft mt-4 rounded-[1.8rem] px-4 py-3">
           <div className="text-[10px] font-bold tracking-[0.18em] text-slate-500">陪伴建议</div>
           <div className="mt-2 text-[13px] font-semibold leading-5 text-slate-300">
             {summary.level}，当前更适合用简短反馈和轻提醒，不需要堆太多说明文字。
