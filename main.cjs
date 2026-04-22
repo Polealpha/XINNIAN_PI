@@ -14,15 +14,22 @@ let chatWindow = null;
 let floatDragState = null;
 let backendProc = null;
 let openClawGatewayProc = null;
+let gemmaTunnelProc = null;
 const LOCAL_BACKEND_URL = "http://127.0.0.1:8000";
 const LOCAL_OPENCLAW_GATEWAY_PORT = 18890;
+const LOCAL_GEMMA_TUNNEL_PORT = 19010;
+const LOCAL_GEMMA_MODEL_ID = "gemma-4-31b-it";
+const GEMMA_REMOTE_SSH_HOST = "10.101.0.36";
+const GEMMA_REMOTE_SSH_PORT = 2222;
+const GEMMA_REMOTE_SSH_USER = "v6yvdcnv#root#bec2604c-ae04-4222-85f3-b399f6ab2e51";
+const GEMMA_REMOTE_SSH_PASSWORD = "Qingbei36974!";
 const LOCAL_OPENCLAW_PROVIDER = {
-  providerId: "zai",
-  profileId: "zai:default",
-  endpoint: "coding-cn",
-  baseUrl: "https://open.bigmodel.cn/api/coding/paas/v4/",
-  modelId: "glm-5",
-  modelRef: "zai/glm-5",
+  providerId: "gemma",
+  profileId: "gemma:default",
+  endpoint: "local-gateway",
+  baseUrl: `${LOCAL_BACKEND_URL}/gemma-provider/v1`,
+  modelId: LOCAL_GEMMA_MODEL_ID,
+  modelRef: `gemma/${LOCAL_GEMMA_MODEL_ID}`,
   thinkingDefault: "low",
 };
 const deviceSyncManager = new DeviceSyncManager({
@@ -88,6 +95,14 @@ const resolveRuntimeRoot = () => {
   return path.join(process.resourcesPath, "bridge-runtime");
 };
 
+const resolveLocalAssistantDataRoot = () => {
+  const root = process.env.LOCALAPPDATA
+    ? path.join(process.env.LOCALAPPDATA, "EmoResonance", "assistant_data")
+    : path.join(resolveRuntimeRoot(), "assistant_data");
+  fs.mkdirSync(root, { recursive: true });
+  return root;
+};
+
 const resolveOpenClawRepo = (runtimeRoot) => {
   if (process.env.OPENCLAW_REPO_PATH) {
     return process.env.OPENCLAW_REPO_PATH;
@@ -108,11 +123,11 @@ const resolveOpenClawRepo = (runtimeRoot) => {
 };
 
 const resolveOpenClawWorkspace = (runtimeRoot) => {
-  return path.join(runtimeRoot, "assistant_data", "openclaw_workspace");
+  return path.join(resolveLocalAssistantDataRoot(), "openclaw_workspace");
 };
 
 const resolveOpenClawStateDir = (runtimeRoot) => {
-  return path.join(runtimeRoot, "assistant_data", "openclaw_state");
+  return path.join(resolveLocalAssistantDataRoot(), "openclaw_state");
 };
 
 const resolveOpenClawCodexHome = (runtimeRoot) => {
@@ -213,34 +228,19 @@ const readJsonIfExists = (pathname) => {
 const loadOpenClawProviderConfig = () => {
   const fileConfig = readJsonIfExists(resolveOpenClawProviderConfigPath()) || {};
   const modelId = String(fileConfig.modelId || LOCAL_OPENCLAW_PROVIDER.modelId).trim() || LOCAL_OPENCLAW_PROVIDER.modelId;
-  const apiKey = String(
-    process.env.ZAI_API_KEY ||
-      process.env.Z_AI_API_KEY ||
-      fileConfig.apiKey ||
-      ""
-  ).trim();
   return {
     providerId: LOCAL_OPENCLAW_PROVIDER.providerId,
     profileId: LOCAL_OPENCLAW_PROVIDER.profileId,
     endpoint: String(fileConfig.endpoint || LOCAL_OPENCLAW_PROVIDER.endpoint).trim() || LOCAL_OPENCLAW_PROVIDER.endpoint,
     baseUrl: String(fileConfig.baseUrl || LOCAL_OPENCLAW_PROVIDER.baseUrl).trim() || LOCAL_OPENCLAW_PROVIDER.baseUrl,
     modelId,
-    modelRef: `zai/${modelId}`,
+    modelRef: `gemma/${modelId}`,
     thinkingDefault: String(fileConfig.thinkingDefault || LOCAL_OPENCLAW_PROVIDER.thinkingDefault).trim() || LOCAL_OPENCLAW_PROVIDER.thinkingDefault,
-    apiKey,
+    apiKey: String(fileConfig.apiKey || "local-gemma-bridge").trim(),
   };
 };
 
-const buildOpenClawProviderEnv = () => {
-  const providerConfig = loadOpenClawProviderConfig();
-  if (!providerConfig.apiKey) {
-    return {};
-  }
-  return {
-    ZAI_API_KEY: providerConfig.apiKey,
-    Z_AI_API_KEY: providerConfig.apiKey,
-  };
-};
+const buildOpenClawProviderEnv = () => ({});
 
 const parseLatestActivationProfile = (workspaceDir) => {
   const usersRoot = path.join(workspaceDir, "assistant_data", "users");
@@ -318,11 +318,11 @@ const ensureAgentModelsConfig = (agentDir, providerConfig) => {
     models: [
       {
         id: providerConfig.modelId,
-        name: "GLM-5",
+        name: "Gemma 4 31B IT",
         reasoning: true,
         input: ["text"],
-        contextWindow: 204800,
-        maxTokens: 131072,
+        contextWindow: 32768,
+        maxTokens: 2048,
         cost: {
           input: 0,
           output: 0,
@@ -513,11 +513,11 @@ const ensureOpenClawState = (stateDir) => {
       models: [
         {
           id: providerConfig.modelId,
-          name: "GLM-5",
+          name: "Gemma 4 31B IT",
           reasoning: true,
           input: ["text"],
-          contextWindow: 204800,
-          maxTokens: 131072,
+          contextWindow: 32768,
+          maxTokens: 2048,
         },
       ],
     },

@@ -14,15 +14,22 @@ let chatWindow = null;
 let floatDragState = null;
 let backendProc = null;
 let openClawGatewayProc = null;
+let gemmaTunnelProc = null;
 const LOCAL_BACKEND_URL = "http://127.0.0.1:8000";
 const LOCAL_OPENCLAW_GATEWAY_PORT = 18890;
+const LOCAL_GEMMA_TUNNEL_PORT = 19010;
+const LOCAL_GEMMA_MODEL_ID = "gemma-4-31b-it";
+const GEMMA_REMOTE_SSH_HOST = "10.101.0.36";
+const GEMMA_REMOTE_SSH_PORT = 2222;
+const GEMMA_REMOTE_SSH_USER = "v6yvdcnv#root#bec2604c-ae04-4222-85f3-b399f6ab2e51";
+const GEMMA_REMOTE_SSH_PASSWORD = "Qingbei36974!";
 const LOCAL_OPENCLAW_PROVIDER = {
-  providerId: "zai",
-  profileId: "zai:default",
-  endpoint: "coding-cn",
-  baseUrl: "https://open.bigmodel.cn/api/coding/paas/v4/",
-  modelId: "glm-5",
-  modelRef: "zai/glm-5",
+  providerId: "gemma",
+  profileId: "gemma:default",
+  endpoint: "local-gateway",
+  baseUrl: `${LOCAL_BACKEND_URL}/gemma-provider/v1`,
+  modelId: LOCAL_GEMMA_MODEL_ID,
+  modelRef: `gemma/${LOCAL_GEMMA_MODEL_ID}`,
   thinkingDefault: "low",
 };
 const deviceSyncManager = new DeviceSyncManager({
@@ -88,6 +95,14 @@ const resolveRuntimeRoot = () => {
   return path.join(process.resourcesPath, "bridge-runtime");
 };
 
+const resolveLocalAssistantDataRoot = () => {
+  const root = process.env.LOCALAPPDATA
+    ? path.join(process.env.LOCALAPPDATA, "EmoResonance", "assistant_data")
+    : path.join(resolveRuntimeRoot(), "assistant_data");
+  fs.mkdirSync(root, { recursive: true });
+  return root;
+};
+
 const resolveOpenClawRepo = (runtimeRoot) => {
   if (process.env.OPENCLAW_REPO_PATH) {
     return process.env.OPENCLAW_REPO_PATH;
@@ -108,11 +123,11 @@ const resolveOpenClawRepo = (runtimeRoot) => {
 };
 
 const resolveOpenClawWorkspace = (runtimeRoot) => {
-  return path.join(runtimeRoot, "assistant_data", "openclaw_workspace");
+  return path.join(resolveLocalAssistantDataRoot(), "openclaw_workspace");
 };
 
 const resolveOpenClawStateDir = (runtimeRoot) => {
-  return path.join(runtimeRoot, "assistant_data", "openclaw_state");
+  return path.join(resolveLocalAssistantDataRoot(), "openclaw_state");
 };
 
 const resolveOpenClawCodexHome = (runtimeRoot) => {
@@ -122,7 +137,7 @@ const resolveOpenClawCodexHome = (runtimeRoot) => {
   if (process.env.LOCALAPPDATA) {
     return path.join(process.env.LOCALAPPDATA, "EmoResonance", "codex_home");
   }
-  return path.join(runtimeRoot, "assistant_data", "codex_home");
+  return path.join(resolveRuntimeRoot(), "assistant_data", "codex_home");
 };
 
 const resolveOpenClawProxyUrl = () => {
@@ -214,34 +229,19 @@ const readJsonIfExists = (pathname) => {
 const loadOpenClawProviderConfig = () => {
   const fileConfig = readJsonIfExists(resolveOpenClawProviderConfigPath()) || {};
   const modelId = String(fileConfig.modelId || LOCAL_OPENCLAW_PROVIDER.modelId).trim() || LOCAL_OPENCLAW_PROVIDER.modelId;
-  const apiKey = String(
-    process.env.ZAI_API_KEY ||
-      process.env.Z_AI_API_KEY ||
-      fileConfig.apiKey ||
-      ""
-  ).trim();
   return {
     providerId: LOCAL_OPENCLAW_PROVIDER.providerId,
     profileId: LOCAL_OPENCLAW_PROVIDER.profileId,
     endpoint: String(fileConfig.endpoint || LOCAL_OPENCLAW_PROVIDER.endpoint).trim() || LOCAL_OPENCLAW_PROVIDER.endpoint,
     baseUrl: String(fileConfig.baseUrl || LOCAL_OPENCLAW_PROVIDER.baseUrl).trim() || LOCAL_OPENCLAW_PROVIDER.baseUrl,
     modelId,
-    modelRef: `zai/${modelId}`,
+    modelRef: `gemma/${modelId}`,
     thinkingDefault: String(fileConfig.thinkingDefault || LOCAL_OPENCLAW_PROVIDER.thinkingDefault).trim() || LOCAL_OPENCLAW_PROVIDER.thinkingDefault,
-    apiKey,
+    apiKey: String(fileConfig.apiKey || "local-gemma-bridge").trim(),
   };
 };
 
-const buildOpenClawProviderEnv = () => {
-  const providerConfig = loadOpenClawProviderConfig();
-  if (!providerConfig.apiKey) {
-    return {};
-  }
-  return {
-    ZAI_API_KEY: providerConfig.apiKey,
-    Z_AI_API_KEY: providerConfig.apiKey,
-  };
-};
+const buildOpenClawProviderEnv = () => ({});
 
 const parseLatestActivationProfile = (workspaceDir) => {
   const usersRoot = path.join(workspaceDir, "assistant_data", "users");
@@ -319,11 +319,11 @@ const ensureAgentModelsConfig = (agentDir, providerConfig) => {
     models: [
       {
         id: providerConfig.modelId,
-        name: "GLM-5",
+        name: "Gemma 4 31B IT",
         reasoning: true,
         input: ["text"],
-        contextWindow: 204800,
-        maxTokens: 131072,
+        contextWindow: 32768,
+        maxTokens: 2048,
         cost: {
           input: 0,
           output: 0,
@@ -398,6 +398,21 @@ ${repoSummary}`;
 };
 
 const ensureOpenClawWorkspace = (workspaceDir) => {
+  const runtimeRoot = resolveRuntimeRoot();
+  const seedCandidates = [
+    path.join(path.dirname(runtimeRoot), "lunwen_backup_20260421_153009", "app", "assistant_data", "openclaw_workspace"),
+    path.join(runtimeRoot, "assistant_data", "openclaw_workspace"),
+  ];
+  if (!fs.existsSync(workspaceDir)) {
+    for (const candidate of seedCandidates) {
+      try {
+        if (fs.existsSync(candidate)) {
+          fs.cpSync(candidate, workspaceDir, { recursive: true });
+          break;
+        }
+      } catch {}
+    }
+  }
   fs.mkdirSync(workspaceDir, { recursive: true });
   fs.mkdirSync(path.join(workspaceDir, "memory"), { recursive: true });
   const defaults = {
@@ -460,7 +475,15 @@ const ensureOpenClawCodexHome = (runtimeRoot, workspaceDir, openClawRepo) => {
 };
 
 const ensureOpenClawState = (stateDir) => {
-  const sourceState = path.join(os.homedir(), ".openclaw");
+  const runtimeRoot = resolveRuntimeRoot();
+  const sourceStateCandidates = [
+    path.join(path.dirname(runtimeRoot), "lunwen_backup_20260421_153009", "app", "assistant_data", "openclaw_state"),
+    path.join(runtimeRoot, "assistant_data", "openclaw_state"),
+    path.join(os.homedir(), ".openclaw"),
+  ];
+  const sourceState =
+    sourceStateCandidates.find((candidate) => fs.existsSync(path.join(candidate, "openclaw.json"))) ||
+    path.join(os.homedir(), ".openclaw");
   const providerConfig = loadOpenClawProviderConfig();
   fs.mkdirSync(stateDir, { recursive: true });
   fs.mkdirSync(path.join(stateDir, "identity"), { recursive: true });
@@ -493,35 +516,31 @@ const ensureOpenClawState = (stateDir) => {
   cfg.gateway.auth.token = "chonggou-openclaw-bridge";
   cfg.auth = cfg.auth || {};
   cfg.auth.profiles = {
-    ...(cfg.auth.profiles || {}),
     [providerConfig.profileId]: {
       provider: providerConfig.providerId,
       mode: "api_key",
     },
   };
   cfg.auth.order = {
-    ...(cfg.auth.order || {}),
     [providerConfig.providerId]: [providerConfig.profileId],
   };
   cfg.models = cfg.models || {};
   cfg.models.providers = {
-    ...(cfg.models.providers || {}),
     [providerConfig.providerId]: {
-      ...((cfg.models.providers || {})[providerConfig.providerId] || {}),
       api: "openai-completions",
       baseUrl: providerConfig.baseUrl,
       apiKey: providerConfig.apiKey || ((cfg.models.providers || {})[providerConfig.providerId] || {}).apiKey || "",
-      models: [
-        {
-          id: providerConfig.modelId,
-          name: "GLM-5",
-          reasoning: true,
-          input: ["text"],
-          contextWindow: 204800,
-          maxTokens: 131072,
-        },
-      ],
-    },
+        models: [
+          {
+            id: providerConfig.modelId,
+            name: "Gemma 4 31B IT",
+            reasoning: true,
+            input: ["text"],
+            contextWindow: 32768,
+            maxTokens: 2048,
+          },
+        ],
+      },
   };
   cfg.agents = cfg.agents || {};
   cfg.agents.defaults = cfg.agents.defaults || {};
@@ -529,6 +548,9 @@ const ensureOpenClawState = (stateDir) => {
   cfg.agents.defaults.model.primary = providerConfig.modelRef;
   cfg.agents.defaults.thinkingDefault = providerConfig.thinkingDefault;
   delete cfg.agents.defaults.cliBackends;
+  if (cfg.plugins?.entries) {
+    delete cfg.plugins.entries.zai;
+  }
   fs.writeFileSync(targetConfig, JSON.stringify(cfg, null, 2), "utf8");
   if (providerConfig.apiKey) {
     const authStoreTargets = [
@@ -653,6 +675,64 @@ const waitForLocalOpenClawGateway = async (maxAttempts = 90) => {
   return false;
 };
 
+const isLocalGemmaTunnelHealthy = async () => probeTcpPort("127.0.0.1", LOCAL_GEMMA_TUNNEL_PORT, 500);
+
+const startLocalGemmaTunnel = () => {
+  if (gemmaTunnelProc) return;
+  const plinkPath = "C:\\Program Files\\PuTTY\\plink.exe";
+  if (!fs.existsSync(plinkPath)) {
+    appendStartupLog(`startLocalGemmaTunnel missing plink=${plinkPath}`);
+    return;
+  }
+  appendStartupLog(`startLocalGemmaTunnel forwarding 127.0.0.1:${LOCAL_GEMMA_TUNNEL_PORT} -> ${GEMMA_REMOTE_SSH_HOST}:18000`);
+  gemmaTunnelProc = spawn(
+    plinkPath,
+    [
+      "-N",
+      "-batch",
+      "-P",
+      String(GEMMA_REMOTE_SSH_PORT),
+      "-pw",
+      GEMMA_REMOTE_SSH_PASSWORD,
+      "-L",
+      `127.0.0.1:${LOCAL_GEMMA_TUNNEL_PORT}:127.0.0.1:18000`,
+      `${GEMMA_REMOTE_SSH_USER}@${GEMMA_REMOTE_SSH_HOST}`,
+    ],
+    {
+      windowsHide: true,
+      stdio: ["ignore", "pipe", "pipe"],
+    }
+  );
+  gemmaTunnelProc.stdout?.on("data", (chunk) => {
+    const textOut = String(chunk || "").trim();
+    if (textOut) appendStartupLog(`[gemma-tunnel][stdout] ${textOut}`);
+  });
+  gemmaTunnelProc.stderr?.on("data", (chunk) => {
+    const textErr = String(chunk || "").trim();
+    if (textErr) appendStartupLog(`[gemma-tunnel][stderr] ${textErr}`);
+  });
+  gemmaTunnelProc.on("exit", (code, signal) => {
+    appendStartupLog(`startLocalGemmaTunnel exited code=${code} signal=${signal}`);
+    gemmaTunnelProc = null;
+  });
+};
+
+const waitForLocalGemmaTunnel = async (maxAttempts = 40) => {
+  for (let i = 0; i < maxAttempts; i += 1) {
+    if (await isLocalGemmaTunnelHealthy()) {
+      appendStartupLog(`waitForLocalGemmaTunnel ready attempts=${i + 1}`);
+      return true;
+    }
+    if (!gemmaTunnelProc && i >= 2) {
+      appendStartupLog(`waitForLocalGemmaTunnel aborted attempts=${i + 1} reason=process-exited`);
+      return false;
+    }
+    await delay(500);
+  }
+  appendStartupLog(`waitForLocalGemmaTunnel timeout attempts=${maxAttempts}`);
+  return false;
+};
+
 const startLocalBackend = () => {
   if (backendProc) return;
   const runtimeRoot = resolveRuntimeRoot();
@@ -696,6 +776,14 @@ const startLocalBackend = () => {
         OPENCLAW_GATEWAY_ORIGIN: `http://127.0.0.1:${LOCAL_OPENCLAW_GATEWAY_PORT}`,
         OPENCLAW_DESKTOP_SHARED_SESSION_KEY: "agent:main:main",
         OPENCLAW_CODEX_HOME: process.env.OPENCLAW_CODEX_HOME || codexHome,
+        GEMMA_PROVIDER_UPSTREAM_BASE_URL: `http://127.0.0.1:${LOCAL_GEMMA_TUNNEL_PORT}/v1`,
+        GEMMA_PROVIDER_BRIDGE_BASE_URL: `${LOCAL_BACKEND_URL}/gemma-provider/v1`,
+        GEMMA_PROVIDER_REMOTE_HTTP_BASE_URL: process.env.GEMMA_PROVIDER_REMOTE_HTTP_BASE_URL || "http://127.0.0.1:18000/v1",
+        GEMMA_PROVIDER_REMOTE_SSH_HOST: process.env.GEMMA_PROVIDER_REMOTE_SSH_HOST || GEMMA_REMOTE_SSH_HOST,
+        GEMMA_PROVIDER_REMOTE_SSH_PORT: process.env.GEMMA_PROVIDER_REMOTE_SSH_PORT || String(GEMMA_REMOTE_SSH_PORT),
+        GEMMA_PROVIDER_REMOTE_SSH_USER: process.env.GEMMA_PROVIDER_REMOTE_SSH_USER || GEMMA_REMOTE_SSH_USER,
+        GEMMA_PROVIDER_REMOTE_SSH_PASSWORD: process.env.GEMMA_PROVIDER_REMOTE_SSH_PASSWORD || GEMMA_REMOTE_SSH_PASSWORD,
+        ASSISTANT_DUPLEX_WS_BASE: process.env.ASSISTANT_DUPLEX_WS_BASE || "ws://127.0.0.1:19002/ws/duplex",
         CODEX_HOME: process.env.CODEX_HOME || codexHome,
         TMP: path.join(codexHome, "tmp"),
         TEMP: path.join(codexHome, "tmp"),
@@ -799,6 +887,10 @@ const ensureLocalBackend = async () => {
   const openClawRepo = resolveOpenClawRepo(runtimeRoot);
   const gatewayEntry = path.join(openClawRepo, "openclaw.mjs");
   const shouldWaitForGateway = fs.existsSync(gatewayEntry);
+  if (!(await isLocalGemmaTunnelHealthy())) {
+    startLocalGemmaTunnel();
+    await waitForLocalGemmaTunnel();
+  }
 
   let backendHealthy = await isLocalBackendHealthy();
   if (!backendHealthy) {
@@ -834,6 +926,14 @@ const stopLocalBackend = () => {
     backendProc.kill();
   } catch {}
   backendProc = null;
+};
+
+const stopLocalGemmaTunnel = () => {
+  if (!gemmaTunnelProc) return;
+  try {
+    gemmaTunnelProc.kill();
+  } catch {}
+  gemmaTunnelProc = null;
 };
 
 const stopLocalOpenClawGateway = () => {
@@ -1319,5 +1419,6 @@ app.on("before-quit", () => {
   isQuitting = true;
   deviceSyncManager.dispose();
   stopLocalBackend();
+  stopLocalGemmaTunnel();
   stopLocalOpenClawGateway();
 });

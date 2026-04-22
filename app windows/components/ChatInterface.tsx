@@ -3,8 +3,8 @@ import { ChatAttachment, ChatMessage, EmotionType } from "../types";
 import { Send, Sparkles, User, Bot, Activity, Paperclip, X, Mic, Square, LoaderCircle, Volume2 } from "lucide-react";
 import { generateAssistantMessage, generateAssistantMessageStream } from "../services/llmService";
 import { uploadChatAttachment } from "../services/chatService";
-import { createDesktopVoiceRecorder, transcribeDesktopAudio } from "../services/desktopVoiceService";
 import { AssistantRuntimeStatus, getAssistantRuntimeStatus } from "../services/assistantService";
+import { MiniCpmDuplexService, type DuplexAssistantTurn, type DuplexUserTurn } from "../services/minicpmoDuplexService";
 
 interface ChatInterfaceProps {
   currentEmotion: EmotionType;
@@ -173,13 +173,16 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
   const streamPendingTextRef = useRef("");
   const streamLastFlushMsRef = useRef(0);
   const historyHydratedRef = useRef(false);
-  const voiceRecorderRef = useRef<{ stop: () => Promise<Blob> } | null>(null);
+  const duplexServiceRef = useRef<MiniCpmDuplexService | null>(null);
+  const duplexDraftUserIdRef = useRef<string | null>(null);
+  const duplexDraftBotIdRef = useRef<string | null>(null);
   const speechSynthesisRef = useRef<SpeechSynthesis | null>(null);
   const activeSpeechIdRef = useRef<string | null>(null);
   const speechVoicesLoadedRef = useRef(false);
   const [voiceRecording, setVoiceRecording] = useState(false);
   const [voiceBusy, setVoiceBusy] = useState(false);
   const [voiceError, setVoiceError] = useState("");
+  const [duplexStatus, setDuplexStatus] = useState("");
   const [speechSupported, setSpeechSupported] = useState(false);
   const [speakingMessageId, setSpeakingMessageId] = useState<string | null>(null);
   const [assistantRuntime, setAssistantRuntime] = useState<AssistantRuntimeStatus | null>(null);
@@ -223,6 +226,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
         window.clearTimeout(streamFlushTimerRef.current);
       }
       streamPendingTextRef.current = "";
+      void duplexServiceRef.current?.stop();
       speechSynthesisRef.current?.cancel();
       window.cancelAnimationFrame(rafId);
       window.clearTimeout(timer);
@@ -385,7 +389,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
   };
 
   const onAttachmentPicked = async (event: React.ChangeEvent<HTMLInputElement>) => {
-    const files = Array.from(event.target.files || []);
+    const files = Array.from(event.target.files || []) as File[];
     event.target.value = "";
     await addAttachmentsFromFiles(files);
   };
@@ -410,12 +414,12 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
   const onRootDrop = async (event: React.DragEvent<HTMLDivElement>) => {
     event.preventDefault();
     setDragActive(false);
-    const files = Array.from(event.dataTransfer?.files || []);
+    const files = Array.from(event.dataTransfer?.files || []) as File[];
     await addAttachmentsFromFiles(files);
   };
 
   const onInputPaste = async (event: React.ClipboardEvent<HTMLInputElement>) => {
-    const files = Array.from(event.clipboardData?.files || []);
+    const files = Array.from(event.clipboardData?.files || []) as File[];
     if (!files.length) return;
     event.preventDefault();
     await addAttachmentsFromFiles(files);
@@ -651,39 +655,87 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
     }
   };
 
+  const upsertDuplexDraftMessage = (sender: "user" | "bot", turn: DuplexUserTurn | DuplexAssistantTurn) => {
+    const draftRef = sender === "user" ? duplexDraftUserIdRef : duplexDraftBotIdRef;
+    const draftId = draftRef.current || `${sender}-duplex-${Date.now()}`;
+    if (!draftRef.current) {
+      draftRef.current = draftId;
+    }
+    const message: ChatMessage = {
+      id: draftId,
+      sender,
+      text: turn.text,
+      timestamp: new Date(),
+      contentType: "text",
+      attachments: [],
+    };
+    setMessages((prev) => {
+      const idx = prev.findIndex((item) => item.id === draftId);
+      if (idx >= 0) {
+        const next = [...prev];
+        next[idx] = { ...next[idx], text: turn.text, timestamp: new Date() };
+        return next;
+      }
+      return [...prev, message];
+    });
+    if (turn.committed) {
+      draftRef.current = null;
+      if (onSendMessage) {
+        onSendMessage(message);
+      }
+    }
+  };
+
   const handleVoiceToggle = async () => {
     setVoiceError("");
-    if (voiceRecording && voiceRecorderRef.current) {
-      setVoiceBusy(true);
+    setVoiceBusy(true);
+    if (voiceRecording && duplexServiceRef.current) {
       try {
-        const blob = await voiceRecorderRef.current.stop();
-        voiceRecorderRef.current = null;
+        await duplexServiceRef.current.stop();
+        duplexServiceRef.current = null;
+        duplexDraftUserIdRef.current = null;
+        duplexDraftBotIdRef.current = null;
         setVoiceRecording(false);
-        const result = await transcribeDesktopAudio(blob, "chat");
-        const transcript = String(result.transcript || "").trim();
-        if (!transcript) {
-          setVoiceError("没有识别到有效语音，请重试");
-          return;
-        }
-        await handleSend(transcript);
+        setDuplexStatus("全双工语音已停止");
       } catch (err) {
         setVoiceError(err instanceof Error ? err.message : String(err));
-        setVoiceRecording(false);
-        voiceRecorderRef.current = null;
       } finally {
         setVoiceBusy(false);
       }
       return;
     }
-
-    setVoiceBusy(true);
     try {
-      voiceRecorderRef.current = await createDesktopVoiceRecorder();
+      const service = new MiniCpmDuplexService({
+        onStatus: (status) => setDuplexStatus(status),
+        onError: (message) => {
+          setVoiceError(message);
+        },
+        onRunningChange: (running) => {
+          setVoiceRecording(running);
+          if (!running) {
+            duplexDraftUserIdRef.current = null;
+            duplexDraftBotIdRef.current = null;
+          }
+        },
+        onUserTurn: (turn) => {
+          if (turn.text.trim()) {
+            upsertDuplexDraftMessage("user", turn);
+          }
+        },
+        onAssistantTurn: (turn) => {
+          if (turn.text.trim()) {
+            upsertDuplexDraftMessage("bot", turn);
+          }
+        },
+      });
+      duplexServiceRef.current = service;
+      await service.start({ surface: "desktop" });
       setVoiceRecording(true);
+      setDuplexStatus("MiniCPM-o 官方全双工语音已接入");
     } catch (err) {
       setVoiceError(err instanceof Error ? err.message : String(err));
-      voiceRecorderRef.current = null;
       setVoiceRecording(false);
+      duplexServiceRef.current = null;
     } finally {
       setVoiceBusy(false);
     }
@@ -877,7 +929,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
             onClick={handleVoiceToggle}
             disabled={uploading || isTyping || voiceBusy || chatInputDisabled}
             className={`disabled:opacity-40 transition-colors ${voiceRecording ? "text-rose-300 hover:text-rose-200" : "text-slate-300 hover:text-white"}`}
-            title={voiceRecording ? "结束录音并转写" : "本地语音输入"}
+            title={voiceRecording ? "停止官方全双工语音会话" : "启动官方全双工语音会话"}
           >
             {voiceBusy ? (
               <LoaderCircle size={compact ? 16 : 18} className="animate-spin" />
@@ -911,7 +963,8 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
         </div>
         {attachmentError && <p className="text-[10px] font-bold text-rose-400 mt-2">{attachmentError}</p>}
         {voiceError && <p className="text-[10px] font-bold text-rose-400 mt-2">{voiceError}</p>}
-        {voiceRecording && <p className="text-[10px] font-bold text-amber-300 mt-2">正在本地录音，再按一次麦克风即可结束并自动发送</p>}
+        {voiceRecording && <p className="text-[10px] font-bold text-amber-300 mt-2">官方 MiniCPM-o 全双工语音进行中，再按一次麦克风即可结束</p>}
+        {!voiceError && duplexStatus && <p className="text-[10px] font-bold text-sky-300 mt-2">{duplexStatus}</p>}
         {!audioEnabled && <p className="text-[10px] font-bold text-slate-500 mt-2">当前已关闭音频输出，回答不会自动朗读。</p>}
         {!compact && (
           <p className="text-[9px] text-center mt-3 text-slate-500 font-semibold tracking-[0.18em]">

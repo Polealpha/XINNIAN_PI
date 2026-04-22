@@ -16,9 +16,9 @@ from collections import deque
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, UploadFile, status, WebSocket, WebSocketDisconnect
+from fastapi import Body, Depends, FastAPI, File, Form, HTTPException, Request, UploadFile, status, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse, StreamingResponse
+from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from fastapi.staticfiles import StaticFiles
 from sqlite3 import Connection
@@ -63,6 +63,16 @@ from .assistant_service import AssistantService, build_session_key, normalize_su
 from .care_prompts import CARE_RESPONSE_RULES, CARE_SYSTEM_PROMPT
 from .desktop_speech import DesktopSpeechService
 from .db import get_db, init_db
+from .gemma_provider_bridge import (
+    anthropic_message_response,
+    anthropic_request_to_openai,
+    anthropic_sse_response,
+    anthropic_sse_response_from_openai_stream,
+    cap_openai_payload,
+    model_detail_response,
+    models_response,
+    proxy_request_to_upstream,
+)
 from .openclaw_gateway import OpenClawGatewayError
 from .schemas import (
     AssistantBridgeSendRequest,
@@ -86,6 +96,11 @@ from .schemas import (
     ActivationPromptPackResponse,
     AssistantMemorySearchResponse,
     AssistantRuntimeStatusResponse,
+    AssistantDuplexConfigResponse,
+    AssistantSessionInterruptRequest,
+    AssistantSessionStartRequest,
+    AssistantSessionStartResponse,
+    AssistantSessionStopRequest,
     AssistantSendRequest,
     AssistantSendResponse,
     AssistantSessionResetRequest,
@@ -148,7 +163,14 @@ from .settings import (
     ALLOW_UNVERIFIED_LOCAL_DESKTOP_TOKENS,
     ASSISTANT_BRIDGE_TOKEN,
     ASSISTANT_BRIDGE_USER_ID,
+    ASSISTANT_DUPLEX_AUDIO_CHUNK_MS,
+    ASSISTANT_DUPLEX_PROVIDER,
+    ASSISTANT_DUPLEX_SAMPLE_RATE,
+    ASSISTANT_DUPLEX_TRANSPORT,
+    ASSISTANT_DUPLEX_WS_BASE,
     AUTH_SECRET_KEY,
+    GEMMA_PROVIDER_BRIDGE_BASE_URL,
+    GEMMA_PROVIDER_MODEL_ID,
     OPENCLAW_PREFERRED_CODE_MODEL,
     OPENCLAW_PREFERRED_MODE,
 )
@@ -428,9 +450,112 @@ class EventManager:
             self.disconnect(ws)
 
 
+class SessionEventManager:
+    def __init__(self) -> None:
+        self._connections: Dict[str, List[WebSocket]] = {}
+
+    async def connect(self, websocket: WebSocket, session_key: str) -> None:
+        await websocket.accept()
+        normalized = str(session_key or "").strip()
+        self._connections.setdefault(normalized, []).append(websocket)
+
+    def disconnect(self, websocket: WebSocket, session_key: Optional[str] = None) -> None:
+        if session_key is not None:
+            normalized = str(session_key or "").strip()
+            group = self._connections.get(normalized) or []
+            if websocket in group:
+                group.remove(websocket)
+            if not group and normalized in self._connections:
+                self._connections.pop(normalized, None)
+            return
+        dead_keys: List[str] = []
+        for key, group in self._connections.items():
+            if websocket in group:
+                group.remove(websocket)
+            if not group:
+                dead_keys.append(key)
+        for key in dead_keys:
+            self._connections.pop(key, None)
+
+    async def broadcast(self, session_key: str, message: Dict[str, object]) -> None:
+        normalized = str(session_key or "").strip()
+        group = list(self._connections.get(normalized) or [])
+        if not group:
+            return
+        dead: List[WebSocket] = []
+        for ws in group:
+            try:
+                await ws.send_json(message)
+            except Exception:
+                dead.append(ws)
+        for ws in dead:
+            self.disconnect(ws, normalized)
+
+
+class AssistantDuplexRegistry:
+    def __init__(self) -> None:
+        self._sessions: Dict[str, Dict[str, object]] = {}
+
+    def _resolve(self, *, session_key: str = "", duplex_session_id: str = "") -> Optional[Dict[str, object]]:
+        normalized_session_key = str(session_key or "").strip()
+        if normalized_session_key:
+            existing = self._sessions.get(normalized_session_key)
+            if existing:
+                return existing
+        normalized_duplex_id = str(duplex_session_id or "").strip()
+        if normalized_duplex_id:
+            for existing in self._sessions.values():
+                if str(existing.get("duplex_session_id") or "").strip() == normalized_duplex_id:
+                    return existing
+        return None
+
+    def start(
+        self,
+        *,
+        surface: str,
+        session_key: str,
+        duplex_session_id: str,
+        user_id: int,
+    ) -> Dict[str, object]:
+        payload = {
+            "surface": str(surface or "desktop"),
+            "session_key": str(session_key or ""),
+            "duplex_session_id": str(duplex_session_id or ""),
+            "user_id": int(user_id),
+            "active": True,
+            "interrupt_count": 0,
+            "started_at_ms": int(time.time() * 1000),
+            "updated_at_ms": int(time.time() * 1000),
+        }
+        self._sessions[str(session_key or "")] = payload
+        return payload
+
+    def stop(self, session_key: str = "", duplex_session_id: str = "") -> Optional[Dict[str, object]]:
+        existing = self._resolve(session_key=session_key, duplex_session_id=duplex_session_id)
+        if not existing:
+            return None
+        existing["active"] = False
+        existing["updated_at_ms"] = int(time.time() * 1000)
+        return existing
+
+    def interrupt(self, session_key: str = "", duplex_session_id: str = "") -> Optional[Dict[str, object]]:
+        existing = self._resolve(session_key=session_key, duplex_session_id=duplex_session_id)
+        if not existing:
+            return None
+        existing["interrupt_count"] = int(existing.get("interrupt_count") or 0) + 1
+        existing["updated_at_ms"] = int(time.time() * 1000)
+        return existing
+
+    def get(self, session_key: str = "", duplex_session_id: str = "") -> Optional[Dict[str, object]]:
+        existing = self._resolve(session_key=session_key, duplex_session_id=duplex_session_id)
+        return dict(existing) if existing else None
+
+
 event_manager = EventManager()
+assistant_session_event_manager = SessionEventManager()
 assistant_service = AssistantService()
 desktop_speech_service = DesktopSpeechService()
+assistant_duplex_registry = AssistantDuplexRegistry()
 
 ACTIVATION_ASSESSMENT_MODEL_TIMEOUT_MS = 35_000
 ACTIVATION_ASSESSMENT_MEMORY_TIMEOUT_MS = 30_000
@@ -5458,6 +5583,21 @@ async def _assistant_send_impl(
             },
         }
     )
+    await _broadcast_assistant_session_event(
+        str(response_payload["session_key"]),
+        "AssistantSessionUserTurn",
+        {
+            "id": user_msg_id,
+            "sender": user_message.sender,
+            "text": user_message.text,
+            "content_type": user_message.content_type,
+            "attachments": user_message.attachments,
+            "timestamp_ms": user_message.timestamp_ms,
+            "surface": user_message.surface,
+            "session_key": user_message.session_key,
+        },
+        timestamp_ms=user_message.timestamp_ms,
+    )
     await event_manager.broadcast(
         {
             "type": "ChatMessage",
@@ -5474,6 +5614,22 @@ async def _assistant_send_impl(
             },
         }
     )
+    await _broadcast_assistant_session_event(
+        str(response_payload["session_key"]),
+        "AssistantSessionAssistantTurn",
+        {
+            "id": bot_msg_id,
+            "sender": bot_message.sender,
+            "text": bot_message.text,
+            "content_type": bot_message.content_type,
+            "attachments": [],
+            "timestamp_ms": bot_message.timestamp_ms,
+            "surface": bot_message.surface,
+            "session_key": bot_message.session_key,
+            "tool_results": response_payload.get("tool_results") or [],
+        },
+        timestamp_ms=bot_message.timestamp_ms,
+    )
     if normalize_surface(payload.surface) == "desktop":
         await _mirror_bot_reply_to_wechat(bot_text)
     return AssistantSendResponse(
@@ -5483,6 +5639,94 @@ async def _assistant_send_impl(
         text=bot_text,
         tool_results=response_payload.get("tool_results") or [],
         timestamp_ms=int(response_payload["timestamp_ms"]),
+    )
+
+
+def _build_assistant_duplex_system_prompt(
+    conn: Connection,
+    user_id: int,
+    *,
+    surface: str,
+    session_key: str,
+) -> Dict[str, object]:
+    user_profile = _build_assistant_identity_context(conn, int(user_id))
+    stored_memory_summary = assistant_service.get_profile_memory_summary(int(user_id), max_chars=1200)
+    recent_rows = _list_chat_messages(conn, int(user_id), 12, session_key=session_key)
+    recent_history: List[Dict[str, object]] = []
+    for row in recent_rows[-8:]:
+        sender = str(row.get("sender") or "").strip() or "unknown"
+        text = str(row.get("text") or "").strip()
+        if not text:
+            continue
+        recent_history.append(
+            {
+                "sender": sender,
+                "text": text,
+                "timestamp_ms": int(row.get("timestamp_ms") or 0),
+            }
+        )
+    preferred_name = str(user_profile.get("identity", {}).get("preferred_name") or "").strip()
+    companion_name = "新念"
+    prompt_lines = [
+        f"你是{companion_name}，运行在情感关怀机器人桌面端的实时语音伙伴。",
+        "这是正式产品中的语音主入口，请保持自然、连续、口语化、简短，不要输出工具格式。",
+        "不要机械复述用户原话；先理解，再回应。",
+        "回答要适合实时全双工语音：短句、连续、可随时被打断。",
+        "如果用户明显情绪低落、疲惫、压力大，先接住情绪，再回答问题。",
+    ]
+    if preferred_name:
+        prompt_lines.append(f"当前主要陪伴对象偏好被称呼为：{preferred_name}。")
+    if stored_memory_summary:
+        prompt_lines.extend(
+            [
+                "",
+                "长期记忆摘要：",
+                stored_memory_summary,
+            ]
+        )
+    if recent_history:
+        prompt_lines.append("")
+        prompt_lines.append("最近对话摘录：")
+        for item in recent_history[-6:]:
+            role = "用户" if str(item.get("sender") or "").strip() == "user" else "助手"
+            prompt_lines.append(f"- {role}: {str(item.get('text') or '').strip()[:120]}")
+    prompt_lines.append("")
+    prompt_lines.append("如果没有必要，不要主动说很长。")
+    prompt_lines.append("如果用户在你说话时再次开口，应立即让出话轮。")
+    return {
+        "system_prompt": "\n".join(prompt_lines).strip(),
+        "user_profile": user_profile,
+        "memory_summary": stored_memory_summary,
+        "recent_history": recent_history,
+        "surface": normalize_surface(surface),
+        "session_key": session_key,
+    }
+
+
+def _new_duplex_session_id(session_key: str) -> str:
+    digest = hashlib.sha1(f"{session_key}:{time.time_ns()}:{secrets.token_hex(8)}".encode("utf-8")).hexdigest()
+    return f"desktop_{digest[:20]}"
+
+
+def _build_duplex_ws_url(duplex_session_id: str) -> str:
+    base = str(ASSISTANT_DUPLEX_WS_BASE or "").strip().rstrip("/")
+    return f"{base}/{duplex_session_id}"
+
+
+async def _broadcast_assistant_session_event(
+    session_key: str,
+    event_type: str,
+    payload: Dict[str, object],
+    *,
+    timestamp_ms: Optional[int] = None,
+) -> None:
+    await assistant_session_event_manager.broadcast(
+        str(session_key or "").strip(),
+        {
+            "type": event_type,
+            "timestamp_ms": int(timestamp_ms or time.time() * 1000),
+            "payload": payload,
+        },
     )
 
 
@@ -5544,6 +5788,7 @@ def assistant_session_status(
         device_id=device_id,
         sender_id=sender_id,
     )
+    duplex_state = assistant_duplex_registry.get(str(status_payload["session_key"]))
     rows = _list_chat_messages(conn, int(user["id"]), max(1, min(int(limit), 100)), session_key=str(status_payload["session_key"]))
     history = [_chat_response_from_row(row) for row in rows]
     return AssistantSessionStatusResponse(
@@ -5553,7 +5798,69 @@ def assistant_session_status(
         last_message_ts_ms=status_payload.get("last_message_ts_ms"),
         message_count=int(status_payload.get("message_count") or 0),
         history=history,
+        duplex_active=bool((duplex_state or {}).get("active")),
+        duplex_session_id=str((duplex_state or {}).get("duplex_session_id") or "") or None,
+        duplex_provider=str(ASSISTANT_DUPLEX_PROVIDER or "").strip() or "MiniCPM-o-4.5",
+        duplex_transport=str(ASSISTANT_DUPLEX_TRANSPORT or "").strip() or "native_ws_proxy",
     )
+
+
+@app.post("/api/assistant/session/start", response_model=AssistantSessionStartResponse)
+async def assistant_session_start(
+    payload: AssistantSessionStartRequest,
+    request: Request,
+    credentials: HTTPAuthorizationCredentials = Depends(bearer_scheme),
+    conn: Connection = Depends(get_db),
+) -> AssistantSessionStartResponse:
+    user = _parse_access_token_for_local_desktop(credentials, conn, request)
+    resolved_surface = normalize_surface(payload.surface)
+    resolved_session_key = build_session_key(
+        resolved_surface,
+        int(user["id"]),
+        explicit=payload.session_key,
+        device_id=payload.device_id,
+        sender_id=payload.sender_id,
+    )
+    prompt_payload = _build_assistant_duplex_system_prompt(
+        conn,
+        int(user["id"]),
+        surface=resolved_surface,
+        session_key=resolved_session_key,
+    )
+    duplex_session_id = _new_duplex_session_id(resolved_session_key)
+    assistant_duplex_registry.start(
+        surface=resolved_surface,
+        session_key=resolved_session_key,
+        duplex_session_id=duplex_session_id,
+        user_id=int(user["id"]),
+    )
+    response = AssistantSessionStartResponse(
+        ok=True,
+        surface=resolved_surface,
+        session_key=resolved_session_key,
+        duplex_session_id=duplex_session_id,
+        ws_url=_build_duplex_ws_url(duplex_session_id),
+        provider=str(ASSISTANT_DUPLEX_PROVIDER or "").strip() or "MiniCPM-o-4.5",
+        transport=str(ASSISTANT_DUPLEX_TRANSPORT or "").strip() or "native_ws_proxy",
+        audio_chunk_ms=int(ASSISTANT_DUPLEX_AUDIO_CHUNK_MS),
+        sample_rate=int(ASSISTANT_DUPLEX_SAMPLE_RATE),
+        prefix_system_prompt=str(prompt_payload.get("system_prompt") or "").strip(),
+        prepare_payload={
+            "deferred_finalize": True,
+            "config": {
+                "length_penalty": 1.05,
+            },
+        },
+        user_profile=dict(prompt_payload.get("user_profile") or {}),
+        memory_summary=str(prompt_payload.get("memory_summary") or ""),
+        recent_history=list(prompt_payload.get("recent_history") or []),
+    )
+    await _broadcast_assistant_session_event(
+        resolved_session_key,
+        "AssistantSessionStarted",
+        response.model_dump(),
+    )
+    return response
 
 
 @app.post("/api/assistant/session/reset")
@@ -5574,7 +5881,84 @@ async def assistant_session_reset(
         )
     except OpenClawGatewayError as exc:
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc)) from exc
+    assistant_duplex_registry.stop(str(data.get("session_key") or payload.session_key or ""))
+    await _broadcast_assistant_session_event(
+        str(data.get("session_key") or payload.session_key or ""),
+        "AssistantSessionReset",
+        {"ok": True, **data},
+    )
     return {"ok": True, **data}
+
+
+@app.post("/api/assistant/session/stop")
+async def assistant_session_stop(
+    payload: AssistantSessionStopRequest,
+    request: Request,
+    credentials: HTTPAuthorizationCredentials = Depends(bearer_scheme),
+    conn: Connection = Depends(get_db),
+) -> Dict[str, object]:
+    user = _parse_access_token_for_local_desktop(credentials, conn, request)
+    resolved_surface = normalize_surface(payload.surface)
+    resolved_session_key = build_session_key(
+        resolved_surface,
+        int(user["id"]),
+        explicit=payload.session_key,
+        device_id=payload.device_id,
+        sender_id=payload.sender_id,
+    )
+    stopped = assistant_duplex_registry.stop(
+        session_key=resolved_session_key,
+        duplex_session_id=payload.duplex_session_id or "",
+    )
+    response = {
+        "ok": True,
+        "surface": resolved_surface,
+        "session_key": resolved_session_key,
+        "duplex_session_id": payload.duplex_session_id or (stopped or {}).get("duplex_session_id"),
+        "stopped": bool(stopped),
+    }
+    await _broadcast_assistant_session_event(
+        resolved_session_key,
+        "AssistantSessionStopped",
+        response,
+    )
+    return response
+
+
+@app.post("/api/assistant/session/interrupt")
+async def assistant_session_interrupt(
+    payload: AssistantSessionInterruptRequest,
+    request: Request,
+    credentials: HTTPAuthorizationCredentials = Depends(bearer_scheme),
+    conn: Connection = Depends(get_db),
+) -> Dict[str, object]:
+    user = _parse_access_token_for_local_desktop(credentials, conn, request)
+    resolved_surface = normalize_surface(payload.surface)
+    resolved_session_key = build_session_key(
+        resolved_surface,
+        int(user["id"]),
+        explicit=payload.session_key,
+        device_id=payload.device_id,
+        sender_id=payload.sender_id,
+    )
+    state = assistant_duplex_registry.interrupt(
+        session_key=resolved_session_key,
+        duplex_session_id=payload.duplex_session_id or "",
+    )
+    response = {
+        "ok": True,
+        "surface": resolved_surface,
+        "session_key": resolved_session_key,
+        "duplex_session_id": payload.duplex_session_id or (state or {}).get("duplex_session_id"),
+        "interrupt_count": int((state or {}).get("interrupt_count") or 0),
+        "active": bool((state or {}).get("active")),
+    }
+    await _broadcast_assistant_session_event(
+        resolved_session_key,
+        "AssistantSessionInterrupted",
+        response,
+    )
+    return response
 
 
 @app.get("/api/assistant/todos", response_model=AssistantTodoListResponse)
@@ -5662,6 +6046,77 @@ def assistant_runtime_status(
 ) -> AssistantRuntimeStatusResponse:
     _ = _parse_access_token_for_local_desktop(credentials, conn, request)
     return AssistantRuntimeStatusResponse(ok=True, **assistant_service.runtime_status())
+
+
+@app.get("/api/assistant/duplex/config", response_model=AssistantDuplexConfigResponse)
+def assistant_duplex_config(
+    request: Request,
+    credentials: HTTPAuthorizationCredentials = Depends(bearer_scheme),
+    conn: Connection = Depends(get_db),
+) -> AssistantDuplexConfigResponse:
+    _ = _parse_access_token_for_local_desktop(credentials, conn, request)
+    return AssistantDuplexConfigResponse(
+        ok=True,
+        provider=str(ASSISTANT_DUPLEX_PROVIDER or "").strip() or "MiniCPM-o-4.5",
+        ws_base=str(ASSISTANT_DUPLEX_WS_BASE or "").strip(),
+        audio_chunk_ms=int(ASSISTANT_DUPLEX_AUDIO_CHUNK_MS),
+        sample_rate=int(ASSISTANT_DUPLEX_SAMPLE_RATE),
+        transport=str(ASSISTANT_DUPLEX_TRANSPORT or "").strip() or "native_ws_proxy",
+    )
+
+
+@app.get("/gemma-provider/health")
+async def gemma_provider_health() -> Dict[str, object]:
+    try:
+        payload = await models_response()
+        data = json.loads(payload.body.decode("utf-8"))
+        return {
+            "ok": True,
+            "base_url": GEMMA_PROVIDER_BRIDGE_BASE_URL,
+            "model": GEMMA_PROVIDER_MODEL_ID,
+            "count": len(data.get("data", [])) if isinstance(data, dict) else 0,
+        }
+    except Exception as exc:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc)) from exc
+
+
+@app.get("/gemma-provider/v1/models")
+async def gemma_provider_models() -> Response:
+    try:
+        return await models_response()
+    except Exception as exc:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc)) from exc
+
+
+@app.get("/gemma-provider/v1/models/{model_id:path}")
+async def gemma_provider_model_detail(model_id: str) -> Response:
+    try:
+        return await model_detail_response(model_id)
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc)) from exc
+
+
+@app.post("/gemma-provider/v1/chat/completions")
+async def gemma_provider_chat_completions(payload: Dict[str, Any] = Body(...)) -> Response:
+    try:
+        return await proxy_request_to_upstream(cap_openai_payload(payload))
+    except Exception as exc:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc)) from exc
+
+
+@app.post("/gemma-provider/v1/messages")
+async def gemma_provider_messages(payload: Dict[str, Any] = Body(...)) -> Response:
+    try:
+        upstream_payload = anthropic_request_to_openai(payload)
+        if bool(payload.get("stream", False)):
+            return await anthropic_sse_response_from_openai_stream(upstream_payload)
+        upstream_response = await proxy_request_to_upstream(upstream_payload)
+        upstream_json = json.loads(upstream_response.body.decode("utf-8"))
+        return JSONResponse(anthropic_message_response(upstream_json))
+    except Exception as exc:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc)) from exc
 
 
 def _require_bearer(credentials: Optional[HTTPAuthorizationCredentials]) -> None:
@@ -6353,3 +6808,13 @@ async def websocket_events(websocket: WebSocket) -> None:
     except WebSocketDisconnect:
         event_manager.disconnect(websocket)
 
+
+@app.websocket("/api/assistant/session/{session_id:path}/events")
+async def websocket_assistant_session_events(websocket: WebSocket, session_id: str) -> None:
+    normalized = str(session_id or "").strip()
+    await assistant_session_event_manager.connect(websocket, normalized)
+    try:
+        while True:
+            await websocket.receive_text()
+    except WebSocketDisconnect:
+        assistant_session_event_manager.disconnect(websocket, normalized)

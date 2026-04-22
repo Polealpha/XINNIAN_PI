@@ -556,7 +556,7 @@ class OpenClawGatewayClient:
 
     def _build_codex_home_config(self) -> str:
         return (
-            'model = "glm-5"\n'
+            'model = "gemma-4-31b-it"\n'
             'model_reasoning_effort = "low"\n'
             'personality = "pragmatic"\n\n'
         )

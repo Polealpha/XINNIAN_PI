@@ -1,4 +1,5 @@
 .venv/
+.venv-gpu/
 __pycache__/
 *.pyc
 *.pyo
@@ -44,7 +45,10 @@ downloads/
 third_party/
 assistant_data/openclaw_state/
 assistant_data/openclaw_state_runtime/
+assistant_data/openclaw_workspace/
 assistant_data/codex_home/
+.tmp_minicpmo_demo_extract/
+.tmp_minicpmo_demo/
 .tmp/
 pytest-run-*/
 .codex-openclaw-probe/

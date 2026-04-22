@@ -411,11 +411,55 @@ class AssistantSessionStatusResponse(BaseModel):
     last_message_ts_ms: Optional[int] = None
     message_count: int = 0
     history: list[ChatMessageResponse] = Field(default_factory=list)
+    duplex_active: bool = False
+    duplex_session_id: Optional[str] = None
+    duplex_provider: Optional[str] = None
+    duplex_transport: Optional[str] = None
 
 
 class AssistantSessionResetRequest(BaseModel):
     surface: str = "desktop"
     session_key: Optional[str] = None
+    device_id: Optional[str] = None
+    sender_id: Optional[str] = None
+
+
+class AssistantSessionStartRequest(BaseModel):
+    surface: str = "desktop"
+    session_key: Optional[str] = None
+    device_id: Optional[str] = None
+    sender_id: Optional[str] = None
+
+
+class AssistantSessionStartResponse(BaseModel):
+    ok: bool
+    surface: str
+    session_key: str
+    duplex_session_id: str
+    ws_url: str
+    provider: str
+    transport: str
+    audio_chunk_ms: int
+    sample_rate: int
+    prefix_system_prompt: str
+    prepare_payload: dict = Field(default_factory=dict)
+    user_profile: dict = Field(default_factory=dict)
+    memory_summary: str = ""
+    recent_history: list[dict] = Field(default_factory=list)
+
+
+class AssistantSessionStopRequest(BaseModel):
+    surface: str = "desktop"
+    session_key: Optional[str] = None
+    duplex_session_id: Optional[str] = None
+    device_id: Optional[str] = None
+    sender_id: Optional[str] = None
+
+
+class AssistantSessionInterruptRequest(BaseModel):
+    surface: str = "desktop"
+    session_key: Optional[str] = None
+    duplex_session_id: Optional[str] = None
     device_id: Optional[str] = None
     sender_id: Optional[str] = None
 
@@ -464,6 +508,19 @@ class AssistantRuntimeStatusResponse(BaseModel):
     workspace_dir: str = ""
     desktop_tools: list[str] = Field(default_factory=list)
     robot_bridge_ready: bool = False
+    native_duplex_ws_base: str = ""
+    assistant_model: str = ""
+    provider_base_url: str = ""
+
+
+class AssistantDuplexConfigResponse(BaseModel):
+    ok: bool
+    provider: str
+    mode: str = "official_duplex"
+    ws_base: str
+    audio_chunk_ms: int
+    sample_rate: int
+    transport: str
 
 
 class AssistantMemorySearchResponse(BaseModel):

@@ -27,8 +27,12 @@ from .openclaw_gateway import (
     resolve_openclaw_proxy_url,
 )
 from .settings import (
+    ASSISTANT_DUPLEX_PROVIDER,
+    ASSISTANT_DUPLEX_WS_BASE,
     DEFAULT_ROBOT_DEVICE_IP,
     DESKTOP_APP_ALLOWLIST_JSON,
+    GEMMA_PROVIDER_BRIDGE_BASE_URL,
+    GEMMA_PROVIDER_MODEL_ID,
     OPENCLAW_CLIENT_ID,
     OPENCLAW_CLIENT_MODE,
     OPENCLAW_CODEX_HOME,
@@ -375,6 +379,9 @@ class AssistantService:
                 "robot.get_preview",
             ],
             "robot_bridge_ready": True,
+            "native_duplex_ws_base": str(ASSISTANT_DUPLEX_WS_BASE or "").strip(),
+            "assistant_model": str(GEMMA_PROVIDER_MODEL_ID or "").strip(),
+            "provider_base_url": str(GEMMA_PROVIDER_BRIDGE_BASE_URL or "").strip(),
         }
 
     def list_wechat_mirror_messages(self, session_key: str, limit: int = 200) -> List[Dict[str, object]]:
@@ -503,6 +510,17 @@ class AssistantService:
         return stripped
 
     def _probe_provider_network(self) -> Tuple[bool, str]:
+        bridge_url = str(GEMMA_PROVIDER_BRIDGE_BASE_URL or "").strip()
+        if bridge_url:
+            parsed = urlparse(bridge_url)
+            host = parsed.hostname
+            port = parsed.port or (443 if parsed.scheme == "https" else 80)
+            if host:
+                try:
+                    with socket.create_connection((host, int(port)), timeout=1.5):
+                        return True, f"provider bridge reachable: {host}:{port}"
+                except OSError as exc:
+                    return False, f"provider bridge unreachable: {host}:{port} ({exc})"
         proxy_url = resolve_openclaw_proxy_url()
         if proxy_url:
             parsed = urlparse(proxy_url)
@@ -515,15 +533,7 @@ class AssistantService:
                     return True, f"provider traffic routed via proxy: {proxy_url}"
             except OSError as exc:
                 return False, f"configured proxy unreachable: {proxy_url} ({exc})"
-        targets = [("api.openai.com", 443), ("chatgpt.com", 443)]
-        errors: List[str] = []
-        for host, port in targets:
-            try:
-                with socket.create_connection((host, int(port)), timeout=1.5):
-                    return True, f"provider endpoint reachable: {host}:{port}"
-            except OSError as exc:
-                errors.append(f"{host}:{port} ({exc})")
-        return False, "provider endpoints unreachable: " + "; ".join(errors)
+        return False, "provider bridge and proxy are both unavailable"
 
     def _probe_gateway_socket(self, url: str) -> Tuple[bool, str]:
         parsed = urlparse(str(url or "").strip())
