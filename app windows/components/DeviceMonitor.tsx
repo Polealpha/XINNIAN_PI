@@ -475,7 +475,7 @@ export const DeviceMonitor: React.FC<DeviceMonitorProps> = ({
 
   return (
     <div className="grid grid-cols-12 gap-6 min-h-full animate-pop-in">
-      <div className="col-span-8 bg-[#0c1222]/50 backdrop-blur-3xl rounded-[2.5rem] border border-white/[0.05] overflow-hidden flex flex-col shadow-2xl">
+      <div className="col-span-8 ios-stage-panel ios-stage-panel--deep rounded-[2.5rem] overflow-hidden flex flex-col">
         <div className="px-6 py-4 border-b border-white/[0.03] flex justify-between items-center bg-white/[0.01]">
           <div className="flex items-center gap-3">
             <Camera size={14} className="text-indigo-400" />
@@ -580,10 +580,10 @@ export const DeviceMonitor: React.FC<DeviceMonitorProps> = ({
               {onToggleFaceTrackOverlay && (
                 <button
                   onClick={() => onToggleFaceTrackOverlay(!faceTrackOverlayEnabled)}
-                  className={`p-2 rounded-full border ${
-                    faceTrackOverlayEnabled
-                      ? "bg-cyan-500/20 border-cyan-300/50 text-cyan-100"
-                      : "bg-white/5 border-white/10 text-white/50 hover:bg-white/10"
+                className={`ios-toggle-pill p-2 rounded-full border ${
+                  faceTrackOverlayEnabled
+                      ? "ios-toggle-pill--active border-cyan-300/50 text-cyan-100"
+                      : "text-white/50 hover:border-white/15"
                   }`}
                   title="FaceTrack Overlay"
                 >
@@ -592,13 +592,13 @@ export const DeviceMonitor: React.FC<DeviceMonitorProps> = ({
               )}
               <button
                 onClick={toggleStream}
-                className="p-2 bg-white/5 rounded-full text-white/50 hover:bg-white/10"
+                className="ios-action-button ios-action-button--secondary p-2 text-white/70"
               >
                 {streamEnabled ? <Pause size={12} /> : <Play size={12} />}
               </button>
               <button
                 onClick={forceReconnect}
-                className="p-2 bg-white/5 rounded-full text-white/50 hover:bg-white/10"
+                className="ios-action-button ios-action-button--secondary p-2 text-white/70"
               >
                 <RotateCw size={12} />
               </button>
@@ -608,7 +608,7 @@ export const DeviceMonitor: React.FC<DeviceMonitorProps> = ({
       </div>
 
       <div className="col-span-4 flex flex-col gap-6">
-        <div className="bg-[#0c1222]/50 backdrop-blur-3xl rounded-[2rem] border border-white/[0.05] p-6 shadow-xl">
+        <div className="ios-stage-panel rounded-[2rem] p-6">
           <h3 className="text-[9px] font-black text-slate-500 uppercase tracking-widest mb-3">设备连接</h3>
           <div className="space-y-2">
             <StatusItem icon={Globe} label="设备 ID" value={deviceId} />
@@ -626,20 +626,20 @@ export const DeviceMonitor: React.FC<DeviceMonitorProps> = ({
           </div>
         </div>
 
-        <div className="bg-[#0c1222]/50 backdrop-blur-3xl rounded-[2rem] border border-white/[0.05] p-6 shadow-xl">
+        <div className="ios-stage-panel rounded-[2rem] p-6">
           <h3 className="text-[9px] font-black text-slate-500 uppercase tracking-widest mb-4 flex items-center gap-2">
             <Camera size={12} className="text-cyan-400" /> 树莓派摄像头链路
           </h3>
           <div className="space-y-3">
-            <div className="rounded-2xl border border-white/10 bg-black/30 p-4">
+            <div className="ios-stage-well rounded-2xl p-4">
               <div className="grid grid-cols-2 gap-2 text-[10px]">
-                <div className="rounded-xl bg-white/[0.03] border border-white/[0.05] px-3 py-2 text-slate-300">
+                <div className="ios-stage-tile rounded-xl px-3 py-2 text-slate-300">
                   视频链路:{" "}
                   <span className={`font-mono ${streamEnabled && videoEnabled ? "text-cyan-300" : "text-slate-500"}`}>
                     {streamEnabled && videoEnabled ? "树莓派代理流" : "关闭"}
                   </span>
                 </div>
-                <div className="rounded-xl bg-white/[0.03] border border-white/[0.05] px-3 py-2 text-slate-300">
+                <div className="ios-stage-tile rounded-xl px-3 py-2 text-slate-300">
                   摄像头状态:{" "}
                   <span className={`font-mono ${cameraReady === false ? "text-rose-300" : "text-cyan-300"}`}>
                     {cameraReady === false ? "未就绪" : "已就绪"}
@@ -654,7 +654,7 @@ export const DeviceMonitor: React.FC<DeviceMonitorProps> = ({
           </div>
         </div>
 
-        <div className="bg-[#0c1222]/50 backdrop-blur-3xl rounded-[2rem] border border-white/[0.05] p-6 shadow-xl">
+        <div className="ios-stage-panel rounded-[2rem] p-6">
           <h3 className="text-[9px] font-black text-slate-500 uppercase tracking-widest mb-4 flex items-center gap-2">
             <Activity size={12} className="text-indigo-400" /> 情感推理指标 (V/A/T/S)
           </h3>
@@ -694,7 +694,7 @@ export const DeviceMonitor: React.FC<DeviceMonitorProps> = ({
           </div>
         </div>
 
-        <div className="bg-[#0c1222]/50 backdrop-blur-3xl rounded-[2rem] border border-white/[0.05] p-6 shadow-xl flex-1 flex flex-col">
+        <div className="ios-stage-panel rounded-[2rem] p-6 flex-1 flex flex-col">
           <h3 className="text-[9px] font-black text-slate-500 uppercase tracking-widest mb-4">Device Link</h3>
           <div className="space-y-3">
             <StatusItem icon={Globe} label="Device ID" value={deviceId} />
@@ -773,7 +773,7 @@ export const DeviceMonitor: React.FC<DeviceMonitorProps> = ({
           <div className="mt-auto pt-4 border-t border-white/5">
             <button
               onClick={onRefreshStatus}
-              className="w-full py-2.5 bg-indigo-500/10 border border-indigo-500/30 rounded-xl text-[9px] font-black uppercase text-indigo-400 hover:bg-indigo-500/20 transition-all tracking-widest flex items-center justify-center gap-2"
+              className="ios-action-button ios-action-button--secondary w-full py-2.5 text-[9px] uppercase tracking-widest text-indigo-200"
             >
               <RotateCw size={12} className={refreshing ? "animate-spin" : ""} />
               刷新链路
@@ -786,7 +786,7 @@ export const DeviceMonitor: React.FC<DeviceMonitorProps> = ({
 };
 
 const StatusItem = ({ icon: Icon, label, value, active }: any) => (
-  <div className="flex items-center justify-between p-2 rounded-lg hover:bg-white/[0.02]">
+  <div className="ios-stage-tile flex items-center justify-between rounded-lg p-2">
     <div className="flex items-center gap-3">
       <Icon size={14} className="text-slate-600" />
       <span className="text-[10px] font-bold text-slate-400">{label}</span>

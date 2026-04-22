@@ -28,6 +28,8 @@ const DEFAULT_WELCOME: ChatMessage = {
 };
 
 const hasRenderableText = (text: unknown): boolean => typeof text === "string" && text.trim().length > 0;
+const CHAT_DEDUP_WINDOW_MS = 15000;
+const normalizeChatText = (value: unknown): string => String(value || "").replace(/\s+/g, " ").trim();
 
 const cleanSpeechText = (text: unknown): string => {
   const raw = String(text || "").trim();
@@ -59,17 +61,17 @@ const mergeChatMessages = (local: ChatMessage[], incoming: ChatMessage[]): ChatM
       continue;
     }
 
-    const msgText = String(msg.text || "").trim();
+    const msgText = normalizeChatText(msg.text);
     const msgAttachKey = JSON.stringify(msg.attachments || []);
     const msgTs = msg.timestamp.getTime();
     const dupIndex = merged.findIndex((item) => {
-      const itemText = String(item.text || "").trim();
+      const itemText = normalizeChatText(item.text);
       const itemAttachKey = JSON.stringify(item.attachments || []);
       return (
         item.sender === msg.sender &&
         itemText === msgText &&
         itemAttachKey === msgAttachKey &&
-        Math.abs(item.timestamp.getTime() - msgTs) <= 4000
+        Math.abs(item.timestamp.getTime() - msgTs) <= CHAT_DEDUP_WINDOW_MS
       );
     });
     if (dupIndex >= 0) {
@@ -698,6 +700,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
       onDragLeave={onRootDragLeave}
       onDrop={onRootDrop}
     >
+      <div className="ios-liquid-blob ios-liquid-blob--focus" />
       {dragActive && (
         <div className="absolute inset-0 z-30 border-2 border-dashed border-indigo-300/60 bg-indigo-400/10 backdrop-blur-md pointer-events-none flex items-center justify-center">
           <div className="ios-float-card-soft px-4 py-2 rounded-[1.1rem] text-indigo-100 text-xs font-semibold">

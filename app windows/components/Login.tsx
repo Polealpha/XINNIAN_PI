@@ -1,5 +1,5 @@
 import React, { useState } from "react";
-import { Mail, Lock, ArrowRight, Github, UserPlus } from "lucide-react";
+import { ArrowRight, Github, Lock, Mail, Sparkles, UserPlus } from "lucide-react";
 import { login, register, LoginResult } from "../services/authService";
 
 interface LoginProps {
@@ -20,27 +20,31 @@ export const Login: React.FC<LoginProps> = ({ onLogin }) => {
   const isRegister = mode === "register";
 
   const handleForgotPassword = () => {
-    setError("忘记密码功能暂未开放，请联系管理员或重新注册账号。");
+    setError("暂未开放找回密码，请联系管理员或重新注册。");
   };
 
   const handleSubmit = async (event: React.FormEvent) => {
     event.preventDefault();
     setLoading(true);
     setError("");
+
     try {
       if (isRegister) {
         if (password.length < 6) {
-          setError("密码至少 6 位，请重新输入。");
+          setError("密码至少需要 6 位，请重新输入。");
           setLoading(false);
           return;
         }
+
         if (password !== confirmPassword) {
-          setError("两次密码不一致，请重新输入。");
+          setError("两次输入的密码不一致，请重新确认。");
           setLoading(false);
           return;
         }
+
         await register(email, password);
       }
+
       const result = await login(email, password);
       await onLogin(result);
     } catch (err: any) {
@@ -48,7 +52,7 @@ export const Login: React.FC<LoginProps> = ({ onLogin }) => {
       if (isRegister && String(err?.message || "").includes("409")) {
         setError("这个邮箱已经注册过了，请直接登录。");
       } else {
-        setError(isRegister ? "注册失败，请稍后重试。" : "登录失败，请检查账号或密码。");
+        setError(isRegister ? "注册失败，请稍后再试。" : "登录失败，请检查账号或密码。");
       }
     } finally {
       setLoading(false);
@@ -57,188 +61,248 @@ export const Login: React.FC<LoginProps> = ({ onLogin }) => {
 
   return (
     <div className="relative flex min-h-screen items-center justify-center overflow-hidden px-6 py-8 text-white">
-      <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_16%_18%,rgba(125,149,255,0.18),transparent_24%),radial-gradient(circle_at_82%_14%,rgba(103,232,249,0.12),transparent_18%),linear-gradient(180deg,#09111d_0%,#0a1220_48%,#090f19_100%)]" />
-      <div className="pointer-events-none absolute inset-x-0 top-0 h-40 bg-[linear-gradient(180deg,rgba(255,255,255,0.04),transparent)]" />
+      <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_12%_14%,rgba(255,205,227,0.22),transparent_20%),radial-gradient(circle_at_82%_10%,rgba(146,224,255,0.18),transparent_18%),radial-gradient(circle_at_60%_82%,rgba(198,222,255,0.14),transparent_20%),linear-gradient(180deg,#09101b_0%,#0b111d_42%,#080d17_100%)]" />
+      <div className="pointer-events-none absolute inset-0 bg-[linear-gradient(180deg,rgba(255,255,255,0.06),transparent_18%)]" />
+      <div className="pointer-events-none absolute inset-0 opacity-80">
+        <div className="absolute -left-24 top-12 h-72 w-72 rounded-full bg-pink-300/12 blur-[90px]" />
+        <div className="absolute right-8 top-10 h-80 w-80 rounded-full bg-sky-300/10 blur-[100px]" />
+        <div className="absolute bottom-0 left-1/2 h-80 w-80 -translate-x-1/2 rounded-full bg-indigo-300/8 blur-[110px]" />
+      </div>
 
-      <div className="relative z-10 w-full max-w-[1080px] rounded-[2.6rem] border border-white/10 bg-[linear-gradient(180deg,rgba(17,24,40,0.78),rgba(8,13,24,0.92))] p-4 shadow-[0_30px_100px_rgba(3,8,20,0.38),inset_0_1px_0_rgba(255,255,255,0.06)] backdrop-blur-[22px]">
-        <div className="grid gap-4 lg:grid-cols-[1.08fr_0.92fr]">
-          <section className="relative overflow-hidden rounded-[2.2rem] border border-white/8 bg-[linear-gradient(180deg,rgba(255,255,255,0.06),rgba(255,255,255,0.025))] px-8 py-9">
-            <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_top_left,rgba(129,140,248,0.18),transparent_28%),radial-gradient(circle_at_88%_18%,rgba(125,211,252,0.12),transparent_20%)]" />
-            <div className="relative">
-              <div className="inline-flex items-center rounded-full border border-white/10 bg-white/[0.04] px-4 py-2 text-[10px] font-black uppercase tracking-[0.34em] text-slate-300">
-                Welcome Back
+      <div className="relative z-10 w-full max-w-[1180px] ios-subpage-hero">
+        <div className="ios-liquid-blob ios-liquid-blob--focus" />
+        <div className="grid gap-5 lg:grid-cols-[1.06fr_0.94fr]">
+          <section className="ios-stage-panel rounded-[2.35rem] px-9 py-9">
+            <div className="flex min-h-[650px] flex-col">
+              <div className="ios-chip-soft inline-flex w-fit items-center gap-2 rounded-full px-4 py-2 text-[10px] font-black tracking-[0.3em] text-slate-200">
+                <Sparkles size={12} />
+                欢迎来到
               </div>
-              <div className="mt-8 flex items-center gap-5">
-                <div className="ios-brand-mark h-20 w-20 rounded-[1.7rem]">
-                  <img src={appIcon} alt="app icon" className="h-full w-full rounded-[1.5rem] object-cover" />
+
+              <div className="mt-7 flex items-center gap-5">
+                <div className="ios-stage-well rounded-[1.75rem] p-4">
+                  <img src={appIcon} alt="app icon" className="h-16 w-16 object-contain" />
                 </div>
                 <div>
-                  <h1 className="text-[2.5rem] font-black tracking-[-0.05em] text-white">共鸣连接</h1>
-                  <p className="mt-2 text-sm font-semibold uppercase tracking-[0.28em] text-slate-400">
-                    感知情绪 · 连接伙伴
+                  <div className="text-[10px] font-black tracking-[0.28em] text-slate-400">
+                    情绪陪伴桌面
+                  </div>
+                  <h1 className="mt-2 text-[2.8rem] font-black tracking-[-0.06em] text-white">
+                    心念双灵
+                  </h1>
+                  <p className="mt-2 text-sm font-semibold tracking-[0.08em] text-slate-400">
+                    陪你看见情绪起伏，也在需要的时候轻轻提醒
                   </p>
                 </div>
               </div>
 
-              <p className="mt-8 max-w-[32rem] text-[1.05rem] leading-8 text-slate-300">
-                入口页也改成和主桌面同一套语言了。现在会更像系统原生面板，层级更轻，文字更清楚，不再是厚重玻璃和大面积糊光。
-              </p>
-
-              <div className="mt-10 grid gap-3 sm:grid-cols-3">
-                {[
-                  { label: "Connect", value: "更轻的层次" },
-                  { label: "Privacy", value: "本地优先" },
-                  { label: "Clarity", value: "更锐的文字" },
-                ].map((item) => (
-                  <div
-                    key={item.label}
-                    className="rounded-[1.5rem] border border-white/8 bg-white/[0.035] px-4 py-4 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)]"
-                  >
-                    <div className="text-[10px] font-black uppercase tracking-[0.28em] text-slate-500">{item.label}</div>
-                    <div className="mt-2 text-sm font-bold text-white">{item.value}</div>
+              <div className="mt-10 grid gap-4">
+                <div className="ios-stage-panel ios-stage-panel--soft rounded-[1.8rem] px-5 py-5">
+                  <div className="text-[10px] font-black tracking-[0.24em] text-sky-200/70">
+                    今天的陪伴
                   </div>
-                ))}
+                  <div className="mt-3 text-[1.55rem] font-black tracking-[-0.04em] text-white">
+                    把状态慢慢找回来
+                  </div>
+                  <p className="mt-3 text-sm leading-7 text-slate-300">
+                    登录后就能继续查看记录、和助手聊天，也能接收提醒与设备状态。
+                  </p>
+                </div>
+
+                <div className="grid gap-4 sm:grid-cols-3">
+                  <div className="ios-stage-tile rounded-[1.6rem] px-4 py-4">
+                    <div className="text-[10px] font-black tracking-[0.22em] text-slate-500">
+                      情绪
+                    </div>
+                    <div className="mt-2 text-lg font-black text-white">看见今天的状态</div>
+                    <p className="mt-2 text-xs leading-6 text-slate-400">
+                      把一天里的情绪变化安静记录下来。
+                    </p>
+                  </div>
+                  <div className="ios-stage-tile rounded-[1.6rem] px-4 py-4">
+                    <div className="text-[10px] font-black tracking-[0.22em] text-slate-500">
+                      陪伴
+                    </div>
+                    <div className="mt-2 text-lg font-black text-white">随时和我聊聊</div>
+                    <p className="mt-2 text-xs leading-6 text-slate-400">
+                      想说什么都可以慢慢说，不用着急。
+                    </p>
+                  </div>
+                  <div className="ios-stage-tile rounded-[1.6rem] px-4 py-4">
+                    <div className="text-[10px] font-black tracking-[0.22em] text-slate-500">
+                      提醒
+                    </div>
+                    <div className="mt-2 text-lg font-black text-white">不错过重要时刻</div>
+                    <p className="mt-2 text-xs leading-6 text-slate-400">
+                      让关心、任务和节奏更有秩序。
+                    </p>
+                  </div>
+                </div>
+              </div>
+
+              <div className="mt-auto pt-10">
+                <div className="ios-stage-well rounded-[1.8rem] px-5 py-4">
+                  <div className="text-[10px] font-black tracking-[0.22em] text-slate-500">
+                    一句轻提醒
+                  </div>
+                  <div className="mt-2 text-base font-black text-white">你不需要时刻完美</div>
+                  <p className="mt-2 text-sm leading-7 text-slate-300">
+                    先登录，再慢慢开始今天的节奏，我们会陪你把状态一点点找回来。
+                  </p>
+                </div>
               </div>
             </div>
           </section>
 
-          <section className="rounded-[2.2rem] border border-white/8 bg-[linear-gradient(180deg,rgba(12,18,32,0.88),rgba(8,13,24,0.96))] px-8 py-8 shadow-[inset_0_1px_0_rgba(255,255,255,0.05)]">
-            <div className="mb-8">
-              <div className="text-[10px] font-black uppercase tracking-[0.32em] text-slate-500">Account Access</div>
-              <div className="mt-3 text-[1.85rem] font-black tracking-[-0.04em] text-white">
-                {isRegister ? "创建你的心境账号" : "进入你的心境空间"}
+          <section className="ios-stage-panel ios-stage-panel--deep rounded-[2.35rem] px-8 py-8">
+            <div className="ios-liquid-blob" />
+            <div className="mb-7">
+              <div className="text-[10px] font-black tracking-[0.3em] text-slate-500">欢迎回来</div>
+              <div className="mt-3 text-[1.9rem] font-black tracking-[-0.05em] text-white">
+                {isRegister ? "创建你的专属空间" : "进入你的陪伴空间"}
               </div>
+              <p className="mt-2 text-sm leading-7 text-slate-400">
+                {isRegister
+                  ? "注册后，就能开始记录今天的情绪与陪伴时刻。"
+                  : "用邮箱登录，继续今天的情绪与陪伴记录。"}
+              </p>
             </div>
 
-        <div className="flex items-center gap-2 bg-white/[0.035] p-2 rounded-full border border-white/10 mb-6">
-          <button
-            type="button"
-            onClick={() => setMode("login")}
-            className={`flex-1 py-2 rounded-full text-xs font-black uppercase tracking-[0.2em] transition-all ${
-              mode === "login" ? "bg-white text-slate-950 shadow-[0_10px_20px_rgba(255,255,255,0.08)]" : "text-slate-400"
-            }`}
-          >
-            登录
-          </button>
-          <button
-            type="button"
-            onClick={() => setMode("register")}
-            className={`flex-1 py-2 rounded-full text-xs font-black uppercase tracking-[0.2em] transition-all ${
-              mode === "register" ? "bg-white text-slate-950 shadow-[0_10px_20px_rgba(255,255,255,0.08)]" : "text-slate-400"
-            }`}
-          >
-            注册
-          </button>
-        </div>
-
-        <form onSubmit={handleSubmit} className="space-y-5">
-          <div className="space-y-2">
-            <label className="text-[10px] font-black text-slate-500 uppercase ml-4 tracking-[0.2em]">
-              邮箱账号
-            </label>
-            <div className="relative group">
-              <div className="absolute left-5 top-1/2 -translate-y-1/2 text-slate-500 group-focus-within:text-indigo-400 transition-colors">
-                <Mail size={18} />
-              </div>
-              <input
-                type="email"
-                required
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-                placeholder="resonance@example.com"
-                className="w-full rounded-[1.4rem] border border-white/8 bg-white/[0.04] py-4 pl-14 pr-6 text-white font-bold outline-none transition-all placeholder:text-slate-600 focus:border-sky-300/30 focus:ring-2 focus:ring-sky-300/15"
-              />
-            </div>
-          </div>
-
-          <div className="space-y-2">
-            <label className="text-[10px] font-black text-slate-500 uppercase ml-4 tracking-[0.2em]">
-              登录密码
-            </label>
-            <div className="relative group">
-              <div className="absolute left-5 top-1/2 -translate-y-1/2 text-slate-500 group-focus-within:text-indigo-400 transition-colors">
-                <Lock size={18} />
-              </div>
-              <input
-                type="password"
-                required
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                placeholder="请输入密码"
-                className="w-full rounded-[1.4rem] border border-white/8 bg-white/[0.04] py-4 pl-14 pr-6 text-white font-bold outline-none transition-all placeholder:text-slate-600 focus:border-sky-300/30 focus:ring-2 focus:ring-sky-300/15"
-              />
-            </div>
-          </div>
-
-          {isRegister ? (
-            <div className="space-y-2">
-              <label className="text-[10px] font-black text-slate-500 uppercase ml-4 tracking-[0.2em]">
-                确认密码
-              </label>
-              <div className="relative group">
-                <div className="absolute left-5 top-1/2 -translate-y-1/2 text-slate-500 group-focus-within:text-indigo-400 transition-colors">
-                  <UserPlus size={18} />
-                </div>
-                <input
-                  type="password"
-                  required
-                  value={confirmPassword}
-                  onChange={(e) => setConfirmPassword(e.target.value)}
-                  placeholder="再次输入密码"
-                  className="w-full rounded-[1.4rem] border border-white/8 bg-white/[0.04] py-4 pl-14 pr-6 text-white font-bold outline-none transition-all placeholder:text-slate-600 focus:border-sky-300/30 focus:ring-2 focus:ring-sky-300/15"
-                />
-              </div>
-            </div>
-          ) : (
-            <div className="flex items-center justify-between px-2 pt-2 text-[11px] font-black uppercase text-slate-500 tracking-tighter">
-              <label className="flex items-center gap-2 cursor-pointer hover:text-slate-300 transition-colors">
-                <input type="checkbox" className="accent-indigo-500 w-4 h-4 rounded-md" />
-                <span>记住我的身份</span>
-              </label>
+            <div className="ios-segmented mb-6 flex items-center gap-2 rounded-full p-2">
               <button
                 type="button"
-                onClick={handleForgotPassword}
-                className="hover:text-indigo-400 transition-colors"
+                onClick={() => setMode("login")}
+                className={`flex-1 rounded-full py-2.5 text-xs font-black tracking-[0.18em] transition-all ${
+                  mode === "login" ? "ios-segmented__item--active" : "text-slate-400"
+                }`}
               >
-                忘记密码？
+                登录
+              </button>
+              <button
+                type="button"
+                onClick={() => setMode("register")}
+                className={`flex-1 rounded-full py-2.5 text-xs font-black tracking-[0.18em] transition-all ${
+                  mode === "register" ? "ios-segmented__item--active" : "text-slate-400"
+                }`}
+              >
+                注册
               </button>
             </div>
-          )}
 
-          <button
-            type="submit"
-            disabled={loading}
-            className="mt-8 flex w-full items-center justify-center gap-3 rounded-[1.5rem] bg-white py-4 font-black text-slate-950 shadow-[0_18px_34px_rgba(255,255,255,0.12)] transition hover:brightness-[1.02] disabled:opacity-50"
-          >
-            {loading ? (
-              <div className="w-5 h-5 border-2 border-slate-900 border-t-transparent rounded-full animate-spin"></div>
-            ) : (
-              <>
-                <span>{isRegister ? "创建心境账号" : "进入心境空间"}</span>
-                <ArrowRight size={20} />
-              </>
-            )}
-          </button>
-          {error ? <p className="text-center text-[10px] font-bold text-rose-400 mt-2">{error}</p> : null}
-        </form>
+            <form onSubmit={handleSubmit} className="space-y-5">
+              <div className="space-y-2">
+                <label className="ml-3 text-[10px] font-black tracking-[0.2em] text-slate-500">
+                  邮箱账号
+                </label>
+                <div className="group relative">
+                  <div className="absolute left-5 top-1/2 -translate-y-1/2 text-slate-500 transition-colors group-focus-within:text-sky-300">
+                    <Mail size={18} />
+                  </div>
+                  <input
+                    type="email"
+                    required
+                    value={email}
+                    onChange={(e) => setEmail(e.target.value)}
+                    placeholder="resonance@example.com"
+                    className="ios-form-field w-full py-4 pl-14 pr-6 font-bold"
+                  />
+                </div>
+              </div>
 
-        <div className="mt-10 flex flex-col items-center">
-          <div className="flex items-center gap-4 w-full mb-8">
-            <div className="h-px bg-white/5 flex-1"></div>
-            <span className="text-[9px] font-black text-slate-600 uppercase tracking-[0.3em]">
-              其他接入方式
-            </span>
-            <div className="h-px bg-white/5 flex-1"></div>
-          </div>
-          <div className="flex gap-4">
-            <button
-              type="button"
-              className="rounded-[1.35rem] border border-white/8 bg-white/[0.04] p-4 text-slate-400 transition-all hover:bg-white/[0.08] hover:text-white"
-            >
-              <Github size={20} />
-            </button>
-          </div>
-        </div>
+              <div className="space-y-2">
+                <label className="ml-3 text-[10px] font-black tracking-[0.2em] text-slate-500">
+                  登录密码
+                </label>
+                <div className="group relative">
+                  <div className="absolute left-5 top-1/2 -translate-y-1/2 text-slate-500 transition-colors group-focus-within:text-sky-300">
+                    <Lock size={18} />
+                  </div>
+                  <input
+                    type="password"
+                    required
+                    value={password}
+                    onChange={(e) => setPassword(e.target.value)}
+                    placeholder="请输入密码"
+                    className="ios-form-field w-full py-4 pl-14 pr-6 font-bold"
+                  />
+                </div>
+              </div>
+
+              {isRegister ? (
+                <div className="space-y-2">
+                  <label className="ml-3 text-[10px] font-black tracking-[0.2em] text-slate-500">
+                    确认密码
+                  </label>
+                  <div className="group relative">
+                    <div className="absolute left-5 top-1/2 -translate-y-1/2 text-slate-500 transition-colors group-focus-within:text-sky-300">
+                      <UserPlus size={18} />
+                    </div>
+                    <input
+                      type="password"
+                      required
+                      value={confirmPassword}
+                      onChange={(e) => setConfirmPassword(e.target.value)}
+                      placeholder="再次输入密码"
+                      className="ios-form-field w-full py-4 pl-14 pr-6 font-bold"
+                    />
+                  </div>
+                </div>
+              ) : (
+                <div className="flex items-center justify-between px-2 pt-1 text-[11px] font-black tracking-tight text-slate-500">
+                  <label className="flex cursor-pointer items-center gap-2 transition-colors hover:text-slate-300">
+                    <input type="checkbox" className="h-4 w-4 rounded-md accent-indigo-500" />
+                    <span>记住我的身份</span>
+                  </label>
+                  <button
+                    type="button"
+                    onClick={handleForgotPassword}
+                    className="transition-colors hover:text-sky-300"
+                  >
+                    忘记密码？
+                  </button>
+                </div>
+              )}
+
+              <button
+                type="submit"
+                disabled={loading}
+                className="ios-action-button ios-action-button--primary mt-7 flex w-full py-4 text-base"
+              >
+                {loading ? (
+                  <div className="h-5 w-5 animate-spin rounded-full border-2 border-slate-900 border-t-transparent" />
+                ) : (
+                  <>
+                    <span>{isRegister ? "创建我的空间" : "进入陪伴空间"}</span>
+                    <ArrowRight size={20} />
+                  </>
+                )}
+              </button>
+
+              {error ? (
+                <div className="ios-stage-tile rounded-[1.25rem] px-4 py-3 text-center text-[11px] font-bold text-rose-300">
+                  {error}
+                </div>
+              ) : null}
+            </form>
+
+            <div className="mt-9">
+              <div className="mb-6 flex items-center gap-4">
+                <div className="h-px flex-1 bg-white/5" />
+                <span className="text-[9px] font-black tracking-[0.28em] text-slate-600">
+                  其他登录方式
+                </span>
+                <div className="h-px flex-1 bg-white/5" />
+              </div>
+              <div className="flex gap-4">
+                <button
+                  type="button"
+                  className="ios-action-button ios-action-button--secondary h-14 w-14 rounded-[1.25rem] p-0 text-slate-300"
+                  aria-label="GitHub login"
+                >
+                  <Github size={20} />
+                </button>
+              </div>
+            </div>
           </section>
         </div>
       </div>

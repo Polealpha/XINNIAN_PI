@@ -117,11 +117,13 @@ export function CompanionProfilePanel() {
   return (
     <div className="h-full w-full overflow-y-auto pr-1 no-scrollbar">
       <div className="w-full max-w-6xl mx-auto animate-pop-in pb-6">
-        <div className="ios-float-card rounded-[2.5rem] p-8">
+        <div className="ios-subpage-hero">
+          <div className="ios-liquid-blob ios-liquid-blob--focus" />
+        <div className="ios-stage-panel rounded-[2.2rem] p-6">
           <div className="flex items-start justify-between gap-6">
             <div>
-              <h3 className="text-2xl font-black text-white">陪伴画像与长期记忆</h3>
-              <p className="mt-2 text-[12px] font-semibold text-slate-400">
+              <h3 className="text-[1.45rem] font-black text-white">陪伴画像与长期记忆</h3>
+              <p className="mt-1.5 text-[11px] font-semibold text-slate-400">
                 这里显示首次激活后沉淀下来的名字、偏好、反应画像和陪伴指引。它会直接进入 OpenClaw
                 的本地记忆，不再做预设人格切换。
               </p>
@@ -130,7 +132,7 @@ export function CompanionProfilePanel() {
               type="button"
               onClick={() => void refresh()}
               disabled={refreshing}
-              className="inline-flex items-center gap-2 rounded-2xl ios-ghost-chip px-4 py-3 text-sm font-semibold text-slate-200 transition hover:border-cyan-300/30 hover:text-white disabled:opacity-50"
+              className="ios-action-button ios-action-button--secondary px-4 py-3 text-sm"
             >
               <RefreshCw size={16} className={refreshing ? "animate-spin" : ""} />
               刷新画像
@@ -138,19 +140,19 @@ export function CompanionProfilePanel() {
           </div>
 
           {error ? (
-            <div className="mt-6 rounded-2xl border border-rose-400/20 bg-rose-500/10 px-5 py-4 text-sm text-rose-100">
+            <div className="ios-stage-tile mt-6 rounded-2xl px-5 py-4 text-sm text-rose-100">
               {error}
             </div>
           ) : null}
 
           {loading ? (
-            <div className="mt-8 rounded-3xl ios-list-card px-6 py-10 text-center text-sm text-slate-400">
+            <div className="mt-8 rounded-3xl ios-stage-well px-6 py-10 text-center text-sm text-slate-400">
               正在读取当前陪伴画像...
             </div>
           ) : (
             <>
               <div className="mt-6 grid grid-cols-1 lg:grid-cols-[1fr_1.2fr] gap-6">
-                <div className="rounded-3xl ios-list-card p-6">
+                <div className="rounded-3xl ios-stage-panel p-6">
                   <div className="flex items-center gap-3">
                     <UserRound className="h-5 w-5 text-fuchsia-300" />
                     <div className="text-lg font-black text-white">身份确认</div>
@@ -180,7 +182,7 @@ export function CompanionProfilePanel() {
                   </div>
                 </div>
 
-                <div className="rounded-3xl border border-cyan-400/20 bg-cyan-500/10 p-6 shadow-[inset_0_1px_0_rgba(255,255,255,0.05)]">
+                <div className="rounded-3xl ios-stage-panel p-6">
                   <div className="flex items-center gap-3">
                     <Brain className="h-5 w-5 text-cyan-200" />
                     <div className="text-lg font-black text-white">建档进度</div>
@@ -215,7 +217,7 @@ export function CompanionProfilePanel() {
               <div className="mt-6 grid grid-cols-1 lg:grid-cols-2 gap-6">
                 {cards.length > 0 ? (
                   cards.map((item) => (
-                    <div key={item.label} className="rounded-3xl ios-list-card p-6">
+                    <div key={item.label} className="rounded-3xl ios-stage-panel p-6">
                       <div className="flex items-center gap-3">
                         <Sparkles className="h-4 w-4 text-indigo-300" />
                         <div className="text-sm font-bold text-slate-300">{item.label}</div>
@@ -224,14 +226,14 @@ export function CompanionProfilePanel() {
                     </div>
                   ))
                 ) : (
-                  <div className="rounded-3xl ios-list-card p-6 text-sm leading-7 text-slate-400 lg:col-span-2">
+                  <div className="rounded-3xl ios-stage-well p-6 text-sm leading-7 text-slate-400 lg:col-span-2">
                     这位用户还没有完成正式建档。完成首次激活后，这里会显示“偏好 + 反应画像 +
                     陪伴指引”，并同步进入 OpenClaw 的本地长期记忆。
                   </div>
                 )}
               </div>
 
-              <div className="mt-6 rounded-3xl border border-emerald-400/20 bg-emerald-500/10 p-6 shadow-[inset_0_1px_0_rgba(255,255,255,0.05)]">
+              <div className="mt-6 rounded-3xl ios-stage-panel p-6">
                 <div className="flex items-center gap-3">
                   <BookHeart className="h-5 w-5 text-emerald-200" />
                   <div className="text-lg font-black text-white">记忆说明</div>
@@ -242,6 +244,7 @@ export function CompanionProfilePanel() {
               </div>
             </>
           )}
+        </div>
         </div>
       </div>
     </div>

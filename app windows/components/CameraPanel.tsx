@@ -287,7 +287,7 @@ export const CameraPanel: React.FC<CameraPanelProps> = ({
 
   const renderLocalCameraCard = (expanded = false) => (
     <div
-      className={`ios-float-card-soft flex flex-col overflow-hidden rounded-[2rem] ${
+      className={`ios-stage-panel ios-stage-panel--soft flex flex-col overflow-hidden rounded-[2rem] ${
         expanded ? "min-h-[760px]" : "min-h-[640px]"
       }`}
     >
@@ -303,7 +303,7 @@ export const CameraPanel: React.FC<CameraPanelProps> = ({
           <button
             type="button"
             onClick={() => setExpandedCamera((current) => (current === "local" ? null : "local"))}
-            className="inline-flex items-center gap-2 rounded-2xl ios-ghost-chip px-3 py-2 text-[11px] font-semibold text-slate-200 transition hover:bg-white/10"
+            className="ios-action-button ios-action-button--secondary px-3 py-2 text-[11px]"
           >
             {expanded ? <Minimize2 size={14} /> : <Maximize2 size={14} />}
             {expanded ? "收起" : "放大"}
@@ -317,7 +317,7 @@ export const CameraPanel: React.FC<CameraPanelProps> = ({
           </span>
         </div>
       </div>
-      <div ref={localStageRef} className="relative flex flex-1 items-center justify-center bg-[#070b16] p-4">
+      <div ref={localStageRef} className="relative flex flex-1 items-center justify-center bg-[#070b16]/70 p-4">
         {localEnabled ? (
           <video
             ref={videoRef}
@@ -364,7 +364,7 @@ export const CameraPanel: React.FC<CameraPanelProps> = ({
         ) : null}
 
         {analysis?.recognition_paused ? (
-          <div className="absolute bottom-6 left-6 rounded-2xl border border-amber-300/25 bg-black/45 px-4 py-2 text-[12px] font-semibold text-amber-100 backdrop-blur-md">
+          <div className="ios-stage-tile absolute bottom-6 left-6 rounded-2xl px-4 py-2 text-[12px] font-semibold text-amber-100">
             {formatPauseReason(analysis.pause_reason)}
           </div>
         ) : null}
@@ -389,7 +389,7 @@ export const CameraPanel: React.FC<CameraPanelProps> = ({
 
   const renderRobotCameraCard = (expanded = false) => (
     <div
-      className={`ios-float-card-soft flex flex-col overflow-hidden rounded-[2rem] ${
+      className={`ios-stage-panel ios-stage-panel--soft flex flex-col overflow-hidden rounded-[2rem] ${
         expanded ? "min-h-[760px]" : "min-h-[640px]"
       }`}
     >
@@ -405,7 +405,7 @@ export const CameraPanel: React.FC<CameraPanelProps> = ({
           <button
             type="button"
             onClick={() => setExpandedCamera((current) => (current === "robot" ? null : "robot"))}
-            className="inline-flex items-center gap-2 rounded-2xl ios-ghost-chip px-3 py-2 text-[11px] font-semibold text-slate-200 transition hover:bg-white/10"
+            className="ios-action-button ios-action-button--secondary px-3 py-2 text-[11px]"
           >
             {expanded ? <Minimize2 size={14} /> : <Maximize2 size={14} />}
             {expanded ? "收起" : "放大"}
@@ -443,7 +443,7 @@ export const CameraPanel: React.FC<CameraPanelProps> = ({
   return (
     <div className="h-full w-full overflow-y-auto pr-1 no-scrollbar">
       <div className="mx-auto grid h-full w-full max-w-[1560px] grid-cols-12 gap-6 animate-pop-in">
-        <section className="col-span-9 ios-float-card flex min-h-[780px] flex-col rounded-[2.5rem] p-7">
+        <section className="col-span-9 ios-stage-panel flex min-h-[780px] flex-col rounded-[2.5rem] p-7">
           <div className="flex items-center justify-between gap-4">
             <div>
               <div className="flex items-center gap-3">
@@ -458,7 +458,7 @@ export const CameraPanel: React.FC<CameraPanelProps> = ({
               <button
                 type="button"
                 onClick={() => setSnapshotNonce(Date.now())}
-                className="inline-flex items-center gap-2 rounded-2xl ios-ghost-chip px-4 py-3 text-[12px] font-semibold text-slate-200 transition hover:bg-white/10"
+                className="ios-action-button ios-action-button--secondary px-4 py-3 text-[12px]"
               >
                 <RefreshCw size={14} />
                 刷新机器人画面
@@ -467,7 +467,7 @@ export const CameraPanel: React.FC<CameraPanelProps> = ({
                 <button
                   type="button"
                   onClick={stopLocalCamera}
-                  className="inline-flex items-center gap-2 rounded-2xl border border-rose-400/20 bg-rose-500/10 px-4 py-3 text-[12px] font-bold text-rose-100 transition hover:bg-rose-500/15"
+                  className="ios-action-button ios-action-button--danger px-4 py-3 text-[12px]"
                 >
                   <CameraOff size={14} />
                   关闭本机相机
@@ -476,7 +476,7 @@ export const CameraPanel: React.FC<CameraPanelProps> = ({
                 <button
                   type="button"
                   onClick={() => setLocalEnabled(true)}
-                  className="inline-flex items-center gap-2 rounded-2xl border border-cyan-400/20 bg-cyan-500/10 px-4 py-3 text-[12px] font-bold text-cyan-100 transition hover:bg-cyan-500/15"
+                  className="ios-action-button ios-action-button--secondary px-4 py-3 text-[12px]"
                 >
                   <Camera size={14} />
                   打开本机相机
@@ -500,7 +500,7 @@ export const CameraPanel: React.FC<CameraPanelProps> = ({
         </section>
 
         <aside className="col-span-3 flex min-h-[780px] flex-col gap-6">
-          <section className="ios-float-card rounded-[2.5rem] p-7">
+          <section className="ios-stage-panel rounded-[2.5rem] p-7">
             <div className="flex items-center justify-between">
               <div className="text-[11px] font-semibold tracking-[0.18em] text-cyan-300">实时情绪曲线</div>
               <div className="text-[10px] font-semibold text-slate-500">{curvePoints.length} 点</div>
@@ -542,11 +542,11 @@ export const CameraPanel: React.FC<CameraPanelProps> = ({
               </ResponsiveContainer>
             </div>
             <div className="mt-4 grid grid-cols-2 gap-3 text-[12px]">
-              <div className="rounded-2xl border border-white/6 bg-white/[0.03] px-4 py-3">
+              <div className="ios-stage-tile rounded-2xl px-4 py-3">
                 <div className="text-slate-500">当前情绪</div>
                 <div className="mt-1 font-black text-white">{analysis?.emotion_label_zh || "未识别"}</div>
               </div>
-              <div className="rounded-2xl border border-white/6 bg-white/[0.03] px-4 py-3">
+              <div className="ios-stage-tile rounded-2xl px-4 py-3">
                 <div className="text-slate-500">置信度</div>
                 <div className="mt-1 font-black text-white">
                   {analysis ? `${((analysis.confidence || 0) * 100).toFixed(1)}%` : "--"}
@@ -555,32 +555,32 @@ export const CameraPanel: React.FC<CameraPanelProps> = ({
             </div>
           </section>
 
-          <section className="ios-float-card rounded-[2.5rem] p-7">
+          <section className="ios-stage-panel rounded-[2.5rem] p-7">
             <div className="text-[11px] font-semibold tracking-[0.18em] text-slate-400">识别状态</div>
             <div className="mt-5 space-y-3 text-[13px] text-slate-300">
-              <div className="flex items-center justify-between rounded-2xl border border-white/6 bg-white/[0.03] px-4 py-3">
+              <div className="ios-stage-tile flex items-center justify-between rounded-2xl px-4 py-3">
                 <span>本机相机预览</span>
                 <span className={localReady ? "text-emerald-300" : "text-slate-400"}>{localReady ? "已开启" : "未开启"}</span>
               </div>
-              <div className="flex items-center justify-between rounded-2xl border border-white/6 bg-white/[0.03] px-4 py-3">
+              <div className="ios-stage-tile flex items-center justify-between rounded-2xl px-4 py-3">
                 <span>模型状态</span>
                 <span className={analysis?.model_ready ? "text-emerald-300" : "text-slate-400"}>
                   {analysis?.model_ready ? "FER+/MP ready" : "未就绪"}
                 </span>
               </div>
-              <div className="flex items-center justify-between rounded-2xl border border-white/6 bg-white/[0.03] px-4 py-3">
+              <div className="ios-stage-tile flex items-center justify-between rounded-2xl px-4 py-3">
                 <span>锁定主体</span>
                 <span className={analysis?.focus_locked ? "text-emerald-300" : "text-slate-400"}>
                   {analysis?.focus_locked ? "已锁定" : "未锁定"}
                 </span>
               </div>
-              <div className="flex items-center justify-between rounded-2xl border border-white/6 bg-white/[0.03] px-4 py-3">
+              <div className="ios-stage-tile flex items-center justify-between rounded-2xl px-4 py-3">
                 <span>人脸数量</span>
                 <span className={analysis && analysis.face_count === 1 ? "text-emerald-300" : "text-amber-300"}>
                   {analysis?.face_count ?? 0}
                 </span>
               </div>
-              <div className="flex items-center justify-between rounded-2xl border border-white/6 bg-white/[0.03] px-4 py-3">
+              <div className="ios-stage-tile flex items-center justify-between rounded-2xl px-4 py-3">
                 <span>识别暂停</span>
                 <span className={analysis?.recognition_paused ? "text-amber-300" : "text-emerald-300"}>
                   {analysis?.recognition_paused ? "是" : "否"}
@@ -588,13 +588,13 @@ export const CameraPanel: React.FC<CameraPanelProps> = ({
               </div>
             </div>
             {analysis?.recognition_paused ? (
-              <div className="mt-4 rounded-2xl border border-amber-300/20 bg-amber-500/10 px-4 py-3 text-[12px] leading-6 text-amber-100">
+              <div className="ios-stage-tile mt-4 rounded-2xl px-4 py-3 text-[12px] leading-6 text-amber-100">
                 {formatPauseReason(analysis.pause_reason)}
               </div>
             ) : null}
           </section>
 
-          <section className="rounded-[2.5rem] border border-white/[0.05] bg-[#0c1222]/50 p-7 shadow-2xl backdrop-blur-3xl">
+          <section className="ios-stage-panel ios-stage-panel--deep rounded-[2.5rem] p-7">
             <div className="text-[11px] font-black uppercase tracking-[0.28em] text-cyan-300">采集说明</div>
             <div className="mt-4 space-y-4 text-[13px] leading-7 text-slate-300">
               <p>当前会持续抓取本机摄像头画面做实时识别，并把识别到的人脸直接框出来，让你知道系统正在看谁。</p>
