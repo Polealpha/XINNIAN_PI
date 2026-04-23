@@ -1,9 +1,8 @@
-const LOCAL_API_BASE = import.meta.env.VITE_LOCAL_API_BASE || "http://127.0.0.1:8000";
+const LOCAL_API_BASE = import.meta.env.VITE_LOCAL_API_BASE || "http://127.0.0.1:8012";
 const API_BASE = import.meta.env.VITE_SERVER_API_BASE || import.meta.env.VITE_API_BASE || LOCAL_API_BASE;
 const DEVICE_SYNC_API_BASE = import.meta.env.VITE_DEVICE_SYNC_API_BASE || API_BASE;
 const REQUEST_TIMEOUT_MS = 8000;
 const ASSISTANT_SEND_TIMEOUT_MS = 4 * 60 * 1000;
-const DESKTOP_AUDIO_TIMEOUT_MS = 2 * 60 * 1000;
 const LOCAL_LLM_TIMEOUT_MS = 90 * 1000;
 const ACTIVATION_ASSESSMENT_TIMEOUT_MS = 75 * 1000;
 
@@ -35,6 +34,8 @@ const REMOTE_PATH_PREFIXES = [
   "/api/emotion/",
 ];
 
+const LOCAL_BACKEND_TOKEN_KEY = "local_backend_token";
+
 const resolveBaseForPath = (path: string) => {
   if (LOCAL_PATH_PREFIXES.some((prefix) => path.startsWith(prefix))) {
     return LOCAL_API_BASE;
@@ -55,9 +56,6 @@ const resolveTimeoutForPath = (path: string, overrideTimeoutMs?: number) => {
   if (path.startsWith("/api/llm/care")) {
     return ASSISTANT_SEND_TIMEOUT_MS;
   }
-  if (path === "/api/desktop/voice/transcribe") {
-    return DESKTOP_AUDIO_TIMEOUT_MS;
-  }
   if (
     path === "/api/activation/assessment/start" ||
     path === "/api/activation/assessment/turn" ||
@@ -71,6 +69,8 @@ const resolveTimeoutForPath = (path: string, overrideTimeoutMs?: number) => {
   return REQUEST_TIMEOUT_MS;
 };
 
+const isLocalPath = (path: string) => LOCAL_PATH_PREFIXES.some((prefix) => path.startsWith(prefix));
+
 export const getAccessToken = (): string | null => {
   return localStorage.getItem("auth_token");
 };
@@ -83,7 +83,15 @@ export const setRefreshToken = (token: string) => {
   localStorage.setItem("refresh_token", token);
 };
 
-const refreshAccessToken = async () => {
+export const getLocalBackendToken = (): string | null => {
+  return localStorage.getItem(LOCAL_BACKEND_TOKEN_KEY);
+};
+
+export const setLocalBackendToken = (token: string) => {
+  localStorage.setItem(LOCAL_BACKEND_TOKEN_KEY, token);
+};
+
+const refreshRemoteAccessToken = async () => {
   const refreshToken = localStorage.getItem("refresh_token");
   if (!refreshToken) {
     throw new Error("No refresh token");
@@ -106,12 +114,42 @@ const refreshAccessToken = async () => {
   return data;
 };
 
-const buildHeaders = (withAuth: boolean) => {
+const bootstrapLocalBackendToken = async () => {
+  const response = await fetch(`${LOCAL_API_BASE}/api/desktop/auth/bootstrap`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+  });
+  if (!response.ok) {
+    throw new Error(`Local bootstrap failed: ${response.status}`);
+  }
+  const data = await response.json();
+  const token = String(data?.access_token || "").trim();
+  if (!token) {
+    throw new Error("Local bootstrap returned empty token");
+  }
+  setLocalBackendToken(token);
+  return token;
+};
+
+const ensureLocalBackendToken = async () => {
+  const existing = getLocalBackendToken();
+  if (existing) return existing;
+  return bootstrapLocalBackendToken();
+};
+
+const refreshAccessToken = async (path: string) => {
+  if (isLocalPath(path)) {
+    return bootstrapLocalBackendToken();
+  }
+  return refreshRemoteAccessToken();
+};
+
+const buildHeaders = async (path: string, withAuth: boolean) => {
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
   };
   if (withAuth) {
-    const token = getAccessToken();
+    const token = isLocalPath(path) ? await ensureLocalBackendToken() : getAccessToken();
     if (token) {
       headers.Authorization = `Bearer ${token}`;
     }
@@ -119,10 +157,10 @@ const buildHeaders = (withAuth: boolean) => {
   return headers;
 };
 
-const buildAuthHeadersOnly = (withAuth: boolean) => {
+const buildAuthHeadersOnly = async (path: string, withAuth: boolean) => {
   const headers: Record<string, string> = {};
   if (withAuth) {
-    const token = getAccessToken();
+    const token = isLocalPath(path) ? await ensureLocalBackendToken() : getAccessToken();
     if (token) {
       headers.Authorization = `Bearer ${token}`;
     }
@@ -163,10 +201,10 @@ export const apiGet = async (path: string, withAuth = true, retried = false, tim
   const base = resolveBaseForPath(path);
   const response = await fetchWithTimeout(`${base}${path}`, {
     method: "GET",
-    headers: buildHeaders(withAuth),
+    headers: await buildHeaders(path, withAuth),
   }, resolveTimeoutForPath(path, timeoutMs));
   if (response.status === 401 && withAuth && !retried) {
-    await refreshAccessToken();
+    await refreshAccessToken(path);
     return apiGet(path, withAuth, true, timeoutMs);
   }
   if (!response.ok) {
@@ -179,11 +217,11 @@ export const apiPost = async (path: string, body: unknown, withAuth = true, retr
   const base = resolveBaseForPath(path);
   const response = await fetchWithTimeout(`${base}${path}`, {
     method: "POST",
-    headers: buildHeaders(withAuth),
+    headers: await buildHeaders(path, withAuth),
     body: body === undefined ? undefined : JSON.stringify(body),
   }, resolveTimeoutForPath(path, timeoutMs));
   if (response.status === 401 && withAuth && !retried) {
-    await refreshAccessToken();
+    await refreshAccessToken(path);
     return apiPost(path, body, withAuth, true, timeoutMs);
   }
   if (!response.ok) {
@@ -196,11 +234,11 @@ export const apiPostForm = async (path: string, body: FormData, withAuth = true,
   const base = resolveBaseForPath(path);
   const response = await fetchWithTimeout(`${base}${path}`, {
     method: "POST",
-    headers: buildAuthHeadersOnly(withAuth),
+    headers: await buildAuthHeadersOnly(path, withAuth),
     body,
   }, resolveTimeoutForPath(path, timeoutMs));
   if (response.status === 401 && withAuth && !retried) {
-    await refreshAccessToken();
+    await refreshAccessToken(path);
     return apiPostForm(path, body, withAuth, true, timeoutMs);
   }
   if (!response.ok) {

@@ -61,11 +61,11 @@ from .assessment_prompts import (
 from .personality_prompts import PERSONALITY_EXTRACTION_PROMPT, PERSONALITY_SYSTEM_PROMPT
 from .assistant_service import AssistantService, build_session_key, normalize_surface
 from .care_prompts import CARE_RESPONSE_RULES, CARE_SYSTEM_PROMPT
-from .desktop_speech import DesktopSpeechService
 from .db import get_db, init_db
 from .openclaw_gateway import OpenClawGatewayError
 from .schemas import (
     AssistantBridgeSendRequest,
+    AssistantDuplexConfigResponse,
     ActivationCompleteRequest,
     ActivationAssessmentFinishResponse,
     ActivationAssessmentStartRequest,
@@ -88,8 +88,13 @@ from .schemas import (
     AssistantRuntimeStatusResponse,
     AssistantSendRequest,
     AssistantSendResponse,
+    AssistantSessionControlResponse,
+    AssistantSessionInterruptRequest,
     AssistantSessionResetRequest,
+    AssistantSessionStartRequest,
+    AssistantSessionStartResponse,
     AssistantSessionStatusResponse,
+    AssistantSessionStopRequest,
     AssistantTodoCreateRequest,
     AssistantTodoItem,
     AssistantTodoListResponse,
@@ -102,8 +107,6 @@ from .schemas import (
     DailySummaryRequest,
     DailySummaryResponse,
     DesktopRuntimeStatusResponse,
-    DesktopVoiceStatusResponse,
-    DesktopVoiceTranscribeResponse,
     DeviceInfoResponse,
     DeviceSettingsPageRequest,
     DeviceSettingsResponse,
@@ -404,6 +407,59 @@ def _sanitize_outbound_bot_text(text: str) -> tuple[str, bool]:
     return "我已经拿到工具结果，但中间格式异常。你再问一次，我直接给你结论。", True
 
 
+def _build_assistant_affect_snapshot(
+    conn: Connection,
+    user_id: int,
+    merged_metadata: Dict[str, Any],
+) -> Dict[str, object]:
+    current_emotion = str(
+        merged_metadata.get("current_emotion")
+        or merged_metadata.get("emotion")
+        or ""
+    ).strip()
+
+    runtime_scores = getattr(app.state, "scores", {}) if hasattr(app.state, "scores") else {}
+    if not isinstance(runtime_scores, dict):
+        runtime_scores = {}
+    runtime_detail = getattr(app.state, "risk_detail", {}) if hasattr(app.state, "risk_detail") else {}
+    if not isinstance(runtime_detail, dict):
+        runtime_detail = {}
+    runtime_v_sub = runtime_detail.get("V_sub") if isinstance(runtime_detail.get("V_sub"), dict) else {}
+
+    expr_label = str(
+        merged_metadata.get("expression_label")
+        or runtime_v_sub.get("expression_label")
+        or "unknown"
+    ).strip() or "unknown"
+    expr_confidence = float(
+        merged_metadata.get("expression_confidence")
+        or runtime_v_sub.get("expression_confidence")
+        or 0.0
+    )
+
+    last_events = _list_emotion_events(conn, int(user_id), 3)
+    recent_labels = [str(item.get("type") or "").strip() for item in last_events if str(item.get("type") or "").strip()]
+
+    snapshot = {
+        "current_emotion": current_emotion,
+        "expression": {
+            "label": expr_label,
+            "label_zh": _expression_label_to_zh(expr_label),
+            "confidence": round(expr_confidence, 4),
+        },
+        "realtime_scores": {
+            "V": float(runtime_scores.get("V", 0.0) or 0.0),
+            "A": float(runtime_scores.get("A", 0.0) or 0.0),
+            "T": float(runtime_scores.get("T", 0.0) or 0.0),
+            "S": float(runtime_scores.get("S", 0.0) or 0.0),
+        },
+        "recent_emotion_events": recent_labels,
+        "risk_mode": str(getattr(app.state, "risk_mode", "") or "").strip(),
+        "risk_timestamp_ms": int(getattr(app.state, "risk_timestamp_ms", 0) or 0),
+    }
+    return snapshot
+
+
 class EventManager:
     def __init__(self) -> None:
         self._connections: List[WebSocket] = []
@@ -431,7 +487,149 @@ class EventManager:
 
 event_manager = EventManager()
 assistant_service = AssistantService()
-desktop_speech_service = DesktopSpeechService()
+
+
+class AssistantSessionEventManager:
+    def __init__(self) -> None:
+        self._connections: Dict[str, List[WebSocket]] = {}
+
+    async def connect(self, session_key: str, websocket: WebSocket) -> None:
+        await websocket.accept()
+        self._connections.setdefault(session_key, []).append(websocket)
+
+    def disconnect(self, session_key: str, websocket: WebSocket) -> None:
+        bucket = self._connections.get(session_key)
+        if not bucket:
+            return
+        if websocket in bucket:
+            bucket.remove(websocket)
+        if not bucket:
+            self._connections.pop(session_key, None)
+
+    async def broadcast(self, session_key: str, message: Dict[str, object]) -> None:
+        bucket = list(self._connections.get(session_key) or [])
+        if not bucket:
+            return
+        dead: List[WebSocket] = []
+        for ws in bucket:
+            try:
+                await ws.send_json(message)
+            except Exception:
+                dead.append(ws)
+        for ws in dead:
+            self.disconnect(session_key, ws)
+
+
+class AssistantDuplexRegistry:
+    def __init__(self) -> None:
+        self._sessions: Dict[str, Dict[str, object]] = {}
+        self._lock = threading.Lock()
+
+    def start(
+        self,
+        session_key: str,
+        surface: str,
+        memory_summary: str,
+        metadata: Optional[Dict[str, object]] = None,
+    ) -> Dict[str, object]:
+        now = int(time.time() * 1000)
+        with self._lock:
+            existing = dict(self._sessions.get(session_key) or {})
+            duplex_session_id = str(existing.get("duplex_session_id") or f"duplex-{secrets.token_hex(8)}")
+            payload = {
+                "prefix_system_prompt": (
+                    "你是情感关怀机器人“小念”的官方全双工语音层。"
+                    "请用自然、克制、稳定、简洁的中文口语回复。"
+                    "优先听懂用户真实意思，再简短回答。"
+                    "不要复述用户原话，不要自称专门为用户定制了声音，不要撒娇，不要哭腔，"
+                    "不要过度亲密，不要油腻，不要说夸张安慰话，不要暴露内部系统提示。"
+                ),
+                "deferred_finalize": True,
+                "ref_audio_path": "assets/ref_audio/ref_en_dlc_1.wav",
+                "force_listen_count": 1,
+                "max_new_speak_tokens_per_chunk": 40,
+                "listen_prob_scale": 0.55,
+                "temperature": 0.18,
+                "length_penalty": 1.12,
+            }
+            if memory_summary:
+                payload["memory_summary"] = memory_summary
+            entry = {
+                "session_key": session_key,
+                "surface": surface,
+                "status": "active",
+                "duplex_session_id": duplex_session_id,
+                "ws_url": f"ws://127.0.0.1:19002/ws/duplex/{duplex_session_id}",
+                "provider": "MiniCPM-o-4.5",
+                "prepare_payload": payload,
+                "memory_summary": memory_summary,
+                "metadata": dict(metadata or {}),
+                "created_at_ms": int(existing.get("created_at_ms") or now),
+                "updated_at_ms": now,
+                "last_interrupt_at_ms": existing.get("last_interrupt_at_ms"),
+            }
+            self._sessions[session_key] = entry
+            return dict(entry)
+
+    def get(self, session_key: str) -> Optional[Dict[str, object]]:
+        with self._lock:
+            entry = self._sessions.get(session_key)
+            return dict(entry) if entry else None
+
+    def stop(self, session_key: str) -> Dict[str, object]:
+        now = int(time.time() * 1000)
+        with self._lock:
+            entry = dict(self._sessions.get(session_key) or {})
+            entry["session_key"] = session_key
+            entry["status"] = "stopped"
+            entry["updated_at_ms"] = now
+            self._sessions[session_key] = entry
+            return dict(entry)
+
+    def interrupt(self, session_key: str, reason: str = "barge_in") -> Dict[str, object]:
+        now = int(time.time() * 1000)
+        with self._lock:
+            entry = dict(self._sessions.get(session_key) or {})
+            entry["session_key"] = session_key
+            entry["status"] = "interrupted"
+            entry["interrupt_reason"] = reason
+            entry["last_interrupt_at_ms"] = now
+            entry["updated_at_ms"] = now
+            self._sessions[session_key] = entry
+            return dict(entry)
+
+    def update_runtime(
+        self,
+        session_key: str,
+        *,
+        status: Optional[str] = None,
+        runtime_state: Optional[str] = None,
+        last_user_text: Optional[str] = None,
+        last_assistant_text: Optional[str] = None,
+    ) -> Dict[str, object]:
+        now = int(time.time() * 1000)
+        with self._lock:
+            entry = dict(self._sessions.get(session_key) or {})
+            entry["session_key"] = session_key
+            if status is not None:
+                entry["status"] = status
+            if runtime_state is not None:
+                entry["runtime_state"] = runtime_state
+            if last_user_text is not None:
+                entry["last_user_text"] = last_user_text
+            if last_assistant_text is not None:
+                entry["last_assistant_text"] = last_assistant_text
+            entry["updated_at_ms"] = now
+            self._sessions[session_key] = entry
+            return dict(entry)
+
+
+assistant_session_events = AssistantSessionEventManager()
+assistant_duplex_registry = AssistantDuplexRegistry()
+
+MINICPMO_PROVIDER_BASE_URL = "https://127.0.0.1:18994"
+MINICPMO_PROVIDER_MODEL_ID = "MiniCPM-o-4.5"
+MINICPMO_PROVIDER_MODEL_NAME = "MiniCPM-o 4.5"
 
 ACTIVATION_ASSESSMENT_MODEL_TIMEOUT_MS = 35_000
 ACTIVATION_ASSESSMENT_MEMORY_TIMEOUT_MS = 30_000
@@ -458,14 +656,20 @@ def _desktop_runtime_status_payload() -> Dict[str, object]:
     care_templates = engine_root / "policy" / "templates_zh.json"
     text_lexicon = engine_root / "nlp" / "lexicon_zh.txt"
     assistant_chain = assistant_service.runtime_status()
-    voice_chain = desktop_speech_service.status()
     return {
         "ok": True,
         "source": "desktop_backend",
         "emotion_chain_ready": True,
         "proactive_care_ready": bool(assistant_chain.get("gateway_ready")) and bool(assistant_chain.get("provider_network_ok")),
         "active_care_strategy": str(engine_cfg.policy.care_delivery_strategy or "policy"),
-        "voice_chain": voice_chain,
+        "voice_chain": {
+            "ok": True,
+            "ready": True,
+            "transport": "minicpmo_official_duplex",
+            "provider": "MiniCPM-o-4.5",
+            "legacy_chain_removed": True,
+            "detail": "desktop half-duplex STT/TTS chain removed; official duplex session is the only desktop voice path",
+        },
         "assistant_chain": assistant_chain,
         "components": {
             "fusion_enabled": True,
@@ -489,16 +693,6 @@ def desktop_runtime_status(
 ) -> DesktopRuntimeStatusResponse:
     _parse_access_token_for_local_desktop(credentials, conn, request)
     return DesktopRuntimeStatusResponse(**_desktop_runtime_status_payload())
-
-
-@app.get("/api/desktop/voice/status", response_model=DesktopVoiceStatusResponse)
-def desktop_voice_status(
-    request: Request,
-    credentials: HTTPAuthorizationCredentials = Depends(bearer_scheme),
-    conn: Connection = Depends(get_db),
-) -> DesktopVoiceStatusResponse:
-    _parse_access_token_for_local_desktop(credentials, conn, request)
-    return DesktopVoiceStatusResponse(**desktop_speech_service.status())
 
 
 def _wifi_cipher() -> Fernet:
@@ -592,7 +786,7 @@ def _profile_from_user(user: Dict) -> Dict:
     username = str(user.get("username") or "").strip()
     display_name = str(user.get("display_name") or "").strip()
     if not display_name:
-        display_name = username or "鍏遍福鏃呬汉"
+        display_name = username or "共鸣旅人"
     avatar_url = user.get("avatar_url")
     if avatar_url is not None:
         avatar_url = str(avatar_url).strip() or None
@@ -3508,6 +3702,10 @@ def _bridge_user_from_request(request: Request, conn: Connection) -> Dict:
     return user
 
 
+def _local_desktop_bootstrap_user(conn: Connection) -> Dict[str, Any]:
+    return _ensure_shadow_user(conn, 1, "desktop-shadow-1", is_configured=False)
+
+
 @app.post("/auth/register", response_model=UserResponse, status_code=201)
 def register(payload: RegisterRequest, conn: Connection = Depends(get_db)) -> UserResponse:
     existing = _get_user_by_username(conn, payload.username)
@@ -3726,6 +3924,58 @@ async def activation_complete(
     )
     updated_user = _get_user_by_id(conn, int(user["id"]))
     return _activation_response(conn, updated_user, profile)
+
+
+@app.post("/api/activation/skip-assessment", response_model=ActivationProfileResponse)
+async def activation_skip_assessment(
+    request: Request,
+    credentials: HTTPAuthorizationCredentials = Depends(bearer_scheme),
+    conn: Connection = Depends(get_db),
+) -> ActivationProfileResponse:
+    user = _parse_access_token_for_local_activation(credentials, conn, request)
+    user_id = int(user["id"])
+    activation = _get_activation_profile(conn, user_id)
+    preferred_name = str(activation.get("preferred_name") or user.get("display_name") or "当前用户").strip() or "当前用户"
+    intro = str(activation.get("voice_intro_summary") or activation.get("onboarding_notes") or "").strip()
+    summary = (
+        intro
+        or f"{preferred_name} 已跳过首次正式建档，后续由聊天和情感计算逐步补全长期画像。"
+    )
+    now_ms = int(time.time() * 1000)
+    skipped_profile = {
+        "assessment_ready": True,
+        "summary": summary,
+        "decision_style": "先进入桌面，后续在真实聊天中逐步判断。",
+        "stress_response": "暂未正式测得，后续根据真实互动逐步补全。",
+        "care_guidance": "首次激活已跳过正式建档，先保持轻量陪伴与观察，避免过早下强结论。",
+        "interaction_preferences": ["允许跳过首次正式建档", "画像通过后续真实互动逐步补全"],
+        "comfort_preferences": ["先以自然闲聊建立熟悉感"],
+        "avoid_patterns": ["不要反复追问为什么跳过建档", "避免把未确认画像当成既定结论"],
+        "conversation_count": 0,
+        "completed_at_ms": now_ms,
+        "inference_version": "activation-skip-v1",
+        "type_code": "activation_skip",
+        "mapped_type_code": "activation_skip",
+        "evidence_summary": {
+            "highlights": ["用户在首次激活阶段选择跳过正式建档"],
+            "source": "activation_skip",
+        },
+        "profile": {
+            "source": "activation_skip",
+            "preferred_name": preferred_name,
+            "voice_intro_summary": intro,
+        },
+    }
+    psychometric = _upsert_psychometric_profile(conn, user_id, skipped_profile)
+    _assessment_sync_personality_profile(conn, user_id, psychometric)
+    assistant_service.store.append_memory(
+        user_id,
+        title="activation_skip_profile",
+        content=build_memory_summary(psychometric, preferred_name=preferred_name),
+        tags=["activation", "assessment", "skip"],
+    )
+    updated_user = _get_user_by_id(conn, user_id)
+    return _activation_response(conn, updated_user, activation)
 
 
 @app.post("/api/activation/identity/infer", response_model=ActivationIdentityInferResponse)
@@ -4350,7 +4600,7 @@ async def update_user_profile(
 
     if payload.display_name is not None:
         candidate = str(payload.display_name).strip()
-        display_name = candidate or current["username"] or "鍏遍福鏃呬汉"
+        display_name = candidate or current["username"] or "共鸣旅人"
 
     if payload.avatar_url is not None:
         candidate = str(payload.avatar_url).strip()
@@ -4420,6 +4670,22 @@ def refresh(payload: RefreshRequest, conn: Connection = Depends(get_db)) -> Toke
 @app.post("/api/auth/refresh", response_model=TokenResponse)
 def refresh_api(payload: RefreshRequest, conn: Connection = Depends(get_db)) -> TokenResponse:
     return refresh(payload, conn)
+
+
+@app.post("/api/desktop/auth/bootstrap")
+def desktop_auth_bootstrap(request: Request, conn: Connection = Depends(get_db)) -> Dict[str, Any]:
+    if not _is_loopback_request(request):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Loopback only")
+    user = _local_desktop_bootstrap_user(conn)
+    access = auth.create_access_token(int(user["id"]), str(user["username"]))
+    return {
+        "ok": True,
+        "access_token": access["token"],
+        "token_type": "bearer",
+        "expires_in": access["expires_in"],
+        "user_id": int(user["id"]),
+        "username": str(user["username"]),
+    }
 
 
 @app.post("/auth/logout")
@@ -5059,7 +5325,13 @@ def device_status(
     credentials: HTTPAuthorizationCredentials = Depends(bearer_scheme),
     conn: Connection = Depends(get_db),
 ) -> DeviceStatusResponse:
-    user = _parse_access_token(credentials, conn)
+    try:
+        user = _parse_access_token_for_local_desktop(credentials, conn, request)
+    except HTTPException:
+        if not _is_local_request(request):
+            raise
+        default_user_id = _get_default_user_id(conn)
+        user = _get_user_by_id(conn, int(default_user_id)) if default_user_id is not None else {"id": 0}
     normalized_device_id = str(device_id or "").strip()
     if normalized_device_id.lower() in {"", "unbound", "unknown", "none", "null"}:
         normalized_device_id = ""
@@ -5082,9 +5354,10 @@ def device_status(
         if row:
             selected = dict(row)
     if not selected and not device_ip:
+        fallback_ip = str(DEFAULT_ROBOT_DEVICE_IP or "").strip()
         return DeviceStatusResponse(
             device_id=normalized_device_id or "unbound",
-            device_ip=None,
+            device_ip=fallback_ip or None,
             device_mac=None,
             online=False,
             last_seen_ms=None,
@@ -5257,10 +5530,53 @@ def device_stream_proxy(
     if not _is_local_request(request):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Local access only")
     _, resolved_ip = _resolve_device_target_for_local_proxy(conn, device_id=device_id, device_ip=device_ip)
-    return RedirectResponse(
-        url=f"http://{resolved_ip}/stream",
-        status_code=status.HTTP_307_TEMPORARY_REDIRECT,
-        headers={"Cache-Control": "no-cache, no-store, must-revalidate"},
+    candidates = [
+        "/stream",
+        "/camera/stream",
+        "/mjpeg",
+    ]
+    last_exc: Optional[Exception] = None
+    for path in candidates:
+        stream_ctx = None
+        try:
+            stream_ctx = httpx.stream(
+                "GET",
+                f"http://{resolved_ip}{path}",
+                timeout=httpx.Timeout(connect=2.5, read=None, write=5.0, pool=5.0),
+            )
+            upstream = stream_ctx.__enter__()
+            upstream.raise_for_status()
+            media_type = upstream.headers.get("content-type", "multipart/x-mixed-replace")
+
+            def iter_stream():
+                try:
+                    for chunk in upstream.iter_bytes():
+                        if chunk:
+                            yield chunk
+                finally:
+                    if stream_ctx is not None:
+                        stream_ctx.__exit__(None, None, None)
+
+            return StreamingResponse(
+                iter_stream(),
+                media_type=media_type,
+                headers={
+                    "Cache-Control": "no-cache, no-store, must-revalidate",
+                    "Pragma": "no-cache",
+                    "Expires": "0",
+                    "X-Accel-Buffering": "no",
+                },
+            )
+        except Exception as exc:
+            last_exc = exc
+            if stream_ctx is not None:
+                try:
+                    stream_ctx.__exit__(type(exc), exc, exc.__traceback__)
+                except Exception:
+                    pass
+    raise HTTPException(
+        status_code=status.HTTP_502_BAD_GATEWAY,
+        detail=f"stream unavailable: {last_exc or 'unknown error'}",
     )
 
 
@@ -5585,33 +5901,6 @@ async def chat_upload(
     }
 
 
-@app.post("/api/desktop/voice/transcribe", response_model=DesktopVoiceTranscribeResponse)
-async def desktop_voice_transcribe(
-    file: UploadFile = File(...),
-    context: str = Form("chat"),
-    request: Request = None,
-    credentials: HTTPAuthorizationCredentials = Depends(bearer_scheme),
-    conn: Connection = Depends(get_db),
-) -> DesktopVoiceTranscribeResponse:
-    _parse_access_token_for_local_desktop(credentials, conn, request)
-    content_type = str(file.content_type or "").lower()
-    if not (content_type.startswith("audio/") or str(file.filename or "").lower().endswith(".wav")):
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Only audio uploads are supported")
-    try:
-        audio_bytes = await file.read()
-        payload = desktop_speech_service.transcribe_upload(
-            audio_bytes=audio_bytes,
-            filename=str(file.filename or ""),
-            content_type=content_type,
-            context=str(context or "chat"),
-        )
-        return DesktopVoiceTranscribeResponse(**payload)
-    except ValueError as exc:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
-    except Exception as exc:
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(exc)) from exc
-
-
 async def _assistant_send_impl(
     conn: Connection,
     user_id: int,
@@ -5620,6 +5909,14 @@ async def _assistant_send_impl(
     raw_text = str(payload.text or "").strip()
     if not raw_text:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="text is required")
+    resolved_surface = normalize_surface(payload.surface)
+    resolved_session_key = build_session_key(
+        resolved_surface,
+        user_id=int(user_id),
+        explicit=payload.session_key,
+        device_id=payload.device_id,
+        sender_id=payload.sender_id,
+    )
     merged_metadata = dict(payload.metadata or {})
     assistant_runtime = _get_user_assistant_settings(conn, int(user_id), payload.device_id)
     if "assistant_mode" not in merged_metadata:
@@ -5627,6 +5924,18 @@ async def _assistant_send_impl(
     if "assistant_native_control" not in merged_metadata:
         merged_metadata["assistant_native_control"] = bool(assistant_runtime.get("native_control_enabled", True))
     merged_metadata["user_profile"] = _build_assistant_identity_context(conn, int(user_id))
+    if "current_emotion" not in merged_metadata and merged_metadata.get("emotion") is not None:
+        merged_metadata["current_emotion"] = merged_metadata.get("emotion")
+    affect_snapshot = _build_assistant_affect_snapshot(conn, int(user_id), merged_metadata)
+    merged_metadata["affect_snapshot"] = affect_snapshot
+    if not merged_metadata.get("expression_label"):
+        merged_metadata["expression_label"] = (
+            (affect_snapshot.get("expression") or {}).get("label") if isinstance(affect_snapshot.get("expression"), dict) else "unknown"
+        ) or "unknown"
+    if not merged_metadata.get("expression_confidence"):
+        merged_metadata["expression_confidence"] = (
+            (affect_snapshot.get("expression") or {}).get("confidence") if isinstance(affect_snapshot.get("expression"), dict) else 0.0
+        ) or 0.0
     stored_memory_summary = assistant_service.get_profile_memory_summary(int(user_id), max_chars=1200)
     provided_memory_summary = str(merged_metadata.get("memory_summary") or "").strip()
     if stored_memory_summary:
@@ -5635,6 +5944,24 @@ async def _assistant_send_impl(
                 merged_metadata["memory_summary"] = f"{stored_memory_summary}\n\n最近上下文补充：{provided_memory_summary}"
         else:
             merged_metadata["memory_summary"] = stored_memory_summary
+    assistant_duplex_registry.update_runtime(
+        resolved_session_key,
+        status="active",
+        runtime_state="thinking",
+        last_user_text=raw_text,
+    )
+    await assistant_session_events.broadcast(
+        resolved_session_key,
+        {
+            "type": "AssistantSessionThinking",
+            "timestamp_ms": int(time.time() * 1000),
+            "payload": {
+                "surface": resolved_surface,
+                "session_key": resolved_session_key,
+                "text": raw_text,
+            },
+        },
+    )
     response_payload = await assistant_service.send_message(
         conn,
         user_id=int(user_id),
@@ -5684,6 +6011,24 @@ async def _assistant_send_impl(
             },
         }
     )
+    await assistant_session_events.broadcast(
+        str(user_message.session_key),
+        {
+            "type": "AssistantSessionUserTurn",
+            "timestamp_ms": user_message.timestamp_ms,
+            "payload": {
+                "text": user_message.text,
+                "surface": user_message.surface,
+                "session_key": user_message.session_key,
+            },
+        },
+    )
+    assistant_duplex_registry.update_runtime(
+        str(user_message.session_key),
+        status="active",
+        runtime_state="thinking",
+        last_user_text=user_message.text,
+    )
     await event_manager.broadcast(
         {
             "type": "ChatMessage",
@@ -5699,6 +6044,24 @@ async def _assistant_send_impl(
                 "session_key": bot_message.session_key,
             },
         }
+    )
+    await assistant_session_events.broadcast(
+        str(bot_message.session_key),
+        {
+            "type": "AssistantSessionAssistantTurn",
+            "timestamp_ms": bot_message.timestamp_ms,
+            "payload": {
+                "text": bot_message.text,
+                "surface": bot_message.surface,
+                "session_key": bot_message.session_key,
+            },
+        },
+    )
+    assistant_duplex_registry.update_runtime(
+        str(bot_message.session_key),
+        status="active",
+        runtime_state="listening",
+        last_assistant_text=bot_message.text,
     )
     if normalize_surface(payload.surface) == "desktop":
         await _mirror_bot_reply_to_wechat(bot_text)
@@ -5748,6 +6111,156 @@ async def assistant_bridge_send(
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc)) from exc
     except RuntimeError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+
+
+@app.get("/api/assistant/duplex/config", response_model=AssistantDuplexConfigResponse)
+def assistant_duplex_config(
+    request: Request,
+    credentials: HTTPAuthorizationCredentials = Depends(bearer_scheme),
+    conn: Connection = Depends(get_db),
+) -> AssistantDuplexConfigResponse:
+    _ = _parse_access_token_for_local_desktop(credentials, conn, request)
+    return AssistantDuplexConfigResponse(
+        ok=True,
+        provider="MiniCPM-o-4.5",
+        ws_base="ws://127.0.0.1:19002/ws/duplex",
+        audio_chunk_ms=1000,
+        sample_rate=16000,
+        transport="native_ws_proxy",
+        preferred_voice="ref_en_dlc_1.wav",
+    )
+
+
+@app.post("/api/assistant/session/start", response_model=AssistantSessionStartResponse)
+async def assistant_session_start(
+    payload: AssistantSessionStartRequest,
+    request: Request,
+    credentials: HTTPAuthorizationCredentials = Depends(bearer_scheme),
+    conn: Connection = Depends(get_db),
+) -> AssistantSessionStartResponse:
+    user = _parse_access_token_for_local_desktop(credentials, conn, request)
+    status_payload = assistant_service.get_session_status(
+        conn,
+        user_id=int(user["id"]),
+        surface=payload.surface,
+        session_key=payload.session_key,
+        device_id=payload.device_id,
+        sender_id=payload.sender_id,
+    )
+    resolved_key = str(status_payload["session_key"])
+    history_rows = _list_chat_messages(conn, int(user["id"]), 30, session_key=resolved_key)
+    history = [_chat_response_from_row(row) for row in history_rows]
+    memory_summary = assistant_service.get_profile_memory_summary(int(user["id"]), max_chars=800)
+    entry = assistant_duplex_registry.start(
+        session_key=resolved_key,
+        surface=str(status_payload["surface"]),
+        memory_summary=memory_summary,
+        metadata=payload.metadata,
+    )
+    await assistant_session_events.broadcast(
+        resolved_key,
+        {
+            "type": "AssistantSessionStarted",
+            "timestamp_ms": int(entry.get("updated_at_ms") or int(time.time() * 1000)),
+            "payload": {
+                "surface": entry.get("surface") or payload.surface,
+                "session_key": resolved_key,
+                "duplex_session_id": entry.get("duplex_session_id") or "",
+                "ws_url": entry.get("ws_url") or "",
+            },
+        },
+    )
+    return AssistantSessionStartResponse(
+        ok=True,
+        surface=str(status_payload["surface"]),
+        session_key=resolved_key,
+        duplex_session_id=str(entry.get("duplex_session_id") or ""),
+        ws_url=str(entry.get("ws_url") or ""),
+        provider=str(entry.get("provider") or "MiniCPM-o-4.5"),
+        prepare_payload=dict(entry.get("prepare_payload") or {}),
+        last_message_ts_ms=status_payload.get("last_message_ts_ms"),
+        message_count=int(status_payload.get("message_count") or 0),
+        history=history,
+        memory_summary=memory_summary,
+    )
+
+
+@app.post("/api/assistant/session/stop", response_model=AssistantSessionControlResponse)
+async def assistant_session_stop(
+    payload: AssistantSessionStopRequest,
+    request: Request,
+    credentials: HTTPAuthorizationCredentials = Depends(bearer_scheme),
+    conn: Connection = Depends(get_db),
+) -> AssistantSessionControlResponse:
+    user = _parse_access_token_for_local_desktop(credentials, conn, request)
+    status_payload = assistant_service.get_session_status(
+        conn,
+        user_id=int(user["id"]),
+        surface=payload.surface,
+        session_key=payload.session_key,
+        device_id=payload.device_id,
+        sender_id=payload.sender_id,
+    )
+    resolved_key = str(status_payload["session_key"])
+    entry = assistant_duplex_registry.stop(resolved_key)
+    timestamp_ms = int(entry.get("updated_at_ms") or int(time.time() * 1000))
+    await assistant_session_events.broadcast(
+        resolved_key,
+        {
+            "type": "AssistantSessionStopped",
+            "timestamp_ms": timestamp_ms,
+            "payload": {"surface": status_payload["surface"], "session_key": resolved_key},
+        },
+    )
+    return AssistantSessionControlResponse(
+        ok=True,
+        surface=str(status_payload["surface"]),
+        session_key=resolved_key,
+        status=str(entry.get("status") or "stopped"),
+        duplex_session_id=str(entry.get("duplex_session_id") or "") or None,
+        timestamp_ms=timestamp_ms,
+    )
+
+
+@app.post("/api/assistant/session/interrupt", response_model=AssistantSessionControlResponse)
+async def assistant_session_interrupt(
+    payload: AssistantSessionInterruptRequest,
+    request: Request,
+    credentials: HTTPAuthorizationCredentials = Depends(bearer_scheme),
+    conn: Connection = Depends(get_db),
+) -> AssistantSessionControlResponse:
+    user = _parse_access_token_for_local_desktop(credentials, conn, request)
+    status_payload = assistant_service.get_session_status(
+        conn,
+        user_id=int(user["id"]),
+        surface=payload.surface,
+        session_key=payload.session_key,
+        device_id=payload.device_id,
+        sender_id=payload.sender_id,
+    )
+    resolved_key = str(status_payload["session_key"])
+    entry = assistant_duplex_registry.interrupt(resolved_key, reason=payload.reason)
+    timestamp_ms = int(entry.get("updated_at_ms") or int(time.time() * 1000))
+    await assistant_session_events.broadcast(
+        resolved_key,
+        {
+            "type": "AssistantSessionInterrupted",
+            "timestamp_ms": timestamp_ms,
+            "payload": {
+                "surface": status_payload["surface"],
+                "session_key": resolved_key,
+                "reason": payload.reason,
+            },
+        },
+    )
+    return AssistantSessionControlResponse(
+        ok=True,
+        surface=str(status_payload["surface"]),
+        session_key=resolved_key,
+        status=str(entry.get("status") or "interrupted"),
+        duplex_session_id=str(entry.get("duplex_session_id") or "") or None,
+        timestamp_ms=timestamp_ms,
+    )
 
 
 @app.get("/api/assistant/session/status", response_model=AssistantSessionStatusResponse)
@@ -5888,6 +6401,140 @@ def assistant_runtime_status(
 ) -> AssistantRuntimeStatusResponse:
     _ = _parse_access_token_for_local_desktop(credentials, conn, request)
     return AssistantRuntimeStatusResponse(ok=True, **assistant_service.runtime_status())
+
+
+def _flatten_openai_message_content(content: object) -> str:
+    if isinstance(content, str):
+        return content.strip()
+    if isinstance(content, list):
+        parts: List[str] = []
+        for item in content:
+            if isinstance(item, str):
+                stripped = item.strip()
+                if stripped:
+                    parts.append(stripped)
+                continue
+            if not isinstance(item, dict):
+                continue
+            item_type = str(item.get("type") or "").strip().lower()
+            if item_type in {"text", "input_text"}:
+                text = str(item.get("text") or item.get("value") or "").strip()
+                if text:
+                    parts.append(text)
+        return "\n".join(part for part in parts if part).strip()
+    if isinstance(content, dict):
+        item_type = str(content.get("type") or "").strip().lower()
+        if item_type in {"text", "input_text"}:
+            return str(content.get("text") or content.get("value") or "").strip()
+    return str(content or "").strip()
+
+
+def _normalize_openai_messages(messages: object) -> List[Dict[str, str]]:
+    normalized: List[Dict[str, str]] = []
+    if not isinstance(messages, list):
+        return normalized
+    for item in messages:
+        if not isinstance(item, dict):
+            continue
+        role = str(item.get("role") or "user").strip().lower() or "user"
+        text = _flatten_openai_message_content(item.get("content"))
+        if not text:
+            continue
+        normalized.append({"role": role, "content": text})
+    return normalized
+
+
+async def _call_minicpmo_chat_api(
+    messages: List[Dict[str, str]],
+    *,
+    max_new_tokens: int = 700,
+    temperature: float = 0.0,
+) -> Dict[str, object]:
+    payload = {
+        "messages": messages,
+        "streaming": False,
+        "generation": {
+            "max_new_tokens": max(1, min(int(max_new_tokens), 4096)),
+            "temperature": float(temperature),
+        },
+        "tts": {"enabled": False},
+        "enable_thinking": False,
+        "omni_mode": False,
+    }
+    timeout_s = max(15.0, min(120.0, 10.0 + (float(payload["generation"]["max_new_tokens"]) / 20.0)))
+    async with httpx.AsyncClient(timeout=timeout_s, verify=False) as client:
+        response = await client.post(f"{MINICPMO_PROVIDER_BASE_URL}/api/chat", json=payload)
+    response.raise_for_status()
+    data = response.json() if response.content else {}
+    if not isinstance(data, dict):
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="MiniCPM provider returned invalid payload")
+    if data.get("success") is False:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=str(data.get("error") or "MiniCPM provider error"),
+        )
+    return data
+
+
+@app.get("/minicpmo-provider/v1/models")
+async def minicpmo_provider_models() -> Dict[str, object]:
+    return {
+        "object": "list",
+        "data": [
+            {
+                "id": MINICPMO_PROVIDER_MODEL_ID,
+                "object": "model",
+                "created": 0,
+                "owned_by": "local-minicpmo",
+            }
+        ],
+    }
+
+
+@app.get("/minicpmo-provider/v1/models/{model_id}")
+async def minicpmo_provider_model_detail(model_id: str) -> Dict[str, object]:
+    if str(model_id).strip() != MINICPMO_PROVIDER_MODEL_ID:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="model not found")
+    return {
+        "id": MINICPMO_PROVIDER_MODEL_ID,
+        "object": "model",
+        "created": 0,
+        "owned_by": "local-minicpmo",
+        "name": MINICPMO_PROVIDER_MODEL_NAME,
+        "context_window": 32768,
+        "max_output_tokens": 4096,
+    }
+
+
+@app.post("/minicpmo-provider/v1/chat/completions")
+async def minicpmo_provider_chat_completions(payload: Dict[str, Any]) -> Dict[str, object]:
+    messages = _normalize_openai_messages(payload.get("messages"))
+    if not messages:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="messages are required")
+    requested_model = str(payload.get("model") or MINICPMO_PROVIDER_MODEL_ID).strip() or MINICPMO_PROVIDER_MODEL_ID
+    max_tokens = int(payload.get("max_tokens") or payload.get("max_completion_tokens") or 700)
+    temperature = float(payload.get("temperature") or 0.0)
+    data = await _call_minicpmo_chat_api(messages, max_new_tokens=max_tokens, temperature=temperature)
+    reply_text = str(data.get("text") or "").strip()
+    token_stats = data.get("token_stats") if isinstance(data.get("token_stats"), dict) else {}
+    return {
+        "id": str(data.get("recording_session_id") or f"chatcmpl-{secrets.token_hex(8)}"),
+        "object": "chat.completion",
+        "created": int(time.time()),
+        "model": requested_model,
+        "choices": [
+            {
+                "index": 0,
+                "message": {"role": "assistant", "content": reply_text},
+                "finish_reason": "stop",
+            }
+        ],
+        "usage": {
+            "prompt_tokens": int(token_stats.get("input_tokens") or 0),
+            "completion_tokens": int(token_stats.get("generated_tokens") or 0),
+            "total_tokens": int(token_stats.get("total_tokens") or 0),
+        },
+    }
 
 
 def _require_bearer(credentials: Optional[HTTPAuthorizationCredentials]) -> None:
@@ -6568,6 +7215,29 @@ def _row_to_event(row: Dict) -> Dict:
         "intensity": row.get("intensity"),
         "source": row.get("source"),
     }
+
+
+@app.websocket("/api/assistant/session/{session_id:path}/events")
+async def websocket_assistant_session_events(websocket: WebSocket, session_id: str) -> None:
+    await assistant_session_events.connect(session_id, websocket)
+    current = assistant_duplex_registry.get(session_id)
+    if current:
+        try:
+            await websocket.send_json(
+                {
+                    "type": "AssistantSessionSnapshot",
+                    "timestamp_ms": int(current.get("updated_at_ms") or int(time.time() * 1000)),
+                    "payload": current,
+                }
+            )
+        except Exception:
+            assistant_session_events.disconnect(session_id, websocket)
+            return
+    try:
+        while True:
+            await websocket.receive_text()
+    except WebSocketDisconnect:
+        assistant_session_events.disconnect(session_id, websocket)
 
 
 @app.websocket("/ws/events")

@@ -14,16 +14,18 @@ let chatWindow = null;
 let floatDragState = null;
 let backendProc = null;
 let openClawGatewayProc = null;
-const LOCAL_BACKEND_URL = "http://127.0.0.1:8000";
+const LOCAL_BACKEND_PORT = 8012;
+const LOCAL_BACKEND_URL = `http://127.0.0.1:${LOCAL_BACKEND_PORT}`;
 const LOCAL_OPENCLAW_GATEWAY_PORT = 18890;
 const LOCAL_OPENCLAW_PROVIDER = {
-  providerId: "zai",
-  profileId: "zai:default",
-  endpoint: "coding-cn",
-  baseUrl: "https://open.bigmodel.cn/api/coding/paas/v4/",
-  modelId: "glm-5",
-  modelRef: "zai/glm-5",
+  providerId: "minicpmo",
+  profileId: "minicpmo:default",
+  endpoint: "local-gateway",
+  baseUrl: `http://127.0.0.1:${LOCAL_BACKEND_PORT}/minicpmo-provider/v1`,
+  modelId: "MiniCPM-o-4.5",
+  modelRef: "minicpmo/MiniCPM-o-4.5",
   thinkingDefault: "low",
+  displayName: "MiniCPM-o 4.5",
 };
 const deviceSyncManager = new DeviceSyncManager({
   onStatus: (payload) => {
@@ -108,10 +110,16 @@ const resolveOpenClawRepo = (runtimeRoot) => {
 };
 
 const resolveOpenClawWorkspace = (runtimeRoot) => {
+  if (process.env.LOCALAPPDATA) {
+    return path.join(process.env.LOCALAPPDATA, "EmoResonance", "assistant_data", "openclaw_workspace");
+  }
   return path.join(runtimeRoot, "assistant_data", "openclaw_workspace");
 };
 
 const resolveOpenClawStateDir = (runtimeRoot) => {
+  if (process.env.LOCALAPPDATA) {
+    return path.join(process.env.LOCALAPPDATA, "EmoResonance", "assistant_data", "openclaw_state");
+  }
   return path.join(runtimeRoot, "assistant_data", "openclaw_state");
 };
 
@@ -165,6 +173,11 @@ const buildOpenClawProxyEnv = () => {
 };
 
 const resolveAppDataRoot = () => {
+  if (process.env.LOCALAPPDATA) {
+    const localRoot = path.join(process.env.LOCALAPPDATA, "EmoResonance");
+    fs.mkdirSync(localRoot, { recursive: true });
+    return localRoot;
+  }
   try {
     if (app?.getPath) {
       const userData = app.getPath("userData");
@@ -215,20 +228,25 @@ const loadOpenClawProviderConfig = () => {
   const fileConfig = readJsonIfExists(resolveOpenClawProviderConfigPath()) || {};
   const modelId = String(fileConfig.modelId || LOCAL_OPENCLAW_PROVIDER.modelId).trim() || LOCAL_OPENCLAW_PROVIDER.modelId;
   const apiKey = String(
-    process.env.ZAI_API_KEY ||
-      process.env.Z_AI_API_KEY ||
+    process.env.OPENCLAW_PROVIDER_API_KEY ||
+      process.env.MINICPMO_PROVIDER_API_KEY ||
+      process.env.GEMMA_PROVIDER_API_KEY ||
+      process.env.LOCAL_GEMMA_PROVIDER_KEY ||
       fileConfig.apiKey ||
-      ""
+      "local-minicpmo-bridge"
   ).trim();
+  const providerId = String(fileConfig.providerId || LOCAL_OPENCLAW_PROVIDER.providerId).trim() || LOCAL_OPENCLAW_PROVIDER.providerId;
+  const profileId = String(fileConfig.profileId || `${providerId}:default`).trim() || `${providerId}:default`;
   return {
-    providerId: LOCAL_OPENCLAW_PROVIDER.providerId,
-    profileId: LOCAL_OPENCLAW_PROVIDER.profileId,
+    providerId,
+    profileId,
     endpoint: String(fileConfig.endpoint || LOCAL_OPENCLAW_PROVIDER.endpoint).trim() || LOCAL_OPENCLAW_PROVIDER.endpoint,
     baseUrl: String(fileConfig.baseUrl || LOCAL_OPENCLAW_PROVIDER.baseUrl).trim() || LOCAL_OPENCLAW_PROVIDER.baseUrl,
     modelId,
-    modelRef: `zai/${modelId}`,
+    modelRef: `${providerId}/${modelId}`,
     thinkingDefault: String(fileConfig.thinkingDefault || LOCAL_OPENCLAW_PROVIDER.thinkingDefault).trim() || LOCAL_OPENCLAW_PROVIDER.thinkingDefault,
     apiKey,
+    displayName: String(fileConfig.displayName || LOCAL_OPENCLAW_PROVIDER.displayName || modelId).trim() || modelId,
   };
 };
 
@@ -238,9 +256,43 @@ const buildOpenClawProviderEnv = () => {
     return {};
   }
   return {
-    ZAI_API_KEY: providerConfig.apiKey,
-    Z_AI_API_KEY: providerConfig.apiKey,
+    OPENCLAW_PROVIDER_API_KEY: providerConfig.apiKey,
+    MINICPMO_PROVIDER_API_KEY: providerConfig.apiKey,
+    GEMMA_PROVIDER_API_KEY: providerConfig.apiKey,
+    LOCAL_GEMMA_PROVIDER_KEY: providerConfig.apiKey,
   };
+};
+
+const findListeningProcessId = (port) => {
+  try {
+    const command = `(Get-NetTCPConnection -LocalPort ${Number(port)} -State Listen -ErrorAction SilentlyContinue | Select-Object -First 1 -ExpandProperty OwningProcess)`;
+    const result = spawnSync("powershell.exe", ["-NoProfile", "-Command", command], {
+      windowsHide: true,
+      encoding: "utf8",
+      timeout: 4000,
+    });
+    const raw = String(result.stdout || "").trim();
+    const pid = Number(raw);
+    return Number.isFinite(pid) && pid > 0 ? pid : 0;
+  } catch {
+    return 0;
+  }
+};
+
+const killListeningProcess = (port, reason = "stale-listener") => {
+  const pid = findListeningProcessId(port);
+  if (!pid) return false;
+  try {
+    appendStartupLog(`killListeningProcess port=${port} pid=${pid} reason=${reason}`);
+    spawnSync("taskkill", ["/PID", String(pid), "/T", "/F"], {
+      windowsHide: true,
+      stdio: "ignore",
+      timeout: 5000,
+    });
+    return true;
+  } catch {
+    return false;
+  }
 };
 
 const parseLatestActivationProfile = (workspaceDir) => {
@@ -319,11 +371,11 @@ const ensureAgentModelsConfig = (agentDir, providerConfig) => {
     models: [
       {
         id: providerConfig.modelId,
-        name: "GLM-5",
-        reasoning: true,
+        name: providerConfig.displayName || providerConfig.modelId,
+        reasoning: false,
         input: ["text"],
-        contextWindow: 204800,
-        maxTokens: 131072,
+        contextWindow: 32768,
+        maxTokens: 4096,
         cost: {
           input: 0,
           output: 0,
@@ -514,11 +566,11 @@ const ensureOpenClawState = (stateDir) => {
       models: [
         {
           id: providerConfig.modelId,
-          name: "GLM-5",
-          reasoning: true,
+          name: providerConfig.displayName || providerConfig.modelId,
+          reasoning: false,
           input: ["text"],
-          contextWindow: 204800,
-          maxTokens: 131072,
+          contextWindow: 32768,
+          maxTokens: 4096,
         },
       ],
     },
@@ -578,11 +630,26 @@ const commandExists = (command) => {
 };
 
 const resolvePythonCommand = (runtimeRoot) => {
+  const validatePythonCommand = (command, args = []) => {
+    try {
+      const probe = spawnSync(command, [...args, "-V"], {
+        windowsHide: true,
+        encoding: "utf8",
+        timeout: 5000,
+      });
+      return probe.status === 0;
+    } catch {
+      return false;
+    }
+  };
   if (process.env.EMOTION_BRIDGE_PYTHON) {
-    return { command: process.env.EMOTION_BRIDGE_PYTHON, args: [] };
+    if (validatePythonCommand(process.env.EMOTION_BRIDGE_PYTHON, [])) {
+      return { command: process.env.EMOTION_BRIDGE_PYTHON, args: [] };
+    }
   }
   const bundledPythonCandidates = process.platform === "win32"
     ? [
+        "C:\\Python314\\python.exe",
         path.join(runtimeRoot, "python", "python.exe"),
         path.join(runtimeRoot, "vendor", "python-runtime", "python.exe"),
         path.join(runtimeRoot, "app windows", "vendor", "python-runtime", "python.exe"),
@@ -592,23 +659,23 @@ const resolvePythonCommand = (runtimeRoot) => {
         path.join(runtimeRoot, "vendor", "python-runtime", "bin", "python3"),
       ];
   for (const bundledPython of bundledPythonCandidates) {
-    if (fs.existsSync(bundledPython)) {
+    if (fs.existsSync(bundledPython) && validatePythonCommand(bundledPython, [])) {
       return { command: bundledPython, args: [] };
     }
   }
   const venvPython = process.platform === "win32"
     ? path.join(runtimeRoot, ".venv", "Scripts", "python.exe")
     : path.join(runtimeRoot, ".venv", "bin", "python");
-  if (fs.existsSync(venvPython)) {
+  if (fs.existsSync(venvPython) && validatePythonCommand(venvPython, [])) {
     return { command: venvPython, args: [] };
   }
-  if (process.platform === "win32" && commandExists("py")) {
+  if (process.platform === "win32" && commandExists("py") && validatePythonCommand("py", ["-3"])) {
     return { command: "py", args: ["-3"] };
   }
-  if (commandExists("python")) {
+  if (commandExists("python") && validatePythonCommand("python", [])) {
     return { command: "python", args: [] };
   }
-  if (commandExists("python3")) {
+  if (commandExists("python3") && validatePythonCommand("python3", [])) {
     return { command: "python3", args: [] };
   }
   return null;
@@ -616,13 +683,19 @@ const resolvePythonCommand = (runtimeRoot) => {
 
 const buildPythonPath = (runtimeRoot) => {
   const delimiter = process.platform === "win32" ? ";" : ":";
-  const candidates = [
-    runtimeRoot,
-    path.join(runtimeRoot, "vendor", "python-site-packages"),
-    path.join(runtimeRoot, "app windows", "vendor", "python-site-packages"),
-    process.env.PYTHONPATH || "",
-  ].filter((value, index, list) => value && list.indexOf(value) === index);
-  return candidates.join(delimiter);
+  const candidates = !app.isPackaged
+    ? [
+        runtimeRoot,
+        process.env.PYTHONPATH || "",
+      ]
+    : [
+        runtimeRoot,
+        path.join(runtimeRoot, "vendor", "python-site-packages"),
+        path.join(runtimeRoot, "app windows", "vendor", "python-site-packages"),
+        process.env.PYTHONPATH || "",
+      ];
+  const unique = candidates.filter((value, index, list) => value && list.indexOf(value) === index);
+  return unique.join(delimiter);
 };
 
 const isLocalBackendHealthy = async () => {
@@ -682,7 +755,7 @@ const startLocalBackend = () => {
   appendStartupLog(`startLocalBackend spawn python=${python.command} args=${python.args.join(" ")}`);
   backendProc = spawn(
     python.command,
-    [...python.args, "-m", "uvicorn", "backend.main:app", "--host", "127.0.0.1", "--port", "8000"],
+    [...python.args, "-m", "uvicorn", "backend.main:app", "--host", "127.0.0.1", "--port", String(LOCAL_BACKEND_PORT)],
     {
       cwd: runtimeRoot,
       env: {
@@ -701,7 +774,7 @@ const startLocalBackend = () => {
         TEMP: path.join(codexHome, "tmp"),
         TMPDIR: path.join(codexHome, "tmp"),
         ALLOW_UNVERIFIED_LOCAL_DESKTOP_TOKENS: "1",
-        DEFAULT_ROBOT_DEVICE_IP: process.env.DEFAULT_ROBOT_DEVICE_IP || "192.168.137.50",
+        DEFAULT_ROBOT_DEVICE_IP: process.env.DEFAULT_ROBOT_DEVICE_IP || "",
       },
       windowsHide: true,
       stdio: ["ignore", "pipe", "pipe"],
@@ -802,6 +875,7 @@ const ensureLocalBackend = async () => {
 
   let backendHealthy = await isLocalBackendHealthy();
   if (!backendHealthy) {
+    killListeningProcess(LOCAL_BACKEND_PORT, "unhealthy-local-backend");
     startLocalOpenClawGateway();
     startLocalBackend();
     for (let i = 0; i < 20; i += 1) {
@@ -860,7 +934,7 @@ if (!gotLock) {
 }
 
 const defaultTitleBar = {
-  color: "#070b14",
+  color: "#09111d",
   symbolColor: "#cbd5f5",
   height: 36,
 };
@@ -928,7 +1002,7 @@ const createWindow = () => {
     height: 800,
     minWidth: 1024,
     minHeight: 640,
-    backgroundColor: "#0F172A",
+    backgroundColor: "#09111d",
     icon: path.join(__dirname, "..", "assets", "app-icon.png"),
     titleBarStyle: "hidden",
     titleBarOverlay: {
@@ -952,7 +1026,6 @@ const createWindow = () => {
       console.error(msg);
       showWindowFatal(win, "开发模式加载失败", msg);
     });
-    win.webContents.openDevTools({ mode: "detach" });
   } else {
     const indexPath = path.join(__dirname, "..", "dist", "index.html");
     win.loadFile(indexPath).catch((err) => {

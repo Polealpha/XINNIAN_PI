@@ -49,6 +49,7 @@ export const getDeviceStatus = async (deviceId?: string, deviceIp?: string) => {
   const params = new URLSearchParams();
   if (deviceId) params.set("device_id", deviceId);
   if (deviceIp) params.set("device_ip", deviceIp);
+  params.set("probe", "1");
   const query = params.toString();
   const path = query ? `/api/device/status?${query}` : "/api/device/status";
   return apiGet(path, true);

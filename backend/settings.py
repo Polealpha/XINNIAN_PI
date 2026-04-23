@@ -13,13 +13,11 @@ AUTH_SECRET_KEY = _env("AUTH_SECRET_KEY", "change-this-secret")
 AUTH_ALGORITHM = _env("AUTH_ALGORITHM", "HS256")
 ACCESS_TOKEN_EXPIRE_SEC = int(_env("ACCESS_TOKEN_EXPIRE_SEC", "900"))  # 15 min
 REFRESH_TOKEN_EXPIRE_SEC = int(_env("REFRESH_TOKEN_EXPIRE_SEC", "1209600"))  # 14 days
-
-DB_PATH = _env("AUTH_DB_PATH", "backend/auth.db")
-
-ALLOWED_ORIGINS = _env("AUTH_CORS_ORIGINS", "*")
-
 _BACKEND_DIR = Path(__file__).resolve().parent
 _REPO_ROOT = _BACKEND_DIR.parent
+DB_PATH = _env("AUTH_DB_PATH", str((_BACKEND_DIR / "auth.db").resolve()))
+
+ALLOWED_ORIGINS = _env("AUTH_CORS_ORIGINS", "*")
 
 
 def _resolve_default_openclaw_repo() -> Path:
@@ -38,8 +36,6 @@ def _resolve_default_openclaw_repo() -> Path:
 
 
 _DEFAULT_OPENCLAW_REPO = _resolve_default_openclaw_repo()
-_DEFAULT_OPENCLAW_WORKSPACE = _REPO_ROOT / "assistant_data" / "openclaw_workspace"
-_DEFAULT_OPENCLAW_STATE = _REPO_ROOT / "assistant_data" / "openclaw_state"
 _DEFAULT_OPENCLAW_GATEWAY_PORT = 18890
 _DEFAULT_OPENCLAW_GATEWAY_URL = f"ws://127.0.0.1:{_DEFAULT_OPENCLAW_GATEWAY_PORT}"
 _DEFAULT_OPENCLAW_GATEWAY_ORIGIN = f"http://127.0.0.1:{_DEFAULT_OPENCLAW_GATEWAY_PORT}"
@@ -53,6 +49,9 @@ _LOCAL_RUNTIME_ROOT = Path(
         ),
     )
 )
+_DEFAULT_RUNTIME_ASSISTANT_ROOT = _LOCAL_RUNTIME_ROOT / "assistant_data"
+_DEFAULT_OPENCLAW_WORKSPACE = _DEFAULT_RUNTIME_ASSISTANT_ROOT / "openclaw_workspace"
+_DEFAULT_OPENCLAW_STATE = _DEFAULT_RUNTIME_ASSISTANT_ROOT / "openclaw_state"
 _DEFAULT_OPENCLAW_CODEX_HOME = _LOCAL_RUNTIME_ROOT / "codex_home"
 
 OPENCLAW_REPO_PATH = _env("OPENCLAW_REPO_PATH", str(_DEFAULT_OPENCLAW_REPO))
@@ -76,7 +75,7 @@ DESKTOP_APP_ALLOWLIST_JSON = _env(
     '{"notepad":["notepad"],"calc":["calc"],"explorer":["explorer"],"vscode":["code"],"chrome":["cmd","/c","start","chrome"],"edge":["cmd","/c","start","msedge"]}',
 )
 OPENCLAW_PREFERRED_MODE = _env("OPENCLAW_PREFERRED_MODE", "agent")
-OPENCLAW_PREFERRED_CODE_MODEL = _env("OPENCLAW_PREFERRED_CODE_MODEL", "glm-5")
+OPENCLAW_PREFERRED_CODE_MODEL = _env("OPENCLAW_PREFERRED_CODE_MODEL", "gemma-4-31b-it")
 DESKTOP_STT_PROVIDER = _env("DESKTOP_STT_PROVIDER", "faster_whisper")
 DESKTOP_STT_FALLBACK_PROVIDER = _env("DESKTOP_STT_FALLBACK_PROVIDER", "sherpa_onnx")
 DESKTOP_STT_MODEL_NAME = _env("DESKTOP_STT_MODEL_NAME", "distil-large-v3")
@@ -106,8 +105,8 @@ DESKTOP_STT_PREPROCESS = _env("DESKTOP_STT_PREPROCESS", "1").strip().lower() not
 DESKTOP_STT_TRIM_SILENCE = _env("DESKTOP_STT_TRIM_SILENCE", "1").strip().lower() not in {"0", "false", "no"}
 DESKTOP_STT_SILENCE_THRESHOLD = int(_env("DESKTOP_STT_SILENCE_THRESHOLD", "320"))
 DESKTOP_STT_TARGET_PEAK = int(_env("DESKTOP_STT_TARGET_PEAK", "24000"))
-DEFAULT_ROBOT_DEVICE_IP = _env("DEFAULT_ROBOT_DEVICE_IP", "192.168.137.50")
-ALLOW_UNVERIFIED_LOCAL_DESKTOP_TOKENS = _env("ALLOW_UNVERIFIED_LOCAL_DESKTOP_TOKENS", "0").strip().lower() in {
+DEFAULT_ROBOT_DEVICE_IP = _env("DEFAULT_ROBOT_DEVICE_IP", "192.168.43.136:8080")
+ALLOW_UNVERIFIED_LOCAL_DESKTOP_TOKENS = _env("ALLOW_UNVERIFIED_LOCAL_DESKTOP_TOKENS", "1").strip().lower() in {
     "1",
     "true",
     "yes",

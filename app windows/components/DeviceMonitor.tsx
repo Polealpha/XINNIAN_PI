@@ -8,6 +8,7 @@ import {
   SystemEvent,
   WakeEngineState,
 } from "../types";
+import { getLocalApiBase } from "../services/apiClient";
 import { sendDevicePanTiltLocal } from "../services/deviceService";
 import {
   Camera,
@@ -47,6 +48,15 @@ interface DeviceMonitorProps {
 
 type OverlayBBox = { left: number; top: number; width: number; height: number } | null;
 type DesktopTrackingBBox = { x: number; y: number; width: number; height: number } | null;
+const DEFAULT_DEVICE_RUNTIME_PORT = 8090;
+
+const normalizeRuntimeHost = (value?: string | null) => {
+  const text = String(value || "").trim();
+  if (!text) return "";
+  const normalized = text.replace(/^https?:\/\//i, "").replace(/\/+$/, "");
+  if (!normalized) return "";
+  return normalized.includes(":") ? normalized : `${normalized}:${DEFAULT_DEVICE_RUNTIME_PORT}`;
+};
 
 export const computeOverlayBBoxPercent = (
   faceTrack: FaceTrackState | null,
@@ -93,7 +103,18 @@ export const DeviceMonitor: React.FC<DeviceMonitorProps> = ({
   active = true,
 }) => {
   const deviceId = status?.device_id || "unknown";
-  const deviceIp = status?.device_ip || status?.status?.ip || "";
+  const runtimeHost = useMemo(() => {
+    if (typeof window === "undefined") {
+      return normalizeRuntimeHost(status?.device_ip) || normalizeRuntimeHost(status?.status?.ip);
+    }
+    return (
+      normalizeRuntimeHost(status?.device_ip) ||
+      normalizeRuntimeHost(status?.status?.ip) ||
+      normalizeRuntimeHost(window.localStorage.getItem("device_runtime_host")) ||
+      normalizeRuntimeHost(window.localStorage.getItem("robot_runtime_host"))
+    );
+  }, [status?.device_ip, status?.status?.ip]);
+  const deviceIp = runtimeHost.replace(/:\d+$/, "");
   const deviceMac = status?.device_mac || status?.status?.device_mac || "";
   const ssid = status?.status?.ssid || "未知";
   const rssi = status?.status?.rssi;
@@ -103,7 +124,7 @@ export const DeviceMonitor: React.FC<DeviceMonitorProps> = ({
   const [streamError, setStreamError] = useState("");
   const [streamNonce, setStreamNonce] = useState(0);
   const [streamRenderToken, setStreamRenderToken] = useState(0);
-  const [snapshotMode] = useState(true);
+  const [snapshotMode] = useState(false);
   const [overlayNowMs, setOverlayNowMs] = useState(() => Date.now());
   const [desktopCamEnabled, setDesktopCamEnabled] = useState(false);
   const [desktopCamError, setDesktopCamError] = useState("");
@@ -120,11 +141,22 @@ export const DeviceMonitor: React.FC<DeviceMonitorProps> = ({
   const desktopLastSendRef = useRef(0);
   const desktopLastPanTiltRef = useRef({ pan: 0, tilt: 0 });
   const desktopLostCountRef = useRef(0);
-  const proxyBase = "http://127.0.0.1:18080";
-  const baseStreamUrl = snapshotMode ? `${proxyBase}/snapshot` : `${proxyBase}/stream`;
+  const proxyBase = useMemo(() => `${getLocalApiBase().replace(/\/+$/, "")}/api/device`, []);
+  const buildDeviceProxyUrl = useCallback(
+    (path: "snapshot" | "stream" | "meta") => {
+      const params = new URLSearchParams();
+      if (runtimeHost) {
+        params.set("device_ip", runtimeHost);
+      }
+      const query = params.toString();
+      return `${proxyBase}/${path}${query ? `?${query}` : ""}`;
+    },
+    [proxyBase, runtimeHost]
+  );
+  const baseStreamUrl = snapshotMode ? buildDeviceProxyUrl("snapshot") : buildDeviceProxyUrl("stream");
   const streamUrl =
     streamEnabled && videoEnabled && baseStreamUrl
-      ? `${baseStreamUrl}${streamNonce ? `?t=${streamNonce}` : ""}`
+      ? `${baseStreamUrl}${streamNonce ? `${baseStreamUrl.includes("?") ? "&" : "?"}t=${streamNonce}` : ""}`
       : "";
   const lastSeen = status?.last_seen_ms ? new Date(status.last_seen_ms) : null;
 
@@ -266,8 +298,8 @@ export const DeviceMonitor: React.FC<DeviceMonitorProps> = ({
   }, []);
 
   const startDesktopTracking = useCallback(async () => {
-    if (!deviceIp) {
-      setDesktopCamError("设备 IP 不可用，无法把笔记本摄像头测试结果发送到机器人。");
+    if (!runtimeHost) {
+      setDesktopCamError("设备运行时地址不可用，无法把笔记本摄像头测试结果发送到机器人。");
       return;
     }
     const DetectorCtor = (window as any).FaceDetector;
@@ -310,7 +342,7 @@ export const DeviceMonitor: React.FC<DeviceMonitorProps> = ({
               desktopLastSendRef.current = Date.now();
               desktopLastPanTiltRef.current = { pan: 0, tilt: 0 };
               setDesktopTrackTurns({ pan: 0, tilt: 0 });
-              await sendDevicePanTiltLocal(`${deviceIp}:8090`, { pan: 0, tilt: 0 });
+              await sendDevicePanTiltLocal(runtimeHost, { pan: 0, tilt: 0 });
             }
             return;
           }
@@ -338,7 +370,7 @@ export const DeviceMonitor: React.FC<DeviceMonitorProps> = ({
             desktopLastSendRef.current = Date.now();
             desktopLastPanTiltRef.current = { pan, tilt };
             setDesktopTrackTurns({ pan, tilt });
-            await sendDevicePanTiltLocal(`${deviceIp}:8090`, { pan, tilt });
+            await sendDevicePanTiltLocal(runtimeHost, { pan, tilt });
           }
         } catch (error) {
           setDesktopTrackStatus("error");
@@ -349,7 +381,7 @@ export const DeviceMonitor: React.FC<DeviceMonitorProps> = ({
       setDesktopCamError(error instanceof Error ? error.message : "desktop_camera_start_failed");
       stopDesktopTracking();
     }
-  }, [deviceIp, stopDesktopTracking]);
+  }, [runtimeHost, stopDesktopTracking]);
 
   useEffect(() => {
     if (!active || !streamEnabled || !videoEnabled) return;
@@ -358,7 +390,10 @@ export const DeviceMonitor: React.FC<DeviceMonitorProps> = ({
     const MAX_STALE_COUNT = 3;
     const checkMeta = async () => {
       try {
-        const response = await fetch(`${proxyBase}/meta?t=${Date.now()}`, { cache: "no-store" });
+        const metaUrl = buildDeviceProxyUrl("meta");
+        const response = await fetch(`${metaUrl}${metaUrl.includes("?") ? "&" : "?"}t=${Date.now()}`, {
+          cache: "no-store",
+        });
         if (!response.ok) {
           metaStaleCountRef.current += 1;
           if (metaStaleCountRef.current >= MAX_STALE_COUNT) {
@@ -397,7 +432,7 @@ export const DeviceMonitor: React.FC<DeviceMonitorProps> = ({
       disposed = true;
       window.clearInterval(timer);
     };
-  }, [active, streamEnabled, videoEnabled, forceReconnect, proxyBase]);
+  }, [active, streamEnabled, videoEnabled, forceReconnect, buildDeviceProxyUrl]);
 
   const formatNum = (value: number | null | undefined, digits = 3) => {
     if (value == null || !Number.isFinite(value)) return "-";
@@ -475,7 +510,7 @@ export const DeviceMonitor: React.FC<DeviceMonitorProps> = ({
 
   return (
     <div className="grid grid-cols-12 gap-6 min-h-full animate-pop-in">
-      <div className="col-span-8 bg-[#0c1222]/50 backdrop-blur-3xl rounded-[2.5rem] border border-white/[0.05] overflow-hidden flex flex-col shadow-2xl">
+      <div className="col-span-8 ios-stage-panel ios-stage-panel--deep rounded-[2.5rem] overflow-hidden flex flex-col">
         <div className="px-6 py-4 border-b border-white/[0.03] flex justify-between items-center bg-white/[0.01]">
           <div className="flex items-center gap-3">
             <Camera size={14} className="text-indigo-400" />
@@ -580,10 +615,10 @@ export const DeviceMonitor: React.FC<DeviceMonitorProps> = ({
               {onToggleFaceTrackOverlay && (
                 <button
                   onClick={() => onToggleFaceTrackOverlay(!faceTrackOverlayEnabled)}
-                  className={`p-2 rounded-full border ${
-                    faceTrackOverlayEnabled
-                      ? "bg-cyan-500/20 border-cyan-300/50 text-cyan-100"
-                      : "bg-white/5 border-white/10 text-white/50 hover:bg-white/10"
+                className={`ios-toggle-pill p-2 rounded-full border ${
+                  faceTrackOverlayEnabled
+                      ? "ios-toggle-pill--active border-cyan-300/50 text-cyan-100"
+                      : "text-white/50 hover:border-white/15"
                   }`}
                   title="FaceTrack Overlay"
                 >
@@ -592,13 +627,13 @@ export const DeviceMonitor: React.FC<DeviceMonitorProps> = ({
               )}
               <button
                 onClick={toggleStream}
-                className="p-2 bg-white/5 rounded-full text-white/50 hover:bg-white/10"
+                className="ios-action-button ios-action-button--secondary p-2 text-white/70"
               >
                 {streamEnabled ? <Pause size={12} /> : <Play size={12} />}
               </button>
               <button
                 onClick={forceReconnect}
-                className="p-2 bg-white/5 rounded-full text-white/50 hover:bg-white/10"
+                className="ios-action-button ios-action-button--secondary p-2 text-white/70"
               >
                 <RotateCw size={12} />
               </button>
@@ -608,7 +643,7 @@ export const DeviceMonitor: React.FC<DeviceMonitorProps> = ({
       </div>
 
       <div className="col-span-4 flex flex-col gap-6">
-        <div className="bg-[#0c1222]/50 backdrop-blur-3xl rounded-[2rem] border border-white/[0.05] p-6 shadow-xl">
+        <div className="ios-stage-panel rounded-[2rem] p-6">
           <h3 className="text-[9px] font-black text-slate-500 uppercase tracking-widest mb-3">设备连接</h3>
           <div className="space-y-2">
             <StatusItem icon={Globe} label="设备 ID" value={deviceId} />
@@ -626,20 +661,20 @@ export const DeviceMonitor: React.FC<DeviceMonitorProps> = ({
           </div>
         </div>
 
-        <div className="bg-[#0c1222]/50 backdrop-blur-3xl rounded-[2rem] border border-white/[0.05] p-6 shadow-xl">
+        <div className="ios-stage-panel rounded-[2rem] p-6">
           <h3 className="text-[9px] font-black text-slate-500 uppercase tracking-widest mb-4 flex items-center gap-2">
             <Camera size={12} className="text-cyan-400" /> 树莓派摄像头链路
           </h3>
           <div className="space-y-3">
-            <div className="rounded-2xl border border-white/10 bg-black/30 p-4">
+            <div className="ios-stage-well rounded-2xl p-4">
               <div className="grid grid-cols-2 gap-2 text-[10px]">
-                <div className="rounded-xl bg-white/[0.03] border border-white/[0.05] px-3 py-2 text-slate-300">
+                <div className="ios-stage-tile rounded-xl px-3 py-2 text-slate-300">
                   视频链路:{" "}
                   <span className={`font-mono ${streamEnabled && videoEnabled ? "text-cyan-300" : "text-slate-500"}`}>
                     {streamEnabled && videoEnabled ? "树莓派代理流" : "关闭"}
                   </span>
                 </div>
-                <div className="rounded-xl bg-white/[0.03] border border-white/[0.05] px-3 py-2 text-slate-300">
+                <div className="ios-stage-tile rounded-xl px-3 py-2 text-slate-300">
                   摄像头状态:{" "}
                   <span className={`font-mono ${cameraReady === false ? "text-rose-300" : "text-cyan-300"}`}>
                     {cameraReady === false ? "未就绪" : "已就绪"}
@@ -654,7 +689,7 @@ export const DeviceMonitor: React.FC<DeviceMonitorProps> = ({
           </div>
         </div>
 
-        <div className="bg-[#0c1222]/50 backdrop-blur-3xl rounded-[2rem] border border-white/[0.05] p-6 shadow-xl">
+        <div className="ios-stage-panel rounded-[2rem] p-6">
           <h3 className="text-[9px] font-black text-slate-500 uppercase tracking-widest mb-4 flex items-center gap-2">
             <Activity size={12} className="text-indigo-400" /> 情感推理指标 (V/A/T/S)
           </h3>
@@ -694,7 +729,7 @@ export const DeviceMonitor: React.FC<DeviceMonitorProps> = ({
           </div>
         </div>
 
-        <div className="bg-[#0c1222]/50 backdrop-blur-3xl rounded-[2rem] border border-white/[0.05] p-6 shadow-xl flex-1 flex flex-col">
+        <div className="ios-stage-panel rounded-[2rem] p-6 flex-1 flex flex-col">
           <h3 className="text-[9px] font-black text-slate-500 uppercase tracking-widest mb-4">Device Link</h3>
           <div className="space-y-3">
             <StatusItem icon={Globe} label="Device ID" value={deviceId} />
@@ -773,7 +808,7 @@ export const DeviceMonitor: React.FC<DeviceMonitorProps> = ({
           <div className="mt-auto pt-4 border-t border-white/5">
             <button
               onClick={onRefreshStatus}
-              className="w-full py-2.5 bg-indigo-500/10 border border-indigo-500/30 rounded-xl text-[9px] font-black uppercase text-indigo-400 hover:bg-indigo-500/20 transition-all tracking-widest flex items-center justify-center gap-2"
+              className="ios-action-button ios-action-button--secondary w-full py-2.5 text-[9px] uppercase tracking-widest text-indigo-200"
             >
               <RotateCw size={12} className={refreshing ? "animate-spin" : ""} />
               刷新链路
@@ -786,7 +821,7 @@ export const DeviceMonitor: React.FC<DeviceMonitorProps> = ({
 };
 
 const StatusItem = ({ icon: Icon, label, value, active }: any) => (
-  <div className="flex items-center justify-between p-2 rounded-lg hover:bg-white/[0.02]">
+  <div className="ios-stage-tile flex items-center justify-between rounded-lg p-2">
     <div className="flex items-center gap-3">
       <Icon size={14} className="text-slate-600" />
       <span className="text-[10px] font-bold text-slate-400">{label}</span>
