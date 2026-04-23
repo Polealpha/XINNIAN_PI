@@ -1,13 +1,14 @@
 from __future__ import annotations
 
 import argparse
+import asyncio
 import logging
 from contextlib import asynccontextmanager
 from typing import Optional
 
 import uvicorn
 from fastapi import FastAPI, HTTPException, Response
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
 from engine.core.types import UserSignal
@@ -18,6 +19,21 @@ from .runtime import PiEmotionRuntime
 logging.basicConfig(level=logging.INFO, format="[%(asctime)s] %(levelname)s %(name)s: %(message)s")
 
 runtime: Optional[PiEmotionRuntime] = None
+
+
+async def _preview_mjpeg_stream():
+    while True:
+        assert runtime is not None
+        frame = runtime.get_preview_jpeg()
+        if frame:
+            yield (
+                b"--frame\r\n"
+                b"Content-Type: image/jpeg\r\n"
+                + f"Content-Length: {len(frame)}\r\n\r\n".encode("ascii")
+                + frame
+                + b"\r\n"
+            )
+        await asyncio.sleep(0.12)
 
 
 class SignalRequest(BaseModel):
@@ -432,6 +448,19 @@ def build_app(pi_config_path: str, engine_config_path: str) -> FastAPI:
         if not content:
             raise HTTPException(status_code=503, detail="preview unavailable")
         return Response(content=content, media_type="image/jpeg")
+
+    @app.get("/stream")
+    def stream() -> StreamingResponse:
+        assert runtime is not None
+        return StreamingResponse(
+            _preview_mjpeg_stream(),
+            media_type="multipart/x-mixed-replace; boundary=frame",
+            headers={
+                "Cache-Control": "no-cache, no-store, must-revalidate",
+                "Pragma": "no-cache",
+                "Expires": "0",
+            },
+        )
 
     @app.get("/camera/state")
     def camera_state() -> dict:

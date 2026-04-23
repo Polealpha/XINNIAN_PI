@@ -1,24 +1,18 @@
 ﻿import React, { useEffect, useMemo, useRef, useState } from "react";
-import { ArrowLeft, Brain, CheckCircle2, ChevronDown, ChevronUp, LoaderCircle, Mic, PauseCircle, ShieldCheck, UserRound } from "lucide-react";
+import { ArrowLeft, Brain, CheckCircle2, ChevronDown, ChevronUp, LoaderCircle, ShieldCheck, UserRound } from "lucide-react";
 
 import { getActivationState } from "../services/authService";
 import {
   completeActivation,
   getActivationRuntimeStatus,
   getAssessmentState,
+  skipActivationAssessment,
   startAssessment,
   type ActivationDialogueTurn,
   submitAssessmentTurn,
   type ActivationAssessmentState,
   type ActivationRuntimeStatus,
 } from "../services/activationService";
-import {
-  createDesktopVoiceRecorder,
-  getDesktopVoiceStatus,
-  transcribeDesktopAudio,
-  type DesktopVoiceStatus,
-} from "../services/desktopVoiceService";
-
 interface ActivationGateProps {
   onActivated: () => Promise<void> | void;
 }
@@ -186,29 +180,6 @@ const emptyRuntime = (): ActivationRuntimeStatus => ({
   preferred_device_id: "",
 });
 
-const emptyDesktopVoice = (): DesktopVoiceStatus => ({
-  ok: false,
-  ready: false,
-  provider_preference: "faster_whisper",
-  fallback_provider: "sherpa_onnx",
-  active_provider: "",
-  primary_ready: false,
-  primary_engine: "",
-  primary_error: "",
-  fallback_ready: false,
-  fallback_engine: "",
-  fallback_error: "",
-  language: "zh",
-  max_sec: 45,
-  model_name: "small",
-  beam_size: 5,
-  best_of: 5,
-  preprocess_enabled: true,
-  trim_silence_enabled: true,
-  initial_prompt_enabled: false,
-  hotwords_enabled: false,
-});
-
 const normalizeUiError = (value: unknown) => {
   const message = value instanceof Error ? value.message : String(value || "");
   const lowered = message.toLowerCase();
@@ -226,8 +197,6 @@ export function ActivationGate({ onActivated }: ActivationGateProps) {
   const [booting, setBooting] = useState(true);
   const [busy, setBusy] = useState(false);
   const [startingQuestion, setStartingQuestion] = useState(false);
-  const [desktopVoiceBusy, setDesktopVoiceBusy] = useState(false);
-  const [desktopVoiceRecording, setDesktopVoiceRecording] = useState(false);
   const [finishing, setFinishing] = useState(false);
   const [historyExpanded, setHistoryExpanded] = useState(false);
   const [pendingTurn, setPendingTurn] = useState<PendingAssessmentTurn | null>(null);
@@ -241,9 +210,7 @@ export function ActivationGate({ onActivated }: ActivationGateProps) {
   const [introTranscript, setIntroTranscript] = useState("");
   const [answerDraft, setAnswerDraft] = useState("");
   const [runtime, setRuntime] = useState<ActivationRuntimeStatus>(emptyRuntime);
-  const [desktopVoiceStatus, setDesktopVoiceStatus] = useState<DesktopVoiceStatus>(emptyDesktopVoice);
   const [assessment, setAssessment] = useState<ActivationAssessmentState>(emptyAssessment);
-  const recorderRef = useRef<{ stop: () => Promise<Blob> } | null>(null);
   const questionRecoveryRef = useRef(false);
   const hydratedDraftRef = useRef(false);
   const hydratedQuestionIdRef = useRef("");
@@ -270,7 +237,7 @@ export function ActivationGate({ onActivated }: ActivationGateProps) {
 
   const currentQuestion = String(assessment.latest_question || "").trim();
   const currentQuestionId = String(assessment.last_question_id || "").trim();
-  const stateSyncPaused = busy || finishing || desktopVoiceBusy || desktopVoiceRecording || Boolean(pendingTurn);
+  const stateSyncPaused = busy || finishing || Boolean(pendingTurn);
   const canFinish = identityReady && profileReady;
   const canSubmitTurn = runtime.ai_ready && !busy && !pendingTurn && Boolean(answerDraft.trim()) && Boolean(currentQuestion);
   const dialogueItems = useMemo(() => {
@@ -379,11 +346,10 @@ export function ActivationGate({ onActivated }: ActivationGateProps) {
     }
     const requestId = Date.now() + Math.random();
     stateSyncSeqRef.current = requestId;
-    const [activation, assessmentState, runtimeState, desktopVoice] = await Promise.all([
+    const [activation, assessmentState, runtimeState] = await Promise.all([
       getActivationState(),
       getAssessmentState(),
       getActivationRuntimeStatus().catch(() => emptyRuntime()),
-      getDesktopVoiceStatus().catch(() => emptyDesktopVoice()),
     ]);
     if (stateSyncSeqRef.current !== requestId) {
       return;
@@ -399,7 +365,6 @@ export function ActivationGate({ onActivated }: ActivationGateProps) {
     setPreferredName((current) => current || String(activation.preferred_name || "").trim());
     setIntroTranscript((current) => current || String(activation.voice_intro_summary || "").trim());
     setRuntime(runtimeState);
-    setDesktopVoiceStatus(desktopVoice);
     mergeAssessmentFromPoll(assessmentState);
     if (!initializedStepRef.current) {
       const nextStep: ActivationStep = activation.activation_required
@@ -772,41 +737,6 @@ export function ActivationGate({ onActivated }: ActivationGateProps) {
     setError("已把这条回答恢复到输入框，你可以直接重试。");
   };
 
-  const handleDesktopVoiceToggle = async () => {
-    if (!desktopVoiceStatus.ready && !desktopVoiceStatus.primary_ready && !desktopVoiceStatus.fallback_ready) {
-      setError(desktopVoiceStatus.primary_error || desktopVoiceStatus.fallback_error || "电脑麦克风当前不可用。");
-      return;
-    }
-    setDesktopVoiceBusy(true);
-    setError("");
-    try {
-      if (!desktopVoiceRecording) {
-        recorderRef.current = await createDesktopVoiceRecorder();
-        setDesktopVoiceRecording(true);
-        setSuccess("电脑麦克风录音已开始。");
-      } else {
-        const blob = await recorderRef.current!.stop();
-        recorderRef.current = null;
-        setDesktopVoiceRecording(false);
-        const transcript = await transcribeDesktopAudio(blob);
-        const text = String(transcript.transcript || "").trim();
-        if (!text) {
-          setError("没有识别到有效语音内容。");
-          return;
-        }
-        setAnswerDraft(text);
-        setSuccess("转写完成，已填入回答框。");
-      }
-    } catch (err) {
-      recorderRef.current = null;
-      setDesktopVoiceRecording(false);
-      const normalized = normalizeUiError(err);
-      if (normalized) setError(normalized);
-    } finally {
-      setDesktopVoiceBusy(false);
-    }
-  };
-
   const handleFinishActivation = async () => {
     if (!canFinish || finishing) return;
     setFinishing(true);
@@ -817,6 +747,56 @@ export function ActivationGate({ onActivated }: ActivationGateProps) {
       const normalized = normalizeUiError(err);
       if (normalized) setError(normalized);
     } finally {
+      setFinishing(false);
+    }
+  };
+
+  const handleSkipAssessment = async () => {
+    const name = preferredName.trim();
+    const intro = introTranscript.trim();
+    if (!name) {
+      setError("请先确认你的名字，再决定是否跳过正式建档。");
+      return;
+    }
+    if (busy || startingQuestion || finishing) return;
+
+    setBusy(true);
+    setFinishing(true);
+    setError("");
+    setSuccess("");
+    try {
+      await completeActivation({
+        preferred_name: name,
+        role_label: "owner",
+        relation_to_robot: "primary_user",
+        voice_intro_summary: intro,
+        identity_summary: `${name} 是当前机器人的主要使用者，后续服务应以这个身份为准。`,
+        onboarding_notes: intro,
+        profile: {
+          identity_source: "manual_name_intro",
+          intro_transcript: intro,
+          activation_mode: "skip_assessment",
+        },
+        activation_version: "activation-dialogue-v5",
+      });
+      await skipActivationAssessment();
+      setIdentityReady(true);
+      setProfileReady(true);
+      setActiveStep(3);
+      setAssessment((current) => ({
+        ...current,
+        status: "completed",
+        assessment_ready: true,
+        summary: intro || `${name} 跳过了首次正式建档，后续画像将通过真实聊天逐步补全。`,
+        care_guidance: "首次激活已跳过正式建档，后续通过真实互动逐步补全画像。",
+      }));
+      setSuccess("已跳过首次正式建档，后续可以在聊天中继续补全画像。");
+      await onActivated();
+    } catch (err) {
+      const normalized = normalizeUiError(err);
+      if (normalized) setError(normalized);
+    } finally {
+      setBusy(false);
       setFinishing(false);
     }
   };
@@ -952,6 +932,14 @@ export function ActivationGate({ onActivated }: ActivationGateProps) {
               >
                 {startingQuestion ? "正在生成第一题..." : "确认名字并开始正式建档"}
               </button>
+              <button
+                type="button"
+                onClick={handleSkipAssessment}
+                disabled={busy || startingQuestion || finishing}
+                className="w-full rounded-[1.5rem] border border-white/12 bg-white/[0.04] px-6 py-4 text-[16px] font-semibold text-white transition enabled:hover:bg-white/[0.08] disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                {finishing ? "正在进入桌面..." : "跳过建档，直接进入桌面"}
+              </button>
             </div>
 
             <div className="mt-6 rounded-[1.6rem] border border-white/8 bg-white/[0.035] p-5 text-[15px] leading-8 text-slate-300 shadow-[inset_0_1px_0_rgba(255,255,255,0.025)]">
@@ -1005,7 +993,7 @@ export function ActivationGate({ onActivated }: ActivationGateProps) {
 
             {startingQuestion && !currentQuestion ? (
               <div className="mt-6 rounded-[24px] border border-cyan-400/20 bg-cyan-500/10 p-6 text-[16px] leading-8 text-cyan-100">
-                正在生成第一题，请不要重复点击。当前仍在等待 OpenClaw / GLM 返回首个正式建档问题。
+                正在生成第一题，请不要重复点击。当前仍在等待 OpenClaw / Gemma 返回首个正式建档问题。
               </div>
             ) : !currentQuestion ? (
               <div className="mt-6 rounded-[24px] border border-white/6 bg-white/[0.035] p-6 text-[16px] leading-8 text-slate-400 shadow-[inset_0_1px_0_rgba(255,255,255,0.025)]">
@@ -1090,24 +1078,9 @@ export function ActivationGate({ onActivated }: ActivationGateProps) {
                 >
                   {pendingTurn ? "正在同步这一轮回答..." : busy ? "正在提交..." : "提交这一轮回答"}
                 </button>
-                <button
-                  type="button"
-                  onClick={handleDesktopVoiceToggle}
-                  disabled={desktopVoiceBusy || startingQuestion || Boolean(pendingTurn)}
-                  className="rounded-[22px] border border-cyan-400/35 bg-cyan-500/10 px-6 py-4 text-[17px] font-semibold text-cyan-100 transition enabled:hover:bg-cyan-500/15 disabled:cursor-not-allowed disabled:opacity-50"
-                >
-                  {desktopVoiceRecording ? (
-                    <span className="inline-flex items-center gap-2">
-                      <PauseCircle className="h-5 w-5" />
-                      停止电脑麦克风录音
-                    </span>
-                  ) : (
-                    <span className="inline-flex items-center gap-2">
-                      <Mic className="h-5 w-5" />
-                      用电脑麦克风回答
-                    </span>
-                  )}
-                </button>
+              </div>
+              <div className="mt-4 rounded-[22px] border border-cyan-300/14 bg-cyan-500/10 px-5 py-4 text-[15px] leading-8 text-cyan-50 shadow-[inset_0_1px_0_rgba(255,255,255,0.025)]">
+                首次正式建档现已只保留文字输入，不再走旧的“录音→本地转写”半双工链。正式全双工聊天请在主对话框中开启。
               </div>
             </div>
 
@@ -1161,10 +1134,10 @@ export function ActivationGate({ onActivated }: ActivationGateProps) {
             <div className="mt-6 rounded-[24px] border border-white/6 bg-white/[0.035] p-6 shadow-[inset_0_1px_0_rgba(255,255,255,0.025)]">
               <div className="text-sm font-semibold text-slate-300">语音链路状态</div>
               <div className="mt-4 space-y-2 text-[15px] leading-8 text-slate-300">
-                <div>电脑麦克风：{desktopVoiceStatus.ready || desktopVoiceStatus.primary_ready || desktopVoiceStatus.fallback_ready ? "可用" : "未就绪"}</div>
+                <div>正式聊天语音：主对话框中的 MiniCPM-o 官方全双工链路</div>
                 <div>机器人语音：{runtime.robot_voice_ready ? "设备在线" : "设备离线或未绑定"}</div>
                 <div className="text-slate-400">
-                  {desktopVoiceStatus.primary_error || desktopVoiceStatus.fallback_error || runtime.desktop_voice_detail}
+                  旧半双工桌面麦克风入口已降级移除；这里不再维护本地录音转写链。
                 </div>
               </div>
             </div>
@@ -1189,4 +1162,3 @@ export function ActivationGate({ onActivated }: ActivationGateProps) {
     </div>
   );
 }
-

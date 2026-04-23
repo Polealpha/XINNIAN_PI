@@ -6,7 +6,7 @@ This folder contains the current Windows desktop client for the Pi-first robot b
 
 - Native login, activation, psychometric assessment, and owner binding
 - OpenClaw desktop conversation entry
-- Desktop-local speech transcription
+- Official MiniCPM-o 4.5 duplex voice conversation
 - Device monitoring, settings sync, and remote robot control
 - Emotion and proactive care visualization
 
@@ -31,10 +31,12 @@ Important endpoints:
 - `POST /api/auth/login`
 - `GET /api/activation/state`
 - `POST /api/assistant/send`
+- `POST /api/assistant/session/start`
+- `POST /api/assistant/session/stop`
+- `POST /api/assistant/session/interrupt`
 - `GET /api/assistant/session/status`
+- `GET /api/assistant/duplex/config`
 - `GET /api/desktop/runtime/status`
-- `GET /api/desktop/voice/status`
-- `POST /api/desktop/voice/transcribe`
 - `GET /api/emotion/history`
 - `GET /api/emotion/realtime`
 - `GET /api/device/status`

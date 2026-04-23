@@ -44,6 +44,7 @@ downloads/
 third_party/
 assistant_data/openclaw_state/
 assistant_data/openclaw_state_runtime/
+assistant_data/openclaw_workspace/
 assistant_data/codex_home/
 .tmp/
 pytest-run-*/
@@ -53,3 +54,4 @@ pytest-run-*/
 tmp/
 installer_probe_*/
 app windows/'/
+.venv-gpu/

@@ -14,9 +14,13 @@ let chatWindow = null;
 let floatDragState = null;
 let backendProc = null;
 let openClawGatewayProc = null;
+let duplexTunnelProc = null;
+let duplexBridgeProc = null;
 const LOCAL_BACKEND_PORT = 8012;
 const LOCAL_BACKEND_URL = `http://127.0.0.1:${LOCAL_BACKEND_PORT}`;
 const LOCAL_OPENCLAW_GATEWAY_PORT = 18890;
+const LOCAL_MINICPMO_TUNNEL_PORT = 18994;
+const LOCAL_MINICPMO_DUPLEX_BRIDGE_PORT = 19002;
 const LOCAL_OPENCLAW_PROVIDER = {
   providerId: "minicpmo",
   profileId: "minicpmo:default",
@@ -710,6 +714,119 @@ const isLocalBackendHealthy = async () => {
 const isLocalOpenClawGatewayHealthy = async () =>
   probeTcpPort("127.0.0.1", LOCAL_OPENCLAW_GATEWAY_PORT, 500);
 
+const isLocalMiniCpmoTunnelHealthy = async () =>
+  probeTcpPort("127.0.0.1", LOCAL_MINICPMO_TUNNEL_PORT, 500);
+
+const isLocalMiniCpmoDuplexBridgeHealthy = async () =>
+  probeTcpPort("127.0.0.1", LOCAL_MINICPMO_DUPLEX_BRIDGE_PORT, 500);
+
+const waitForLocalPort = async (host, port, maxAttempts = 20, label = "port") => {
+  for (let i = 0; i < maxAttempts; i += 1) {
+    if (await probeTcpPort(host, port, 500)) {
+      appendStartupLog(`waitForLocalPort ready label=${label} port=${port} attempts=${i + 1}`);
+      return true;
+    }
+    await delay(500);
+  }
+  appendStartupLog(`waitForLocalPort timeout label=${label} port=${port} attempts=${maxAttempts}`);
+  return false;
+};
+
+const startLocalMiniCpmoTunnel = () => {
+  if (duplexTunnelProc) return;
+  const runtimeRoot = resolveRuntimeRoot();
+  const scriptPath = path.join(runtimeRoot, "scripts", "local_minicpmo_exec_tunnel.py");
+  if (!fs.existsSync(scriptPath)) {
+    appendStartupLog(`startLocalMiniCpmoTunnel missing script=${scriptPath}`);
+    return;
+  }
+  const python = resolvePythonCommand(runtimeRoot);
+  if (!python) {
+    appendStartupLog("startLocalMiniCpmoTunnel no python resolved");
+    return;
+  }
+  appendStartupLog(`startLocalMiniCpmoTunnel spawn python=${python.command} script=${scriptPath}`);
+  duplexTunnelProc = spawn(
+    python.command,
+    [...python.args, "-u", scriptPath],
+    {
+      cwd: runtimeRoot,
+      env: {
+        ...process.env,
+      },
+      windowsHide: true,
+      stdio: ["ignore", "pipe", "pipe"],
+    }
+  );
+  duplexTunnelProc.stdout?.on("data", (chunk) => {
+    const textOut = String(chunk || "").trim();
+    if (textOut) appendStartupLog(`[minicpmo-tunnel][stdout] ${textOut}`);
+  });
+  duplexTunnelProc.stderr?.on("data", (chunk) => {
+    const textErr = String(chunk || "").trim();
+    if (textErr) appendStartupLog(`[minicpmo-tunnel][stderr] ${textErr}`);
+  });
+  duplexTunnelProc.on("exit", (code, signal) => {
+    appendStartupLog(`startLocalMiniCpmoTunnel exited code=${code} signal=${signal}`);
+    duplexTunnelProc = null;
+  });
+};
+
+const startLocalMiniCpmoDuplexBridge = () => {
+  if (duplexBridgeProc) return;
+  const runtimeRoot = resolveRuntimeRoot();
+  const python = resolvePythonCommand(runtimeRoot);
+  if (!python) {
+    appendStartupLog("startLocalMiniCpmoDuplexBridge no python resolved");
+    return;
+  }
+  appendStartupLog(`startLocalMiniCpmoDuplexBridge spawn python=${python.command}`);
+  duplexBridgeProc = spawn(
+    python.command,
+    [...python.args, "-u", "-m", "deployment.minicpmo_native_duplex.bridge_app"],
+    {
+      cwd: runtimeRoot,
+      env: {
+        ...process.env,
+        PYTHONPATH: buildPythonPath(runtimeRoot),
+      },
+      windowsHide: true,
+      stdio: ["ignore", "pipe", "pipe"],
+    }
+  );
+  duplexBridgeProc.stdout?.on("data", (chunk) => {
+    const textOut = String(chunk || "").trim();
+    if (textOut) appendStartupLog(`[minicpmo-bridge][stdout] ${textOut}`);
+  });
+  duplexBridgeProc.stderr?.on("data", (chunk) => {
+    const textErr = String(chunk || "").trim();
+    if (textErr) appendStartupLog(`[minicpmo-bridge][stderr] ${textErr}`);
+  });
+  duplexBridgeProc.on("exit", (code, signal) => {
+    appendStartupLog(`startLocalMiniCpmoDuplexBridge exited code=${code} signal=${signal}`);
+    duplexBridgeProc = null;
+  });
+};
+
+const ensureLocalMiniCpmoDuplexRuntime = async () => {
+  let tunnelHealthy = await isLocalMiniCpmoTunnelHealthy();
+  if (!tunnelHealthy) {
+    killListeningProcess(LOCAL_MINICPMO_TUNNEL_PORT, "unhealthy-minicpmo-tunnel");
+    startLocalMiniCpmoTunnel();
+    tunnelHealthy = await waitForLocalPort("127.0.0.1", LOCAL_MINICPMO_TUNNEL_PORT, 24, "minicpmo-tunnel");
+  }
+  let bridgeHealthy = await isLocalMiniCpmoDuplexBridgeHealthy();
+  if (!bridgeHealthy) {
+    killListeningProcess(LOCAL_MINICPMO_DUPLEX_BRIDGE_PORT, "unhealthy-minicpmo-bridge");
+    startLocalMiniCpmoDuplexBridge();
+    bridgeHealthy = await waitForLocalPort("127.0.0.1", LOCAL_MINICPMO_DUPLEX_BRIDGE_PORT, 24, "minicpmo-bridge");
+  }
+  appendStartupLog(
+    `ensureLocalMiniCpmoDuplexRuntime tunnel=${tunnelHealthy ? "ready" : "down"} bridge=${bridgeHealthy ? "ready" : "down"}`
+  );
+  return tunnelHealthy && bridgeHealthy;
+};
+
 const waitForLocalOpenClawGateway = async (maxAttempts = 90) => {
   for (let i = 0; i < maxAttempts; i += 1) {
     if (await isLocalOpenClawGatewayHealthy()) {
@@ -868,6 +985,7 @@ const startLocalOpenClawGateway = () => {
 
 const ensureLocalBackend = async () => {
   appendStartupLog("ensureLocalBackend begin");
+  await ensureLocalMiniCpmoDuplexRuntime();
   const runtimeRoot = resolveRuntimeRoot();
   const openClawRepo = resolveOpenClawRepo(runtimeRoot);
   const gatewayEntry = path.join(openClawRepo, "openclaw.mjs");
@@ -916,6 +1034,22 @@ const stopLocalOpenClawGateway = () => {
     openClawGatewayProc.kill();
   } catch {}
   openClawGatewayProc = null;
+};
+
+const stopLocalMiniCpmoTunnel = () => {
+  if (!duplexTunnelProc) return;
+  try {
+    duplexTunnelProc.kill();
+  } catch {}
+  duplexTunnelProc = null;
+};
+
+const stopLocalMiniCpmoDuplexBridge = () => {
+  if (!duplexBridgeProc) return;
+  try {
+    duplexBridgeProc.kill();
+  } catch {}
+  duplexBridgeProc = null;
 };
 
 const gotLock = app.requestSingleInstanceLock();
@@ -1393,4 +1527,6 @@ app.on("before-quit", () => {
   deviceSyncManager.dispose();
   stopLocalBackend();
   stopLocalOpenClawGateway();
+  stopLocalMiniCpmoDuplexBridge();
+  stopLocalMiniCpmoTunnel();
 });

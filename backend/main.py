@@ -535,7 +535,7 @@ class AssistantDuplexRegistry:
         now = int(time.time() * 1000)
         with self._lock:
             existing = dict(self._sessions.get(session_key) or {})
-            duplex_session_id = str(existing.get("duplex_session_id") or f"duplex-{secrets.token_hex(8)}")
+            duplex_session_id = f"duplex-{secrets.token_hex(8)}"
             payload = {
                 "prefix_system_prompt": (
                     "你是情感关怀机器人“小念”的官方全双工语音层。"

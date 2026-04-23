@@ -16,8 +16,9 @@ import uuid
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, List, Optional
-from urllib.parse import urlparse
+from urllib.parse import urlparse, urlunparse
 
+import httpx
 from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat, load_pem_private_key, load_pem_public_key
 
 try:
@@ -99,6 +100,30 @@ def build_openclaw_proxy_env(env: Optional[Dict[str, str]] = None) -> Dict[str, 
     }
 
 
+def _tcp_endpoint_reachable(host: str, port: int, timeout_s: float = 0.35) -> bool:
+    try:
+        with socket.create_connection((str(host), int(port)), timeout=timeout_s):
+            return True
+    except OSError:
+        return False
+
+
+def normalize_local_provider_base_url(base_url: str) -> str:
+    raw = str(base_url or "").strip()
+    if not raw:
+        return raw
+    parsed = urlparse(raw)
+    host = str(parsed.hostname or "").strip().lower()
+    path = str(parsed.path or "").strip()
+    if host not in {"127.0.0.1", "localhost"}:
+        return raw
+    if "/minicpmo-provider/" not in path:
+        return raw
+    if _tcp_endpoint_reachable(host, 8012):
+        return urlunparse(parsed._replace(netloc=f"{host}:8012"))
+    return raw
+
+
 def discover_openclaw_state_dir(configured: str, workspace_dir: str) -> Path:
     configured_path = Path(configured).expanduser().resolve() if configured else None
     candidates: List[Path] = []
@@ -161,12 +186,16 @@ def _materialize_openclaw_state_dir(target: Path, workspace_dir: str) -> Optiona
 class OpenClawGatewayClient:
     def __init__(self, config: OpenClawGatewayConfig) -> None:
         self.config = config
+        self._provider_histories: Dict[str, List[Dict[str, str]]] = {}
 
     async def send_message(self, session_key: str, text: str) -> str:
         normalized_session_key = self._normalize_agent_session_key(str(session_key))
         runtime = self._load_runtime()
         timeout_ms = max(5000, int(self.config.timeout_ms))
         timeout_ms = min(timeout_ms, 120000)
+        provider_reply = await self._send_message_via_provider(runtime, normalized_session_key, str(text), timeout_ms)
+        if provider_reply:
+            return provider_reply
         agent_error: Optional[Exception] = None
         cli_session_id = self._resolve_cli_session_id(runtime, normalized_session_key)
         if cli_session_id:
@@ -201,19 +230,34 @@ class OpenClawGatewayClient:
                     raise OpenClawGatewayError(f"OpenClaw chat.send failed: {response.get('error')}")
                 return await self._wait_for_reply(ws, normalized_session_key, run_id, baseline, inbox, timeout_ms)
         except OpenClawGatewayError:
-            raise
+            pass
         except Exception as exc:
             detail = str(exc).strip() or exc.__class__.__name__
             if agent_error is not None:
                 agent_detail = str(agent_error).strip() or agent_error.__class__.__name__
+                provider_reply = await self._send_message_via_provider(
+                    runtime, normalized_session_key, str(text), timeout_ms
+                )
+                if provider_reply:
+                    return provider_reply
                 raise OpenClawGatewayError(
                     f"OpenClaw provider failed via agent ({agent_detail}) and websocket fallback ({detail})"
                 ) from exc
+            provider_reply = await self._send_message_via_provider(
+                runtime, normalized_session_key, str(text), timeout_ms
+            )
+            if provider_reply:
+                return provider_reply
             raise OpenClawGatewayError(f"OpenClaw websocket fallback failed: {detail}") from exc
+        provider_reply = await self._send_message_via_provider(runtime, normalized_session_key, str(text), timeout_ms)
+        if provider_reply:
+            return provider_reply
+        raise OpenClawGatewayError("OpenClaw returned no usable text payload")
 
     async def reset_session(self, session_key: str) -> None:
         normalized_session_key = self._normalize_agent_session_key(str(session_key))
         runtime = self._load_runtime()
+        self._provider_histories.pop(normalized_session_key, None)
         async with self._connect(runtime) as ws:
             inbox: List[Dict[str, object]] = []
             await self._connect_session(ws, runtime, inbox)
@@ -226,6 +270,66 @@ class OpenClawGatewayClient:
             )
             if not response.get("ok"):
                 raise OpenClawGatewayError(f"OpenClaw sessions.reset failed: {response.get('error')}")
+
+    async def _send_message_via_provider(
+        self,
+        runtime: Dict[str, str],
+        session_key: str,
+        text: str,
+        timeout_ms: int,
+    ) -> Optional[str]:
+        state_dir = Path(str(runtime["state_dir"]))
+        openclaw_json = self._read_json(state_dir / "openclaw.json")
+        defaults = self._load_agent_defaults(runtime)
+        primary = str((defaults.get("model") or {}).get("primary") or "").strip()
+        if "/" not in primary:
+            return None
+        provider_id, model_id = primary.split("/", 1)
+        providers = ((openclaw_json.get("models") or {}).get("providers") or {}) if isinstance(openclaw_json, dict) else {}
+        provider = providers.get(provider_id) if isinstance(providers, dict) else None
+        if not isinstance(provider, dict):
+            return None
+        base_url = normalize_local_provider_base_url(str(provider.get("baseUrl") or "")).rstrip("/")
+        api_key = str(provider.get("apiKey") or "").strip()
+        if not base_url or not model_id.strip():
+            return None
+        history = list(self._provider_histories.get(session_key) or [])
+        system_prompt = (
+            "你是共感智能机器人“小念”的正式主脑回复层。"
+            "用自然、稳定、简洁的中文回复。"
+            "严格遵守用户消息里的明确格式要求，比如“只回复…”、“只输出…”、“只回答口令”。"
+            "如果用户让你记住某个事实、口令或偏好，请在当前会话里持续记住并正确复用。"
+            "优先回答用户当前问题，不要装傻，不要故意反问，不要把测试指令当玩笑。"
+        )
+        messages = [{"role": "system", "content": system_prompt}, *history[-12:], {"role": "user", "content": str(text)}]
+        headers = {"Content-Type": "application/json"}
+        if api_key:
+            headers["Authorization"] = f"Bearer {api_key}"
+        payload = {
+            "model": model_id.strip(),
+            "messages": messages,
+            "temperature": 0.0,
+            "max_tokens": 700,
+        }
+        timeout_s = min(120.0, max(20.0, timeout_ms / 1000.0))
+        try:
+            async with httpx.AsyncClient(timeout=timeout_s, trust_env=False) as client:
+                response = await client.post(f"{base_url}/chat/completions", headers=headers, json=payload)
+            response.raise_for_status()
+            data = response.json()
+            choice = (data.get("choices") or [{}])[0] if isinstance(data, dict) else {}
+            message = choice.get("message") or {}
+            reply = str(message.get("content") or "").strip()
+            if not reply:
+                return None
+            self._provider_histories[session_key] = [
+                *history[-12:],
+                {"role": "user", "content": str(text)},
+                {"role": "assistant", "content": reply},
+            ][-16:]
+            return reply
+        except Exception:
+            return None
 
     def _load_runtime(self) -> Dict[str, str]:
         state_dir = discover_openclaw_state_dir(self.config.state_dir, self.config.workspace_dir)
@@ -313,6 +417,8 @@ class OpenClawGatewayClient:
             **os.environ,
             "OPENCLAW_STATE_DIR": str(runtime["state_dir"]),
         }
+        env["OPENCLAW_CONFIG_PATH"] = str(Path(str(runtime["state_dir"])) / "openclaw.json")
+        env["OPENCLAW_WORKSPACE_DIR"] = str(Path(str(runtime["state_dir"])) / "workspace")
         env.update(build_openclaw_proxy_env(env))
         codex_home = self._prepare_codex_home(runtime)
         env["CODEX_HOME"] = str(codex_home)
@@ -429,6 +535,8 @@ class OpenClawGatewayClient:
             **os.environ,
             "OPENCLAW_STATE_DIR": str(runtime["state_dir"]),
         }
+        env["OPENCLAW_CONFIG_PATH"] = str(Path(str(runtime["state_dir"])) / "openclaw.json")
+        env["OPENCLAW_WORKSPACE_DIR"] = str(Path(str(runtime["state_dir"])) / "workspace")
         env.update(build_openclaw_proxy_env(env))
         codex_home = self._prepare_codex_home(runtime)
         env["CODEX_HOME"] = str(codex_home)
@@ -556,7 +664,7 @@ class OpenClawGatewayClient:
 
     def _build_codex_home_config(self) -> str:
         return (
-            'model = "glm-5"\n'
+            'model = "gemma-4-31b-it"\n'
             'model_reasoning_effort = "low"\n'
             'personality = "pragmatic"\n\n'
         )

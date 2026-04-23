@@ -148,7 +148,9 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({ settings, isGuest,
   return (
     <div className="h-full w-full overflow-y-auto no-scrollbar animate-pop-in">
       <div className="mx-auto grid max-w-7xl grid-cols-12 gap-6">
-        <aside className="col-span-12 xl:col-span-4 ios-float-card rounded-[2rem] p-8">
+        <aside className="col-span-12 xl:col-span-4 ios-subpage-hero">
+          <div className="ios-liquid-blob ios-liquid-blob--focus" />
+          <div className="ios-stage-panel rounded-[2.15rem] p-8">
           <div className="flex items-start justify-between gap-4">
             <div>
               <div className="text-[11px] font-black uppercase tracking-[0.35em] text-cyan-300/70">
@@ -177,11 +179,11 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({ settings, isGuest,
             ))}
           </div>
 
-          <div className="mt-8 rounded-[1.5rem] ios-list-card p-5">
+          <div className="mt-8 rounded-[1.5rem] ios-stage-well p-5">
             <div className="text-[11px] font-semibold tracking-[0.18em] text-slate-400">当前摘要</div>
             <div className="mt-4 space-y-3">
               {summary.map((item) => (
-                <div key={item} className="rounded-2xl bg-black/20 px-4 py-3 text-sm font-semibold text-slate-200">
+                <div key={item} className="ios-stage-tile rounded-2xl px-4 py-3 text-sm font-semibold text-slate-200">
                   {item}
                 </div>
               ))}
@@ -192,14 +194,14 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({ settings, isGuest,
             <button
               onClick={handleSave}
               disabled={saving}
-              className="inline-flex items-center justify-center gap-3 rounded-2xl bg-cyan-400 px-5 py-4 text-sm font-black text-slate-950 shadow-[0_12px_50px_rgba(34,211,238,0.28)] transition hover:translate-y-[-1px] disabled:cursor-not-allowed disabled:opacity-60"
+              className="ios-action-button ios-action-button--primary px-5 py-4 text-sm"
             >
               <Settings2 size={18} />
               {saving ? "正在保存..." : "保存并同步"}
             </button>
             <button
               onClick={() => void onClose()}
-              className="inline-flex items-center justify-center gap-3 rounded-2xl ios-ghost-chip px-5 py-4 text-sm font-black text-slate-100 transition hover:bg-white/10"
+              className="ios-action-button ios-action-button--secondary px-5 py-4 text-sm"
             >
               <X size={18} />
               关闭设置
@@ -207,10 +209,11 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({ settings, isGuest,
           </div>
 
           {statusMessage ? (
-            <div className="mt-4 rounded-2xl border border-cyan-400/20 bg-cyan-400/10 px-4 py-3 text-sm font-bold text-cyan-100 shadow-[inset_0_1px_0_rgba(255,255,255,0.05)]">
+            <div className="ios-stage-tile mt-4 rounded-2xl px-4 py-3 text-sm font-bold text-cyan-100">
               {statusMessage}
             </div>
           ) : null}
+          </div>
         </aside>
 
         <section className="col-span-12 xl:col-span-8 space-y-6">
@@ -440,9 +443,11 @@ const Panel = ({
   subtitle: string;
   children: React.ReactNode;
 }) => (
-  <section className="rounded-[2rem] border border-white/10 bg-[linear-gradient(180deg,rgba(15,23,42,0.88),rgba(8,15,28,0.96))] p-7 shadow-[0_25px_80px_rgba(2,6,23,0.35)]">
+  <section className="ios-subpage-hero">
+    <div className="ios-liquid-blob" />
+    <div className="ios-stage-panel ios-stage-panel--soft rounded-[2rem] p-7">
     <div className="flex items-start gap-4">
-      <div className="rounded-2xl border border-cyan-400/20 bg-cyan-400/10 p-3 text-cyan-200">
+      <div className="ios-stage-tile rounded-2xl p-3 text-cyan-200">
         <Icon size={20} className="shrink-0" />
       </div>
       <div>
@@ -451,6 +456,7 @@ const Panel = ({
       </div>
     </div>
     <div className="mt-6">{children}</div>
+    </div>
   </section>
 );
 
@@ -470,8 +476,8 @@ const ModeCard = ({
     onClick={onClick}
     className={`w-full rounded-[1.5rem] border p-5 text-left transition ${
       active
-        ? "border-cyan-300/40 bg-cyan-400/10 text-white shadow-[0_18px_45px_rgba(34,211,238,0.12)]"
-        : "border-white/10 bg-white/[0.03] text-slate-200 hover:bg-white/[0.07]"
+        ? "ios-stage-panel border-cyan-300/35 bg-cyan-400/10 text-white shadow-[0_18px_45px_rgba(34,211,238,0.12)]"
+        : "ios-stage-tile text-slate-200 hover:border-white/15"
     }`}
   >
     <div className="flex items-center justify-between gap-3">
@@ -498,8 +504,8 @@ const SelectableCard = ({
     onClick={onClick}
     className={`rounded-[1.75rem] border p-5 text-left transition ${
       active
-        ? "border-cyan-300/40 bg-cyan-400/10 text-white shadow-[0_18px_45px_rgba(34,211,238,0.12)]"
-        : "border-white/10 bg-white/[0.03] text-slate-200 hover:bg-white/[0.07]"
+        ? "ios-stage-panel border-cyan-300/35 bg-cyan-400/10 text-white shadow-[0_18px_45px_rgba(34,211,238,0.12)]"
+        : "ios-stage-tile text-slate-200 hover:border-white/15"
     }`}
   >
     <div className="text-2xl font-black">{title}</div>
@@ -520,10 +526,10 @@ const ToggleCard = ({
   enabled: boolean;
   onToggle: (next: boolean) => void;
 }) => (
-  <div className="rounded-[1.75rem] border border-white/10 bg-white/[0.03] p-5">
+  <div className="ios-stage-tile rounded-[1.75rem] p-5">
     <div className="flex items-start justify-between gap-4">
       <div className="flex gap-3">
-        <div className="rounded-2xl border border-white/10 bg-black/20 p-3 text-cyan-200">
+        <div className="ios-stage-well rounded-2xl p-3 text-cyan-200">
           <Icon size={18} />
         </div>
         <div>
@@ -534,8 +540,8 @@ const ToggleCard = ({
       <button
         type="button"
         onClick={() => onToggle(!enabled)}
-        className={`rounded-full px-4 py-2 text-xs font-black uppercase tracking-[0.25em] ${
-          enabled ? "bg-cyan-400 text-slate-950" : "bg-white/10 text-slate-300"
+        className={`ios-toggle-pill rounded-full px-4 py-2 text-xs font-black uppercase tracking-[0.25em] ${
+          enabled ? "ios-toggle-pill--active" : ""
         }`}
       >
         {enabled ? "ON" : "OFF"}
@@ -555,7 +561,7 @@ const ToggleRow = ({
   enabled: boolean;
   onToggle: () => void;
 }) => (
-  <div className="rounded-[1.5rem] border border-white/10 bg-white/[0.03] px-5 py-4">
+  <div className="ios-stage-tile rounded-[1.5rem] px-5 py-4">
     <div className="flex items-start justify-between gap-4">
       <div>
         <div className="text-lg font-black text-white">{title}</div>
@@ -564,8 +570,8 @@ const ToggleRow = ({
       <button
         type="button"
         onClick={onToggle}
-        className={`rounded-full px-4 py-2 text-xs font-black uppercase tracking-[0.25em] ${
-          enabled ? "bg-cyan-400 text-slate-950" : "bg-white/10 text-slate-300"
+        className={`ios-toggle-pill rounded-full px-4 py-2 text-xs font-black uppercase tracking-[0.25em] ${
+          enabled ? "ios-toggle-pill--active" : ""
         }`}
       >
         {enabled ? "ON" : "OFF"}
@@ -591,7 +597,7 @@ const Field = ({
       value={value}
       onChange={(e) => onChange(e.target.value)}
       placeholder={placeholder}
-      className="w-full rounded-2xl border border-white/10 bg-white/[0.03] px-4 py-3 text-sm font-semibold text-white outline-none transition focus:border-cyan-300/40 focus:bg-white/[0.05]"
+      className="ios-form-field px-4 py-3 text-sm font-semibold"
     />
   </label>
 );
@@ -620,7 +626,7 @@ const NumberField = ({
         const next = Number(e.target.value);
         if (Number.isFinite(next)) onChange(Math.max(min, Math.min(max, next)));
       }}
-      className="w-full rounded-2xl border border-white/10 bg-white/[0.03] px-4 py-3 text-sm font-semibold text-white outline-none transition focus:border-cyan-300/40 focus:bg-white/[0.05]"
+      className="ios-form-field px-4 py-3 text-sm font-semibold"
     />
   </label>
 );
@@ -646,8 +652,8 @@ const OptionGroup = ({
           onClick={() => onChange(option.id)}
           className={`w-full rounded-2xl border p-4 text-left transition ${
             value === option.id
-              ? "border-cyan-300/40 bg-cyan-400/10 text-white"
-              : "border-white/10 bg-white/[0.03] text-slate-200 hover:bg-white/[0.07]"
+              ? "ios-stage-panel border-cyan-300/35 bg-cyan-400/10 text-white"
+              : "ios-stage-tile text-slate-200 hover:border-white/15"
           }`}
         >
           <div className="text-sm font-black">{option.label}</div>
@@ -665,7 +671,7 @@ const ResultCard = ({
   title: string;
   children: React.ReactNode;
 }) => (
-  <div className="rounded-[1.5rem] border border-white/10 bg-white/[0.03] px-5 py-4">
+  <div className="ios-stage-tile rounded-[1.5rem] px-5 py-4">
     <div className="text-sm font-black text-white">{title}</div>
     <div className="mt-2 text-sm leading-7 text-slate-300">{children}</div>
   </div>

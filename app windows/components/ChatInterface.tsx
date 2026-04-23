@@ -1,10 +1,9 @@
 ﻿import React, { useEffect, useRef, useState } from "react";
 import { ChatAttachment, ChatMessage, EmotionType } from "../types";
-import { Send, Sparkles, User, Bot, Activity, Paperclip, X, Mic, Square, LoaderCircle, Volume2 } from "lucide-react";
-import { generateAssistantMessage, generateAssistantMessageStream } from "../services/llmService";
+import { Send, Sparkles, User, Bot, Activity, Paperclip, X, Mic, Square, LoaderCircle } from "lucide-react";
 import { uploadChatAttachment } from "../services/chatService";
-import { createDesktopVoiceRecorder, transcribeDesktopAudio } from "../services/desktopVoiceService";
-import { AssistantRuntimeStatus, getAssistantRuntimeStatus } from "../services/assistantService";
+import { AssistantRuntimeStatus, sendAssistantMessage } from "../services/assistantService";
+import { DuplexRuntimeState, MiniCpmDuplexService } from "../services/minicpmoDuplexService";
 
 interface ChatInterfaceProps {
   currentEmotion: EmotionType;
@@ -15,6 +14,8 @@ interface ChatInterfaceProps {
   voiceState?: "idle" | "detecting" | "listening" | "thinking" | "speaking";
   expressionLabel?: string;
   expressionConfidence?: number;
+  assistantRuntime?: AssistantRuntimeStatus | null;
+  assistantRuntimeError?: string;
   audioEnabled?: boolean;
 }
 
@@ -28,19 +29,6 @@ const DEFAULT_WELCOME: ChatMessage = {
 };
 
 const hasRenderableText = (text: unknown): boolean => typeof text === "string" && text.trim().length > 0;
-
-const cleanSpeechText = (text: unknown): string => {
-  const raw = String(text || "").trim();
-  if (!raw) return "";
-  return raw
-    .replace(/```[\s\S]*?```/g, " ")
-    .replace(/`([^`]+)`/g, "$1")
-    .replace(/<[^>]+>/g, " ")
-    .replace(/\[([^\]]+)\]\(([^)]+)\)/g, "$1")
-    .replace(/https?:\/\/\S+/g, " ")
-    .replace(/\s+/g, " ")
-    .trim();
-};
 
 const hasRenderableContent = (msg: ChatMessage): boolean => {
   if (hasRenderableText(msg.text)) return true;
@@ -115,6 +103,20 @@ const buildMemorySummary = (items: ChatMessage[], keepTail = 6, maxChars = 420):
   return compact.slice(compact.length - maxChars);
 };
 
+const normalizeRuntimeError = (value: unknown): string => {
+  const message = String(value || "").trim();
+  if (!message) return "";
+  const lowered = message.toLowerCase();
+  if (
+    lowered.includes("signal is aborted without reason") ||
+    lowered.includes("aborterror") ||
+    lowered.includes("aborted")
+  ) {
+    return "";
+  }
+  return message;
+};
+
 const compressImageToDataUrl = async (file: File, maxWidth = 1024, quality = 0.78): Promise<string> => {
   const dataUrl = await new Promise<string>((resolve, reject) => {
     const reader = new FileReader();
@@ -152,6 +154,8 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
   voiceState = "idle",
   expressionLabel = "unknown",
   expressionConfidence = 0,
+  assistantRuntime = null,
+  assistantRuntimeError = "",
   audioEnabled = true,
 }) => {
   const compact = variant === "compact";
@@ -171,19 +175,39 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
   const streamAbortRef = useRef<AbortController | null>(null);
   const streamFlushTimerRef = useRef<number | null>(null);
   const streamPendingTextRef = useRef("");
-  const streamLastFlushMsRef = useRef(0);
   const historyHydratedRef = useRef(false);
-  const voiceRecorderRef = useRef<{ stop: () => Promise<Blob> } | null>(null);
-  const speechSynthesisRef = useRef<SpeechSynthesis | null>(null);
-  const activeSpeechIdRef = useRef<string | null>(null);
-  const speechVoicesLoadedRef = useRef(false);
+  const duplexServiceRef = useRef<MiniCpmDuplexService | null>(null);
+  const duplexUserDraftIdRef = useRef<string | null>(null);
+  const duplexAssistantDraftIdRef = useRef<string | null>(null);
   const [voiceRecording, setVoiceRecording] = useState(false);
   const [voiceBusy, setVoiceBusy] = useState(false);
   const [voiceError, setVoiceError] = useState("");
-  const [speechSupported, setSpeechSupported] = useState(false);
-  const [speakingMessageId, setSpeakingMessageId] = useState<string | null>(null);
-  const [assistantRuntime, setAssistantRuntime] = useState<AssistantRuntimeStatus | null>(null);
-  const [assistantRuntimeError, setAssistantRuntimeError] = useState("");
+  const [duplexState, setDuplexState] = useState<DuplexRuntimeState>("idle");
+
+  const stopBrowserSpeech = () => {
+    if (!("speechSynthesis" in window)) return;
+    try {
+      window.speechSynthesis.cancel();
+    } catch {
+      // ignore
+    }
+  };
+
+  const speakBrowserSpeech = (text: string) => {
+    const safe = String(text || "").trim();
+    if (!audioEnabled || !safe || !("speechSynthesis" in window)) return;
+    try {
+      window.speechSynthesis.cancel();
+      const utter = new SpeechSynthesisUtterance(safe);
+      utter.lang = "zh-CN";
+      utter.rate = 1;
+      utter.pitch = 1;
+      utter.volume = 1;
+      window.speechSynthesis.speak(utter);
+    } catch {
+      // ignore
+    }
+  };
 
   useEffect(() => {
     const next = initialMessages.filter((msg) => hasRenderableContent(msg));
@@ -214,44 +238,21 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
   useEffect(() => {
     const rafId = window.requestAnimationFrame(() => scrollToBottom("auto"));
     const timer = window.setTimeout(() => scrollToBottom("auto"), 120);
-    const speech = typeof window !== "undefined" ? window.speechSynthesis : undefined;
-    speechSynthesisRef.current = speech || null;
-    setSpeechSupported(Boolean(speech));
     return () => {
-      streamAbortRef.current?.abort();
-      if (streamFlushTimerRef.current != null) {
-        window.clearTimeout(streamFlushTimerRef.current);
-      }
-      streamPendingTextRef.current = "";
-      speechSynthesisRef.current?.cancel();
       window.cancelAnimationFrame(rafId);
       window.clearTimeout(timer);
     };
   }, [assistantRuntime?.gateway_ready, assistantRuntime?.provider_network_ok]);
 
   useEffect(() => {
-    let active = true;
-    const refreshRuntime = async () => {
-      try {
-        const runtime = await getAssistantRuntimeStatus();
-        if (!active) return;
-        setAssistantRuntime(runtime);
-        setAssistantRuntimeError("");
-      } catch (err) {
-        if (!active) return;
-        setAssistantRuntime(null);
-        setAssistantRuntimeError(err instanceof Error ? err.message : String(err));
-      }
-    };
-
-    void refreshRuntime();
-    const timer = window.setInterval(() => {
-      void refreshRuntime();
-    }, assistantRuntime?.gateway_ready && assistantRuntime?.provider_network_ok ? 15000 : 3000);
-
     return () => {
-      active = false;
-      window.clearInterval(timer);
+      streamAbortRef.current?.abort();
+      if (streamFlushTimerRef.current != null) {
+        window.clearTimeout(streamFlushTimerRef.current);
+      }
+      streamPendingTextRef.current = "";
+      void duplexServiceRef.current?.stop();
+      stopBrowserSpeech();
     };
   }, []);
 
@@ -264,89 +265,15 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
       !assistantRuntime.gateway_ready &&
       assistantRuntime.provider_network_ok
   );
-  const assistantDetail = assistantRuntimeError
-    ? assistantRuntimeError
-    : assistantRuntime?.provider_network_detail || assistantRuntime?.gateway_error || "";
+  const assistantDetail = normalizeRuntimeError(
+    assistantRuntimeError || assistantRuntime?.provider_network_detail || assistantRuntime?.gateway_error || ""
+  );
   const chatInputDisabled = Boolean(!isGuest && !assistantReady);
   const chatInputPlaceholder = assistantBooting
     ? "本地 OpenClaw 正在启动，大约需要几十秒…"
     : !isGuest && !assistantReady
     ? "OpenClaw 未就绪，暂时不能发送消息"
     : "和你的伙伴聊聊…";
-
-  const stopSpeaking = () => {
-    speechSynthesisRef.current?.cancel();
-    activeSpeechIdRef.current = null;
-    setSpeakingMessageId(null);
-  };
-
-  const pickSpeechVoice = () => {
-    const synth = speechSynthesisRef.current;
-    if (!synth) return null;
-    const voices = synth.getVoices();
-    if (!voices.length) return null;
-    return (
-      voices.find((voice) => /zh[-_](CN|Hans)/i.test(voice.lang) || /chinese/i.test(voice.name)) ||
-      voices.find((voice) => /^zh/i.test(voice.lang)) ||
-      voices[0] ||
-      null
-    );
-  };
-
-  const speakReply = (messageId: string, text: string) => {
-    const synth = speechSynthesisRef.current;
-    const spokenText = cleanSpeechText(text);
-    if (!audioEnabled || !synth || !spokenText) return;
-
-    stopSpeaking();
-    const utterance = new SpeechSynthesisUtterance(spokenText);
-    const attachVoiceAndSpeak = () => {
-      const voice = pickSpeechVoice();
-      if (voice) {
-        utterance.voice = voice;
-        utterance.lang = voice.lang || "zh-CN";
-      } else {
-        utterance.lang = "zh-CN";
-      }
-      utterance.rate = 1.02;
-      utterance.pitch = 1.02;
-      utterance.volume = 1;
-      activeSpeechIdRef.current = messageId;
-      setSpeakingMessageId(messageId);
-      utterance.onend = () => {
-        if (activeSpeechIdRef.current === messageId) {
-          activeSpeechIdRef.current = null;
-          setSpeakingMessageId(null);
-        }
-      };
-      utterance.onerror = () => {
-        if (activeSpeechIdRef.current === messageId) {
-          activeSpeechIdRef.current = null;
-          setSpeakingMessageId(null);
-        }
-      };
-      synth.speak(utterance);
-    };
-
-    if (!speechVoicesLoadedRef.current && synth.getVoices().length === 0) {
-      const handleVoicesChanged = () => {
-        speechVoicesLoadedRef.current = true;
-        synth.removeEventListener("voiceschanged", handleVoicesChanged);
-        attachVoiceAndSpeak();
-      };
-      synth.addEventListener("voiceschanged", handleVoicesChanged);
-      window.setTimeout(() => {
-        synth.removeEventListener("voiceschanged", handleVoicesChanged);
-        if (!activeSpeechIdRef.current) {
-          attachVoiceAndSpeak();
-        }
-      }, 300);
-      return;
-    }
-
-    speechVoicesLoadedRef.current = true;
-    attachVoiceAndSpeak();
-  };
 
   const pickAttachments = () => {
     if (uploading || chatInputDisabled) return;
@@ -385,7 +312,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
   };
 
   const onAttachmentPicked = async (event: React.ChangeEvent<HTMLInputElement>) => {
-    const files = Array.from(event.target.files || []);
+    const files = Array.from(event.target.files || []) as File[];
     event.target.value = "";
     await addAttachmentsFromFiles(files);
   };
@@ -410,12 +337,12 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
   const onRootDrop = async (event: React.DragEvent<HTMLDivElement>) => {
     event.preventDefault();
     setDragActive(false);
-    const files = Array.from(event.dataTransfer?.files || []);
+    const files = Array.from(event.dataTransfer?.files || []) as File[];
     await addAttachmentsFromFiles(files);
   };
 
   const onInputPaste = async (event: React.ClipboardEvent<HTMLInputElement>) => {
-    const files = Array.from(event.clipboardData?.files || []);
+    const files = Array.from(event.clipboardData?.files || []) as File[];
     if (!files.length) return;
     event.preventDefault();
     await addAttachmentsFromFiles(files);
@@ -435,7 +362,6 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
     }));
 
     const hasText = trimmed.length > 0;
-    const hasImage = outgoingAttachments.some((a) => a.kind === "image" && String(a.image_data_url || "").startsWith("data:image/"));
     const contentType: ChatMessage["contentType"] = hasText
       ? attachmentsForStorage.length
         ? "mixed"
@@ -466,7 +392,6 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
     setAttachmentError("");
     setVoiceError("");
     setIsTyping(true);
-    stopSpeaking();
     streamAbortRef.current?.abort();
     const abortCtrl = new AbortController();
     streamAbortRef.current = abortCtrl;
@@ -527,104 +452,32 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
         ];
       });
     };
-    const flushStreamText = (force = false) => {
-      const pending = streamPendingTextRef.current;
-      if (!hasRenderableText(pending)) return;
-      const now = Date.now();
-      if (!force && now - streamLastFlushMsRef.current < 28) return;
-      streamLastFlushMsRef.current = now;
-      upsertBotMessage(pending);
-    };
-
     try {
       const requestMessages = [...messages, userMsg];
-      const history = requestMessages
-        .slice(-6)
-        .map((m) => ({
-          sender: m.sender,
-          text: messageToHistoryText(m),
-          timestamp_ms: m.timestamp.getTime(),
-        }))
-        .filter((item) => item.text.trim().length > 0);
       const memorySummary = buildMemorySummary(requestMessages, 6, 420);
-
-      const llmAttachments = outgoingAttachments
-        .filter((a) => a.kind === "image")
-        .map((a) => ({
+      const assistantResponse = await sendAssistantMessage({
+        text: trimmed || messageToHistoryText(userMsg),
+        surface: "desktop",
+        session_key: "agent:main:main",
+        attachments: outgoingAttachments.map((a) => ({
           kind: a.kind,
           url: a.url,
           mime: a.mime,
           name: a.name,
           size: a.size,
           image_data_url: a.image_data_url,
-        }));
-
-      let responseText = "";
-      if (hasImage) {
-        responseText = await generateAssistantMessage(
-          currentEmotion,
-          trimmed || messageToHistoryText(userMsg),
-          history,
-          userMsg.timestamp.getTime(),
-          memorySummary,
-          expressionLabel,
-          expressionConfidence,
-          llmAttachments
-        );
-      } else {
-        responseText = await generateAssistantMessageStream(
-          currentEmotion,
-          trimmed || messageToHistoryText(userMsg),
-          history,
-          userMsg.timestamp.getTime(),
-          {
-            onStart: () => {
-              setIsTyping(true);
-              streamPendingTextRef.current = "";
-              streamLastFlushMsRef.current = 0;
-              upsertBotMessage("…");
-            },
-            onDelta: (_delta, fullText) => {
-              setIsTyping(false);
-              streamPendingTextRef.current = fullText;
-              flushStreamText(false);
-              if (streamFlushTimerRef.current == null) {
-                streamFlushTimerRef.current = window.setTimeout(() => {
-                  flushStreamText(true);
-                  streamFlushTimerRef.current = null;
-                }, 28);
-              }
-            },
-            onDone: (fullText) => {
-              streamPendingTextRef.current = fullText;
-              if (streamFlushTimerRef.current != null) {
-                window.clearTimeout(streamFlushTimerRef.current);
-                streamFlushTimerRef.current = null;
-              }
-              flushStreamText(true);
-            },
-          },
-          abortCtrl.signal,
-          memorySummary,
-          expressionLabel,
-          expressionConfidence,
-          llmAttachments
-        );
-      }
-
-      if (!responseText.trim()) {
-        responseText = await generateAssistantMessage(
-          currentEmotion,
-          trimmed || messageToHistoryText(userMsg),
-          history,
-          userMsg.timestamp.getTime(),
-          memorySummary,
-          expressionLabel,
-          expressionConfidence,
-          llmAttachments
-        );
-      }
+        })),
+        metadata: {
+          emotion: currentEmotion,
+          expression_label: expressionLabel,
+          expression_confidence: expressionConfidence,
+          memory_summary: memorySummary,
+          source: "chat_interface",
+        },
+      });
+      const responseText = String(assistantResponse.text || "").trim();
       upsertBotMessage(responseText);
+      speakBrowserSpeech(responseText);
 
       if (hasRenderableText(responseText)) {
         const botMsg: ChatMessage = {
@@ -637,7 +490,6 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
         };
         if (onSendMessage) onSendMessage(botMsg);
       }
-      speakReply(botMsgId, responseText);
     } finally {
       if (streamFlushTimerRef.current != null) {
         window.clearTimeout(streamFlushTimerRef.current);
@@ -651,25 +503,62 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
     }
   };
 
+  const upsertDuplexMessage = (id: string, sender: "user" | "bot", text: string) => {
+    const safe = String(text || "").trim();
+    if (!safe) return;
+    setMessages((prev) => {
+      const idx = prev.findIndex((item) => item.id === id);
+      if (idx >= 0) {
+        const cloned = [...prev];
+        cloned[idx] = { ...cloned[idx], text: safe, timestamp: new Date() };
+        return cloned;
+      }
+      return [
+        ...prev,
+        {
+          id,
+          sender,
+          text: safe,
+          timestamp: new Date(),
+          contentType: "text",
+          attachments: [],
+        },
+      ];
+    });
+  };
+
+  const commitDuplexMessage = (idRef: React.MutableRefObject<string | null>, sender: "user" | "bot", text: string) => {
+    const safe = String(text || "").trim();
+    if (!safe) return;
+    const id = idRef.current || `${sender}-${Date.now()}`;
+    idRef.current = id;
+    upsertDuplexMessage(id, sender, safe);
+    onSendMessage?.({
+      id,
+      sender,
+      text: safe,
+      timestamp: new Date(),
+      contentType: "text",
+      attachments: [],
+    });
+    idRef.current = null;
+  };
+
   const handleVoiceToggle = async () => {
     setVoiceError("");
-    if (voiceRecording && voiceRecorderRef.current) {
+    if (voiceRecording && duplexServiceRef.current) {
       setVoiceBusy(true);
       try {
-        const blob = await voiceRecorderRef.current.stop();
-        voiceRecorderRef.current = null;
+        stopBrowserSpeech();
+        await duplexServiceRef.current.stop();
+        duplexServiceRef.current = null;
         setVoiceRecording(false);
-        const result = await transcribeDesktopAudio(blob, "chat");
-        const transcript = String(result.transcript || "").trim();
-        if (!transcript) {
-          setVoiceError("没有识别到有效语音，请重试");
-          return;
-        }
-        await handleSend(transcript);
+        setDuplexState("idle");
       } catch (err) {
         setVoiceError(err instanceof Error ? err.message : String(err));
         setVoiceRecording(false);
-        voiceRecorderRef.current = null;
+        duplexServiceRef.current = null;
+        setDuplexState("idle");
       } finally {
         setVoiceBusy(false);
       }
@@ -678,16 +567,76 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
 
     setVoiceBusy(true);
     try {
-      voiceRecorderRef.current = await createDesktopVoiceRecorder();
+      const service = new MiniCpmDuplexService({
+        onStateChange: (state, detail) => {
+          setDuplexState(state);
+          if (state === "error" && detail) {
+            setVoiceError(detail);
+            setVoiceRecording(false);
+            duplexServiceRef.current = null;
+          }
+        },
+        onUserPartial: (text) => {
+          const id = duplexUserDraftIdRef.current || `duplex-user-${Date.now()}`;
+          duplexUserDraftIdRef.current = id;
+          upsertDuplexMessage(id, "user", text);
+        },
+        onUserFinal: (text) => {
+          commitDuplexMessage(duplexUserDraftIdRef, "user", text);
+        },
+        onAssistantPartial: (text) => {
+          const id = duplexAssistantDraftIdRef.current || `duplex-bot-${Date.now()}`;
+          duplexAssistantDraftIdRef.current = id;
+          upsertDuplexMessage(id, "bot", text);
+        },
+        onAssistantFinal: (text) => {
+          commitDuplexMessage(duplexAssistantDraftIdRef, "bot", text);
+        },
+        onError: (message) => {
+          setVoiceError(message);
+        },
+      });
+      const voiceMemorySummary = buildMemorySummary(messages, 8, 720);
+      await service.start({
+        surface: "desktop",
+        sessionKey: "agent:main:main",
+        metadata: {
+          emotion: currentEmotion,
+          current_emotion: currentEmotion,
+          expression_label: expressionLabel,
+          expression_confidence: expressionConfidence,
+          memory_summary: voiceMemorySummary,
+          source: "chat_interface_duplex",
+        },
+      });
+      duplexServiceRef.current = service;
       setVoiceRecording(true);
     } catch (err) {
       setVoiceError(err instanceof Error ? err.message : String(err));
-      voiceRecorderRef.current = null;
+      duplexServiceRef.current = null;
       setVoiceRecording(false);
+      setDuplexState("error");
     } finally {
       setVoiceBusy(false);
     }
   };
+
+  const duplexStatusLabel =
+    duplexState === "connecting"
+      ? "连接中"
+      : duplexState === "preparing"
+      ? "准备中"
+      : duplexState === "listening"
+      ? "聆听中"
+      : duplexState === "thinking"
+      ? "思考中"
+      : duplexState === "speaking"
+      ? "播报中"
+      : duplexState === "interrupted"
+      ? "已打断"
+      : duplexState === "error"
+      ? "异常"
+      : "空闲";
 
   return (
     <div
@@ -730,7 +679,9 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
             <Activity size={14} className="text-indigo-400" />
             <span className="text-[10px] font-semibold text-slate-300 tracking-[0.16em]">
               状态：
-              {voiceState === "detecting"
+              {voiceRecording
+                ? duplexStatusLabel
+                : voiceState === "detecting"
                 ? "待唤醒"
                 : voiceState === "listening"
                 ? "聆听中"
@@ -798,24 +749,6 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
               <span className="text-[9px] font-semibold text-slate-500 px-2 mt-1">
                 {msg.timestamp.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
               </span>
-              {msg.sender !== "user" && hasRenderableText(msg.text) && speechSupported && (
-                <button
-                  type="button"
-                  onClick={() => {
-                    if (speakingMessageId === msg.id) {
-                      stopSpeaking();
-                      return;
-                    }
-                    speakReply(msg.id, msg.text);
-                  }}
-                  className="ios-ghost-chip px-2.5 py-1 mt-1 rounded-full text-[9px] font-semibold tracking-[0.16em] text-slate-300 hover:text-white"
-                >
-                  <span className="inline-flex items-center gap-1">
-                    {speakingMessageId === msg.id ? <Square size={10} fill="currentColor" /> : <Volume2 size={10} />}
-                    {speakingMessageId === msg.id ? "停止朗读" : "朗读回答"}
-                  </span>
-                </button>
-              )}
             </div>
           </div>
         ))}
@@ -875,9 +808,13 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
           <button
             type="button"
             onClick={handleVoiceToggle}
-            disabled={uploading || isTyping || voiceBusy || chatInputDisabled}
-            className={`disabled:opacity-40 transition-colors ${voiceRecording ? "text-rose-300 hover:text-rose-200" : "text-slate-300 hover:text-white"}`}
-            title={voiceRecording ? "结束录音并转写" : "本地语音输入"}
+            disabled={voiceBusy || (!voiceRecording && (uploading || chatInputDisabled))}
+            className={`inline-flex items-center gap-2 rounded-full border px-3 py-2 text-[11px] font-bold tracking-[0.12em] disabled:opacity-40 transition-colors ${
+              voiceRecording
+                ? "border-rose-300/40 bg-rose-400/10 text-rose-200 hover:bg-rose-400/15"
+                : "border-cyan-300/30 bg-cyan-400/10 text-cyan-100 hover:bg-cyan-400/15"
+            }`}
+            title={voiceRecording ? "停止全双工聊天" : "启动全双工聊天"}
           >
             {voiceBusy ? (
               <LoaderCircle size={compact ? 16 : 18} className="animate-spin" />
@@ -886,6 +823,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
             ) : (
               <Mic size={compact ? 16 : 18} />
             )}
+            <span>{voiceRecording ? "停止全双工聊天" : "启动全双工聊天"}</span>
           </button>
           <input
             type="text"
@@ -911,8 +849,11 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
         </div>
         {attachmentError && <p className="text-[10px] font-bold text-rose-400 mt-2">{attachmentError}</p>}
         {voiceError && <p className="text-[10px] font-bold text-rose-400 mt-2">{voiceError}</p>}
-        {voiceRecording && <p className="text-[10px] font-bold text-amber-300 mt-2">正在本地录音，再按一次麦克风即可结束并自动发送</p>}
-        {!audioEnabled && <p className="text-[10px] font-bold text-slate-500 mt-2">当前已关闭音频输出，回答不会自动朗读。</p>}
+        {voiceRecording && (
+          <p className="text-[10px] font-bold text-amber-300 mt-2">
+            全双工聊天已开启：直接说话即可，停顿后自动回应；系统播报时再次开口会尝试打断。当前状态：{duplexStatusLabel}。
+          </p>
+        )}
         {!compact && (
           <p className="text-[9px] text-center mt-3 text-slate-500 font-semibold tracking-[0.18em]">
             机器人动作指令（语音/动作/表情）由本地引擎实时处理

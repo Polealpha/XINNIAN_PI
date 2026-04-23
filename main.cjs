@@ -17,12 +17,12 @@ let openClawGatewayProc = null;
 const LOCAL_BACKEND_URL = "http://127.0.0.1:8000";
 const LOCAL_OPENCLAW_GATEWAY_PORT = 18890;
 const LOCAL_OPENCLAW_PROVIDER = {
-  providerId: "zai",
-  profileId: "zai:default",
-  endpoint: "coding-cn",
-  baseUrl: "https://open.bigmodel.cn/api/coding/paas/v4/",
-  modelId: "glm-5",
-  modelRef: "zai/glm-5",
+  providerId: "gemma",
+  profileId: "gemma:default",
+  endpoint: "local-gateway",
+  baseUrl: "http://127.0.0.1:8000/gemma-provider/v1",
+  modelId: "gemma-4-31b-it",
+  modelRef: "gemma/gemma-4-31b-it",
   thinkingDefault: "low",
 };
 const deviceSyncManager = new DeviceSyncManager({
@@ -108,10 +108,16 @@ const resolveOpenClawRepo = (runtimeRoot) => {
 };
 
 const resolveOpenClawWorkspace = (runtimeRoot) => {
+  if (process.env.LOCALAPPDATA) {
+    return path.join(process.env.LOCALAPPDATA, "EmoResonance", "assistant_data", "openclaw_workspace");
+  }
   return path.join(runtimeRoot, "assistant_data", "openclaw_workspace");
 };
 
 const resolveOpenClawStateDir = (runtimeRoot) => {
+  if (process.env.LOCALAPPDATA) {
+    return path.join(process.env.LOCALAPPDATA, "EmoResonance", "assistant_data", "openclaw_state");
+  }
   return path.join(runtimeRoot, "assistant_data", "openclaw_state");
 };
 
@@ -165,6 +171,11 @@ const buildOpenClawProxyEnv = () => {
 };
 
 const resolveAppDataRoot = () => {
+  if (process.env.LOCALAPPDATA) {
+    const localRoot = path.join(process.env.LOCALAPPDATA, "EmoResonance");
+    fs.mkdirSync(localRoot, { recursive: true });
+    return localRoot;
+  }
   try {
     if (app?.getPath) {
       const userData = app.getPath("userData");
@@ -214,10 +225,10 @@ const loadOpenClawProviderConfig = () => {
   const fileConfig = readJsonIfExists(resolveOpenClawProviderConfigPath()) || {};
   const modelId = String(fileConfig.modelId || LOCAL_OPENCLAW_PROVIDER.modelId).trim() || LOCAL_OPENCLAW_PROVIDER.modelId;
   const apiKey = String(
-    process.env.ZAI_API_KEY ||
-      process.env.Z_AI_API_KEY ||
+    process.env.GEMMA_PROVIDER_API_KEY ||
+      process.env.LOCAL_GEMMA_PROVIDER_KEY ||
       fileConfig.apiKey ||
-      ""
+      "local-gemma-bridge"
   ).trim();
   return {
     providerId: LOCAL_OPENCLAW_PROVIDER.providerId,
@@ -225,7 +236,7 @@ const loadOpenClawProviderConfig = () => {
     endpoint: String(fileConfig.endpoint || LOCAL_OPENCLAW_PROVIDER.endpoint).trim() || LOCAL_OPENCLAW_PROVIDER.endpoint,
     baseUrl: String(fileConfig.baseUrl || LOCAL_OPENCLAW_PROVIDER.baseUrl).trim() || LOCAL_OPENCLAW_PROVIDER.baseUrl,
     modelId,
-    modelRef: `zai/${modelId}`,
+    modelRef: `gemma/${modelId}`,
     thinkingDefault: String(fileConfig.thinkingDefault || LOCAL_OPENCLAW_PROVIDER.thinkingDefault).trim() || LOCAL_OPENCLAW_PROVIDER.thinkingDefault,
     apiKey,
   };
@@ -237,8 +248,8 @@ const buildOpenClawProviderEnv = () => {
     return {};
   }
   return {
-    ZAI_API_KEY: providerConfig.apiKey,
-    Z_AI_API_KEY: providerConfig.apiKey,
+    GEMMA_PROVIDER_API_KEY: providerConfig.apiKey,
+    LOCAL_GEMMA_PROVIDER_KEY: providerConfig.apiKey,
   };
 };
 
@@ -318,7 +329,7 @@ const ensureAgentModelsConfig = (agentDir, providerConfig) => {
     models: [
       {
         id: providerConfig.modelId,
-        name: "GLM-5",
+        name: "Gemma 4 31B",
         reasoning: true,
         input: ["text"],
         contextWindow: 204800,
@@ -513,7 +524,7 @@ const ensureOpenClawState = (stateDir) => {
       models: [
         {
           id: providerConfig.modelId,
-          name: "GLM-5",
+          name: "Gemma 4 31B",
           reasoning: true,
           input: ["text"],
           contextWindow: 204800,
@@ -839,7 +850,7 @@ if (!gotLock) {
 }
 
 const defaultTitleBar = {
-  color: "#070b14",
+  color: "#09111d",
   symbolColor: "#cbd5f5",
   height: 36,
 };
@@ -907,7 +918,7 @@ const createWindow = () => {
     height: 800,
     minWidth: 1024,
     minHeight: 640,
-    backgroundColor: "#0F172A",
+    backgroundColor: "#09111d",
     icon: path.join(__dirname, "..", "assets", "app-icon.png"),
     titleBarStyle: "hidden",
     titleBarOverlay: {
@@ -931,7 +942,6 @@ const createWindow = () => {
       console.error(msg);
       showWindowFatal(win, "开发模式加载失败", msg);
     });
-    win.webContents.openDevTools({ mode: "detach" });
   } else {
     const indexPath = path.join(__dirname, "..", "dist", "index.html");
     win.loadFile(indexPath).catch((err) => {

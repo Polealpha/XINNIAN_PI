@@ -413,6 +413,52 @@ class AssistantSessionStatusResponse(BaseModel):
     history: list[ChatMessageResponse] = Field(default_factory=list)
 
 
+class AssistantSessionStartRequest(BaseModel):
+    surface: str = "desktop"
+    session_key: Optional[str] = None
+    device_id: Optional[str] = None
+    sender_id: Optional[str] = None
+    metadata: dict = Field(default_factory=dict)
+
+
+class AssistantSessionStartResponse(BaseModel):
+    ok: bool
+    surface: str
+    session_key: str
+    duplex_session_id: str
+    ws_url: str
+    provider: str = "MiniCPM-o-4.5"
+    prepare_payload: dict = Field(default_factory=dict)
+    last_message_ts_ms: Optional[int] = None
+    message_count: int = 0
+    history: list[ChatMessageResponse] = Field(default_factory=list)
+    memory_summary: str = ""
+
+
+class AssistantSessionStopRequest(BaseModel):
+    surface: str = "desktop"
+    session_key: Optional[str] = None
+    device_id: Optional[str] = None
+    sender_id: Optional[str] = None
+
+
+class AssistantSessionInterruptRequest(BaseModel):
+    surface: str = "desktop"
+    session_key: Optional[str] = None
+    device_id: Optional[str] = None
+    sender_id: Optional[str] = None
+    reason: str = "barge_in"
+
+
+class AssistantSessionControlResponse(BaseModel):
+    ok: bool
+    surface: str
+    session_key: str
+    status: str
+    duplex_session_id: Optional[str] = None
+    timestamp_ms: int
+
+
 class AssistantSessionResetRequest(BaseModel):
     surface: str = "desktop"
     session_key: Optional[str] = None
@@ -466,44 +512,20 @@ class AssistantRuntimeStatusResponse(BaseModel):
     robot_bridge_ready: bool = False
 
 
+class AssistantDuplexConfigResponse(BaseModel):
+    ok: bool
+    provider: str = "MiniCPM-o-4.5"
+    ws_base: str = ""
+    audio_chunk_ms: int = 1000
+    sample_rate: int = 16000
+    transport: str = "native_ws_proxy"
+    preferred_voice: str = "sweet_cn_female"
+
+
 class AssistantMemorySearchResponse(BaseModel):
     ok: bool
     query: str
     results: list[dict] = Field(default_factory=list)
-
-
-class DesktopVoiceStatusResponse(BaseModel):
-    ok: bool
-    ready: bool = False
-    provider_preference: str = "faster_whisper"
-    fallback_provider: str = "sherpa_onnx"
-    active_provider: str = ""
-    primary_ready: bool = False
-    primary_engine: str = ""
-    primary_error: Optional[str] = None
-    fallback_ready: bool = False
-    fallback_engine: str = ""
-    fallback_error: Optional[str] = None
-    language: str = "zh"
-    max_sec: int = 45
-    model_name: str = "small"
-    beam_size: int = 5
-    best_of: int = 5
-    preprocess_enabled: bool = True
-    trim_silence_enabled: bool = True
-    initial_prompt_enabled: bool = False
-    hotwords_enabled: bool = False
-
-
-class DesktopVoiceTranscribeResponse(BaseModel):
-    ok: bool
-    transcript: str = ""
-    provider: str = ""
-    used_fallback: bool = False
-    duration_ms: int = 0
-    latency_ms: int = 0
-    context: str = "chat"
-    ready: bool = False
 
 
 class DesktopRuntimeStatusResponse(BaseModel):

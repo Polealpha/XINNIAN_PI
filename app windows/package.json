@@ -29,8 +29,9 @@
     "@vitejs/plugin-react": "^5.0.0",
     "concurrently": "^9.1.2",
     "cross-env": "^7.0.3",
-    "electron": "^31.3.1",
+    "electron": "^31.7.7",
     "electron-builder": "^24.13.3",
+    "esbuild": "^0.25.12",
     "typescript": "~5.8.2",
     "vite": "^6.2.0",
     "wait-on": "^7.2.0"
@@ -106,7 +107,9 @@
       }
     ],
     "win": {
-      "target": ["nsis"],
+      "target": [
+        "nsis"
+      ],
       "icon": "assets/app-icon.ico"
     },
     "nsis": {

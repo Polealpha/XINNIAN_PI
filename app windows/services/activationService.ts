@@ -146,6 +146,10 @@ export const completeActivation = async (payload: {
   return apiPost("/api/activation/complete", payload, true);
 };
 
+export const skipActivationAssessment = async () => {
+  return apiPost("/api/activation/skip-assessment", {}, true);
+};
+
 export const getPersonalityState = async (): Promise<PersonalityProfile> => {
   return apiGet("/api/activation/personality/state", true);
 };

@@ -161,6 +161,20 @@ const mergeChatHistory = (local: ChatMessage[], incoming: ChatMessage[]): ChatMe
   return merged.sort((a, b) => a.timestamp.getTime() - b.timestamp.getTime());
 };
 
+const normalizeAssistantRuntimeError = (value: unknown): string => {
+  const message = String(value || "").trim();
+  if (!message) return "";
+  const lowered = message.toLowerCase();
+  if (
+    lowered.includes("signal is aborted without reason") ||
+    lowered.includes("aborterror") ||
+    lowered.includes("aborted")
+  ) {
+    return "";
+  }
+  return message;
+};
+
 const THEME_OPTIONS: ThemeOption[] = [
   {
     id: "midnight",
@@ -573,6 +587,7 @@ const clearStoredSessionState = () => {
   for (const key of [
     "auth_token",
     "refresh_token",
+    "local_backend_token",
     "guest_mode",
     "activation_required",
     "activation_path",
@@ -627,6 +642,8 @@ const App: React.FC = () => {
   const wakeActiveUntilRef = useRef<number>(0);
   const assistantStatusLoggedRef = useRef(false);
   const seenReminderIdsRef = useRef<Set<string>>(new Set());
+  const lastHealthyAssistantRuntimeRef = useRef<AssistantRuntimeStatus | null>(null);
+  const assistantRuntimeFailureCountRef = useRef(0);
 
   useEffect(() => {
     if (!isAuthenticated || isGuest) return;
@@ -1799,6 +1816,7 @@ const App: React.FC = () => {
     } finally {
       localStorage.removeItem("auth_token");
       localStorage.removeItem("refresh_token");
+      localStorage.removeItem("local_backend_token");
       localStorage.removeItem("guest_mode");
       localStorage.removeItem("activation_required");
       localStorage.removeItem("activation_path");
@@ -2043,6 +2061,8 @@ const App: React.FC = () => {
 
   useEffect(() => {
     if (!isAuthenticated || isGuest || activationRequired) {
+      lastHealthyAssistantRuntimeRef.current = null;
+      assistantRuntimeFailureCountRef.current = 0;
       setAssistantRuntime(null);
       setAssistantRuntimeError("");
       setRuntimeChecked(false);
@@ -2055,6 +2075,10 @@ const App: React.FC = () => {
       try {
         const status = await getAssistantRuntimeStatus();
         if (!active) return;
+        assistantRuntimeFailureCountRef.current = 0;
+        if (status.gateway_ready && status.provider_network_ok) {
+          lastHealthyAssistantRuntimeRef.current = status;
+        }
         setAssistantRuntime(status);
         setAssistantRuntimeError(
           status.gateway_ready
@@ -2067,9 +2091,22 @@ const App: React.FC = () => {
         nextReady = Boolean(status.gateway_ready && status.provider_network_ok);
       } catch (err) {
         if (!active) return;
-        const detail = err instanceof Error ? err.message : String(err || "本地 backend 未就绪");
-        setAssistantRuntime(null);
-        setAssistantRuntimeError(detail || "本地 backend 未就绪");
+        const detail = normalizeAssistantRuntimeError(
+          err instanceof Error ? err.message : String(err || "本地 backend 未就绪")
+        );
+        assistantRuntimeFailureCountRef.current += 1;
+        const lastHealthy = lastHealthyAssistantRuntimeRef.current;
+        const shouldKeepHealthyRuntime = Boolean(
+          lastHealthy &&
+            assistantRuntimeFailureCountRef.current < 3 &&
+            lastHealthy.gateway_ready &&
+            lastHealthy.provider_network_ok
+        );
+        setAssistantRuntime(shouldKeepHealthyRuntime ? lastHealthy : null);
+        setAssistantRuntimeError(
+          shouldKeepHealthyRuntime ? "" : detail || "本地 backend 未就绪"
+        );
+        nextReady = shouldKeepHealthyRuntime;
         setRuntimeChecked(true);
       } finally {
         if (!active) return;
@@ -2089,12 +2126,21 @@ const App: React.FC = () => {
     applyTheme(uiTheme);
     const option = THEME_OPTIONS.find((item) => item.id === uiTheme) || THEME_OPTIONS[0];
     const token = THEME_TOKENS[uiTheme] || THEME_TOKENS.midnight;
-    (window as any)?.desktop?.setTitleBarTheme?.({
-      color: option.titleBarColor,
-      symbolColor: option.symbolColor,
-      backgroundColor: token.bg,
-    });
-  }, [applyTheme, uiTheme]);
+    const activationTheme = {
+      color: "#09111d",
+      symbolColor: "#e2e8f0",
+      backgroundColor: "#09111d",
+    };
+    (window as any)?.desktop?.setTitleBarTheme?.(
+      activationRequired && !isGuest
+        ? activationTheme
+        : {
+            color: token.bg,
+            symbolColor: option.symbolColor,
+            backgroundColor: token.bg,
+          },
+    );
+  }, [activationRequired, applyTheme, isGuest, uiTheme]);
 
   useEffect(() => {
     if (typeof document === "undefined") return;
@@ -3050,8 +3096,8 @@ const App: React.FC = () => {
 
         <div className="flex-1 flex flex-col overflow-hidden min-h-0">
           {activeTab === Tab.DASHBOARD && (
-            <div className="grid grid-cols-12 gap-6 min-h-full items-start overflow-y-auto pr-2 pb-4 no-scrollbar">
-              <div className="col-span-4 min-h-[760px]">
+            <div className="grid grid-cols-12 gap-6 min-h-full items-stretch overflow-y-auto pr-2 pb-4 no-scrollbar">
+              <div className="col-span-4 flex min-h-[940px]">
                 <AtmosphereView
                   scores={scores}
                   mode={mode}
@@ -3061,7 +3107,7 @@ const App: React.FC = () => {
                   todayRecordCount={Math.max(todayEmotionRecords.length, todayLiveSamples.length)}
                 />
               </div>
-              <div className="col-span-5 min-h-[760px]">
+              <div className="col-span-5 flex min-h-[940px]">
                 <MoodChart
                   events={events}
                   isGuest={isGuest}
@@ -3070,7 +3116,7 @@ const App: React.FC = () => {
                   riskUpdatedAt={riskUpdatedAt}
                 />
               </div>
-              <div className="col-span-3 min-h-[760px] flex flex-col gap-4">
+              <div className="col-span-3 flex min-h-[940px] flex-col gap-4">
                 <DashboardWorkbench
                   currentEmotion={dashboardSummary.current}
                   sampleCount={dashboardSummary.sampleCount}
@@ -3098,7 +3144,7 @@ const App: React.FC = () => {
                   onGenerateSummary={() => void handleGenerateDashboardSummary()}
                 />
 
-                <div className="ios-feed-shell rounded-[2.35rem] overflow-hidden flex flex-col animate-rise flex-1">
+                <div className="ios-feed-shell rounded-[2.35rem] overflow-hidden flex min-h-[300px] flex-col animate-rise flex-1">
                   <div className="ios-liquid-blob" />
                   <div className="px-6 pt-6 pb-5">
                     <div className="flex items-center justify-between">
@@ -3169,25 +3215,39 @@ const App: React.FC = () => {
           )}
 
           {activeTab === Tab.CHAT && (
-            <div className="h-full max-w-6xl mx-auto w-full animate-rise">
-              <ChatInterface
-                currentEmotion={scores.S > 0.5 ? EmotionType.ANXIOUS : EmotionType.CALM}
-                initialMessages={messages}
-                onSendMessage={handleChatUpdate}
-                isGuest={isGuest}
-                voiceState={voiceState}
-                expressionLabel={expressionLabelForChat}
-                expressionConfidence={expressionConfidenceForChat}
-                audioEnabled={mediaState.audioEnabled}
-              />
+            <div className="ios-subpage-scene h-full flex flex-col gap-3 animate-rise">
+              <div className="ios-liquid-blob ios-liquid-blob--focus" />
+              <div className="flex-1 min-h-0 max-w-6xl mx-auto w-full">
+                <ChatInterface
+                  currentEmotion={scores.S > 0.5 ? EmotionType.ANXIOUS : EmotionType.CALM}
+                  initialMessages={messages}
+                  onSendMessage={handleChatUpdate}
+                  isGuest={isGuest}
+                  assistantRuntime={assistantRuntime}
+                  assistantRuntimeError={assistantRuntimeError}
+                  voiceState={voiceState}
+                  expressionLabel={expressionLabelForChat}
+                  expressionConfidence={expressionConfidenceForChat}
+                  audioEnabled={mediaState.audioEnabled}
+                />
+              </div>
             </div>
           )}
           {activeTab === Tab.PERSONA && (
-            <CompanionProfilePanel />
+            <div className="ios-subpage-scene h-full flex flex-col gap-3 animate-rise">
+              <div className="ios-liquid-blob ios-liquid-blob--focus" />
+              <div className="flex-1 min-h-0">
+                <CompanionProfilePanel />
+              </div>
+            </div>
           )}
           {activeTab === Tab.FOCUS && (
-            <div className="h-full w-full grid grid-cols-12 gap-6">
-              <div className="col-span-5 ios-float-card rounded-[2.5rem] p-8 flex flex-col animate-rise">
+            <div className="ios-subpage-scene h-full flex flex-col gap-3 animate-rise">
+              <div className="ios-liquid-blob ios-liquid-blob--focus" />
+              <div className="h-full w-full grid grid-cols-12 gap-6 flex-1 min-h-0">
+              <div className="col-span-5 ios-subpage-hero">
+              <div className="ios-liquid-blob ios-liquid-blob--focus" />
+              <div className="ios-stage-panel rounded-[2.5rem] p-8 flex h-full flex-col">
                 <div className="flex items-center justify-between">
                   <div>
                     <h3 className="text-lg font-black text-white">番茄钟</h3>
@@ -3215,7 +3275,7 @@ const App: React.FC = () => {
                     <div className="flex items-center gap-2">
                       <button
                         onClick={() => setPomodoroWorkMin((prev) => Math.max(5, prev - 5))}
-                        className="p-2 rounded-xl bg-white/5 border border-white/10"
+                        className="ios-action-button ios-action-button--secondary p-2 text-slate-100"
                       >
                         <Minus size={14} />
                       </button>
@@ -3225,11 +3285,11 @@ const App: React.FC = () => {
                         min={5}
                         max={90}
                         onChange={(e) => setPomodoroWorkMin(Number(e.target.value))}
-                        className="flex-1 bg-white/5 border border-white/10 rounded-xl p-2 text-xs font-mono font-bold text-indigo-300 outline-none text-center"
+                        className="ios-form-field flex-1 p-2 text-xs font-mono font-bold text-indigo-300 text-center"
                       />
                       <button
                         onClick={() => setPomodoroWorkMin((prev) => Math.min(90, prev + 5))}
-                        className="p-2 rounded-xl bg-white/5 border border-white/10"
+                        className="ios-action-button ios-action-button--secondary p-2 text-slate-100"
                       >
                         <Plus size={14} />
                       </button>
@@ -3242,7 +3302,7 @@ const App: React.FC = () => {
                     <div className="flex items-center gap-2">
                       <button
                         onClick={() => setPomodoroBreakMin((prev) => Math.max(3, prev - 1))}
-                        className="p-2 rounded-xl bg-white/5 border border-white/10"
+                        className="ios-action-button ios-action-button--secondary p-2 text-slate-100"
                       >
                         <Minus size={14} />
                       </button>
@@ -3252,11 +3312,11 @@ const App: React.FC = () => {
                         min={3}
                         max={30}
                         onChange={(e) => setPomodoroBreakMin(Number(e.target.value))}
-                        className="flex-1 bg-white/5 border border-white/10 rounded-xl p-2 text-xs font-mono font-bold text-indigo-300 outline-none text-center"
+                        className="ios-form-field flex-1 p-2 text-xs font-mono font-bold text-indigo-300 text-center"
                       />
                       <button
                         onClick={() => setPomodoroBreakMin((prev) => Math.min(30, prev + 1))}
-                        className="p-2 rounded-xl bg-white/5 border border-white/10"
+                        className="ios-action-button ios-action-button--secondary p-2 text-slate-100"
                       >
                         <Plus size={14} />
                       </button>
@@ -3269,7 +3329,7 @@ const App: React.FC = () => {
                     <div className="flex items-center gap-2">
                       <button
                         onClick={() => setPomodoroRounds((prev) => Math.max(1, prev - 1))}
-                        className="p-2 rounded-xl bg-white/5 border border-white/10"
+                        className="ios-action-button ios-action-button--secondary p-2 text-slate-100"
                       >
                         <Minus size={14} />
                       </button>
@@ -3282,11 +3342,11 @@ const App: React.FC = () => {
                           const value = Number(e.target.value);
                           setPomodoroRounds(Number.isFinite(value) ? Math.max(1, Math.min(12, value)) : 1);
                         }}
-                        className="flex-1 bg-white/5 border border-white/10 rounded-xl p-2 text-xs font-mono font-bold text-indigo-300 outline-none text-center"
+                        className="ios-form-field flex-1 p-2 text-xs font-mono font-bold text-indigo-300 text-center"
                       />
                       <button
                         onClick={() => setPomodoroRounds((prev) => Math.min(12, prev + 1))}
-                        className="p-2 rounded-xl bg-white/5 border border-white/10"
+                        className="ios-action-button ios-action-button--secondary p-2 text-slate-100"
                       >
                         <Plus size={14} />
                       </button>
@@ -3296,7 +3356,7 @@ const App: React.FC = () => {
                 <div className="mt-8 flex items-center gap-3">
                   <button
                     onClick={() => setPomodoroRunning((prev) => !prev)}
-                    className="flex-1 py-3 rounded-2xl bg-indigo-500 text-white font-black text-[11px] uppercase tracking-[0.3em] flex items-center justify-center gap-2"
+                    className="ios-action-button ios-action-button--primary flex-1 py-3 text-[11px] uppercase tracking-[0.3em]"
                   >
                     {pomodoroRunning ? <Pause size={16} /> : <Play size={16} />}
                     {pomodoroRunning ? "暂停" : "开始"}
@@ -3310,14 +3370,17 @@ const App: React.FC = () => {
                         pomodoroWorkMin * 60
                       );
                     }}
-                    className="px-4 py-3 rounded-2xl border border-white/10 text-slate-300 font-black text-[11px] uppercase tracking-[0.2em]"
+                    className="ios-action-button ios-action-button--secondary px-4 py-3 text-[11px] uppercase tracking-[0.2em] text-slate-200"
                   >
                     <RotateCcw size={16} />
                   </button>
                 </div>
               </div>
+              </div>
 
-              <div className="col-span-7 ios-float-card rounded-[2.5rem] p-8 flex flex-col animate-rise" style={{ animationDelay: "80ms" }}>
+              <div className="col-span-7 ios-subpage-hero" style={{ animationDelay: "80ms" }}>
+                <div className="ios-liquid-blob ios-liquid-blob--focus" />
+              <div className="ios-stage-panel rounded-[2.5rem] p-8 flex h-full flex-col">
                 <div className="flex items-center justify-between">
                   <div>
                     <h3 className="text-lg font-black text-white">工作清单</h3>
@@ -3336,9 +3399,9 @@ const App: React.FC = () => {
                     onChange={(e) => setTaskInput(e.target.value)}
                     onKeyDown={(e) => e.key === "Enter" && addTask()}
                     placeholder="添加任务..."
-                    className="flex-1 bg-white/5 border border-white/10 rounded-2xl px-4 py-3 text-sm font-bold text-slate-200 outline-none"
+                    className="ios-form-field flex-1 px-4 py-3 text-sm font-bold text-slate-200"
                   />
-                  <div className="flex items-center gap-2 bg-white/5 border border-white/10 rounded-2xl px-3 py-2">
+                  <div className="ios-stage-tile flex items-center gap-2 rounded-2xl px-3 py-2">
                     <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest">分钟</span>
                     <input
                       type="number"
@@ -3354,7 +3417,7 @@ const App: React.FC = () => {
                   </div>
                   <button
                     onClick={addTask}
-                    className="px-4 py-3 rounded-2xl bg-indigo-500 text-white font-black text-[10px] uppercase tracking-widest"
+                    className="ios-action-button ios-action-button--primary px-4 py-3 text-[10px] uppercase tracking-widest"
                   >
                     添加
                   </button>
@@ -3365,7 +3428,7 @@ const App: React.FC = () => {
                     <div
                       key={task.id}
                       className={`flex items-center justify-between gap-3 p-4 rounded-2xl border transition-all ${
-                        task.done ? "bg-white/5 border-white/10" : "bg-white/10 border-white/20"
+                        task.done ? "ios-stage-tile border-white/10" : "ios-stage-panel border-white/18"
                       }`}
                     >
                       <button onClick={() => toggleTask(task.id)} className="flex items-center gap-3 text-left">
@@ -3389,7 +3452,7 @@ const App: React.FC = () => {
                       </button>
                       <button
                         onClick={() => deleteTask(task.id)}
-                        className="p-2 rounded-xl bg-white/5 border border-white/10 text-slate-400 hover:text-rose-300"
+                        className="ios-action-button ios-action-button--secondary p-2 text-slate-400 hover:text-rose-300"
                       >
                         <Trash2 size={14} />
                       </button>
@@ -3402,22 +3465,28 @@ const App: React.FC = () => {
                   )}
                 </div>
               </div>
+              </div>
+              </div>
             </div>
           )}
           {activeTab === Tab.CAMERA && (
-            <div className="h-full w-full">
-              <CameraPanel
-                status={deviceStatus}
-                videoEnabled={mediaState.videoEnabled}
-                active={activeTab === Tab.CAMERA}
-              />
+            <div className="ios-subpage-scene h-full flex flex-col gap-3 animate-rise">
+              <div className="ios-liquid-blob ios-liquid-blob--focus" />
+              <div className="h-full w-full flex-1 min-h-0">
+                <CameraPanel
+                  status={deviceStatus}
+                  videoEnabled={mediaState.videoEnabled}
+                  active={activeTab === Tab.CAMERA}
+                />
+              </div>
             </div>
           )}
           <div
-            className={`${activeTab === Tab.DEVICE ? "h-full w-full overflow-y-auto pr-1 no-scrollbar" : "hidden"} `}
+            className={`${activeTab === Tab.DEVICE ? "ios-subpage-scene h-full w-full overflow-y-auto pr-1 no-scrollbar flex flex-col gap-3 animate-rise" : "hidden"} `}
             aria-hidden={activeTab !== Tab.DEVICE}
           >
-            <div className="min-h-full">
+            <div className="ios-liquid-blob ios-liquid-blob--focus" />
+            <div className="min-h-full flex-1">
               <DeviceMonitor
                 key={`device-monitor-${deviceViewKey}`}
                 status={deviceStatus}
@@ -3442,18 +3511,22 @@ const App: React.FC = () => {
             </div>
           </div>
           {activeTab === Tab.CONTROL && (
-            <div className="h-full w-full">
-              <SettingsPanel
-                settings={deviceSettings}
-                isGuest={isGuest}
-                onSave={saveDeviceSettings}
-                onClose={closeSettingsFromDesktop}
-              />
+            <div className="ios-subpage-scene h-full flex flex-col gap-3 animate-rise">
+              <div className="ios-liquid-blob ios-liquid-blob--focus" />
+              <div className="h-full w-full flex-1 min-h-0">
+                <SettingsPanel
+                  settings={deviceSettings}
+                  isGuest={isGuest}
+                  onSave={saveDeviceSettings}
+                  onClose={closeSettingsFromDesktop}
+                />
+              </div>
             </div>
           )}
           {activeTab === Tab.PROFILE && (
-            <div className="h-full w-full overflow-y-auto pr-1 no-scrollbar">
-              <div className="w-full max-w-5xl mx-auto ios-float-card rounded-[2.5rem] p-10 animate-pop-in">
+            <div className="ios-subpage-scene h-full w-full overflow-y-auto pr-1 no-scrollbar flex flex-col gap-3 animate-rise">
+              <div className="ios-liquid-blob ios-liquid-blob--focus" />
+              <div className="w-full max-w-5xl mx-auto ios-stage-panel ios-stage-panel--deep rounded-[2.5rem] p-10 animate-pop-in">
                 <div className="flex items-center gap-6">
                   <div className="w-20 h-20 rounded-full border border-white/10 overflow-hidden">
                     <img src={resolvedAvatar} alt="avatar" className="w-full h-full object-cover" />
@@ -3473,10 +3546,10 @@ const App: React.FC = () => {
 
                 {!isGuest && (
                   <div className="mt-5 grid grid-cols-2 gap-4 text-[10px] font-semibold text-slate-400">
-                    <div className="rounded-xl border border-white/10 bg-white/5 px-3 py-2">
+                    <div className="ios-stage-tile rounded-xl px-3 py-2">
                       创建时间：{profileCreatedAt ? new Date(profileCreatedAt * 1000).toLocaleString() : "-"}
                     </div>
-                    <div className="rounded-xl border border-white/10 bg-white/5 px-3 py-2">
+                    <div className="ios-stage-tile rounded-xl px-3 py-2">
                       上次更新：{profileUpdatedAt ? new Date(profileUpdatedAt * 1000).toLocaleString() : "-"}
                     </div>
                   </div>
@@ -3498,7 +3571,7 @@ const App: React.FC = () => {
                     <input
                       value={profileDraftName}
                       onChange={(e) => setProfileDraftName(e.target.value)}
-                      className="w-full bg-slate-900/60 border border-white/5 rounded-2xl py-3 px-4 text-white font-bold outline-none focus:ring-2 focus:ring-indigo-500/30"
+                      className="ios-form-field py-3 px-4 text-white font-bold"
                       placeholder="输入你的昵称"
                     />
                   </div>
@@ -3509,7 +3582,7 @@ const App: React.FC = () => {
                     <input
                       value={profileDraftAvatar}
                       onChange={(e) => setProfileDraftAvatar(e.target.value)}
-                      className="w-full bg-slate-900/60 border border-white/5 rounded-2xl py-3 px-4 text-white font-bold outline-none focus:ring-2 focus:ring-indigo-500/30"
+                      className="ios-form-field py-3 px-4 text-white font-bold"
                       placeholder="https://..."
                     />
                   </div>
@@ -3520,7 +3593,7 @@ const App: React.FC = () => {
                     <textarea
                       value={profileDraftBio}
                       onChange={(e) => setProfileDraftBio(e.target.value)}
-                      className="w-full min-h-[84px] bg-slate-900/60 border border-white/5 rounded-2xl py-3 px-4 text-white font-semibold outline-none focus:ring-2 focus:ring-indigo-500/30 resize-none"
+                      className="ios-form-field min-h-[84px] resize-none py-3 px-4 text-white font-semibold"
                       placeholder="一句话介绍你自己"
                     />
                   </div>
@@ -3531,7 +3604,7 @@ const App: React.FC = () => {
                     <input
                       value={profileDraftLocation}
                       onChange={(e) => setProfileDraftLocation(e.target.value)}
-                      className="w-full bg-slate-900/60 border border-white/5 rounded-2xl py-3 px-4 text-white font-bold outline-none focus:ring-2 focus:ring-indigo-500/30"
+                      className="ios-form-field py-3 px-4 text-white font-bold"
                       placeholder="例如：上海 / 深圳 / Remote"
                     />
                   </div>
@@ -3542,7 +3615,7 @@ const App: React.FC = () => {
                     <input
                       value={profileUsername ? `@${profileUsername}` : ""}
                       readOnly
-                      className="w-full bg-slate-900/40 border border-white/5 rounded-2xl py-3 px-4 text-slate-300 font-bold outline-none"
+                      className="ios-form-field py-3 px-4 text-slate-300 font-bold"
                       placeholder="登录后显示"
                     />
                   </div>
@@ -3551,19 +3624,19 @@ const App: React.FC = () => {
                 <div className="flex gap-4 mt-6">
                   <button
                     onClick={handlePickAvatar}
-                    className="flex-1 py-3 rounded-2xl text-[10px] font-black uppercase tracking-widest bg-white/5 text-slate-200 border border-white/10"
+                    className="ios-action-button ios-action-button--secondary flex-1 py-3 text-[10px] uppercase tracking-widest"
                   >
                     选择本地头像
                   </button>
                   <button
                     onClick={handleAvatarAuto}
-                    className="flex-1 py-3 rounded-2xl text-[10px] font-black uppercase tracking-widest bg-indigo-500/15 text-indigo-200 border border-indigo-400/20"
+                    className="ios-action-button ios-action-button--primary flex-1 py-3 text-[10px] uppercase tracking-widest"
                   >
                     生成头像
                   </button>
                   <button
                     onClick={handleProfileReset}
-                    className="flex-1 py-3 rounded-2xl text-[10px] font-black uppercase tracking-widest bg-white/5 text-slate-300 border border-white/10"
+                    className="ios-action-button ios-action-button--secondary flex-1 py-3 text-[10px] uppercase tracking-widest"
                   >
                     恢复默认
                   </button>
@@ -3574,14 +3647,14 @@ const App: React.FC = () => {
                 <div className="mt-6 flex justify-between items-center">
                   <button
                     onClick={handleLogout}
-                    className="px-6 py-3 rounded-2xl font-black text-[10px] uppercase tracking-[0.3em] text-rose-300 border border-rose-400/30 bg-rose-500/10 hover:bg-rose-500/20 transition-colors"
+                    className="ios-action-button ios-action-button--danger px-6 py-3 text-[10px] uppercase tracking-[0.3em]"
                   >
                     {isGuest ? "退出访客" : "退出登录"}
                   </button>
                   <button
                     onClick={handleProfileSave}
                     disabled={profileSaving}
-                    className="px-8 py-3 rounded-2xl font-black text-[11px] uppercase tracking-[0.3em] bg-white text-slate-950 disabled:opacity-60"
+                    className="ios-action-button ios-action-button--primary px-8 py-3 text-[11px] uppercase tracking-[0.3em]"
                   >
                     {profileSaving ? "保存中..." : "保存资料"}
                   </button>

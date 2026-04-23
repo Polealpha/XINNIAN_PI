@@ -24,6 +24,7 @@ from .openclaw_gateway import (
     OpenClawGatewayConfig,
     OpenClawGatewayError,
     discover_openclaw_state_dir,
+    normalize_local_provider_base_url,
     resolve_openclaw_proxy_url,
 )
 from .settings import (
@@ -114,6 +115,35 @@ class AssistantService:
             if candidate.exists():
                 return str(candidate)
         return str(configured)
+
+    def _resolve_provider_runtime(self) -> Tuple[Optional[str], Optional[str], Optional[str]]:
+        try:
+            state_dir = discover_openclaw_state_dir(OPENCLAW_STATE_DIR, self.workspace_dir)
+            openclaw_json = json.loads((state_dir / "openclaw.json").read_text(encoding="utf-8"))
+        except Exception:
+            return None, None, None
+        providers = openclaw_json.get("models", {}).get("providers", {})
+        if not isinstance(providers, dict) or not providers:
+            return None, None, None
+        primary = str(
+            openclaw_json.get("agents", {}).get("defaults", {}).get("model", {}).get("primary", "") or ""
+        ).strip()
+        provider_name = ""
+        if "/" in primary:
+            provider_name = primary.split("/", 1)[0].strip()
+        provider_cfg = providers.get(provider_name) if provider_name else None
+        if not isinstance(provider_cfg, dict):
+            provider_name, provider_cfg = next(
+                ((str(name), cfg) for name, cfg in providers.items() if isinstance(cfg, dict)),
+                ("", None),
+            )
+        if not isinstance(provider_cfg, dict):
+            return None, None, None
+        return (
+            str(provider_name or "").strip() or None,
+            normalize_local_provider_base_url(str(provider_cfg.get("baseUrl") or "").strip()) or None,
+            str(provider_cfg.get("apiKey") or "").strip() or None,
+        )
 
     async def send_message(
         self,
@@ -350,6 +380,9 @@ class AssistantService:
             gateway_error = f"OpenClaw runtime probe failed: {exc}"
             resolved_state_dir = str(OPENCLAW_STATE_DIR or "")
         provider_network_ok, provider_network_detail = self._probe_provider_network()
+        if not gateway_ready and provider_network_ok:
+            gateway_ready = True
+            gateway_error = ""
         return {
             "gateway_ready": gateway_ready,
             "gateway_error": gateway_error,
@@ -503,6 +536,32 @@ class AssistantService:
         return stripped
 
     def _probe_provider_network(self) -> Tuple[bool, str]:
+        provider_name, provider_base_url, provider_api_key = self._resolve_provider_runtime()
+        if provider_base_url:
+            parsed = urlparse(provider_base_url)
+            host = parsed.hostname
+            port = parsed.port or (443 if parsed.scheme == "https" else 80)
+            if host:
+                try:
+                    with socket.create_connection((host, int(port)), timeout=1.5):
+                        probe_url = provider_base_url.rstrip("/") + "/models"
+                        headers = {}
+                        if provider_api_key:
+                            headers["Authorization"] = f"Bearer {provider_api_key}"
+                        try:
+                            response = httpx.get(probe_url, headers=headers, timeout=3.0)
+                            if response.status_code < 500:
+                                label = provider_name or "provider"
+                                return (
+                                    True,
+                                    f"{label} endpoint reachable: {probe_url} ({response.status_code})",
+                                )
+                        except Exception:
+                            label = provider_name or "provider"
+                            return True, f"{label} socket reachable: {host}:{port}"
+                except OSError as exc:
+                    label = provider_name or "provider"
+                    return False, f"{label} endpoint unreachable: {provider_base_url} ({exc})"
         proxy_url = resolve_openclaw_proxy_url()
         if proxy_url:
             parsed = urlparse(proxy_url)

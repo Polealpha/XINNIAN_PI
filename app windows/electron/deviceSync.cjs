@@ -4,7 +4,7 @@ const fs = require("fs");
 const { spawn, spawnSync, execFile } = require("child_process");
 const { app } = require("electron");
 
-const DEFAULT_API_BASE = "http://39.97.33.236:8000";
+const DEFAULT_API_BASE = "http://127.0.0.1:8012";
 const POLL_INTERVAL_MS = 15000;
 
 const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
