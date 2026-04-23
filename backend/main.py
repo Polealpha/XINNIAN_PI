@@ -5660,7 +5660,11 @@ def assistant_runtime_status(
     credentials: HTTPAuthorizationCredentials = Depends(bearer_scheme),
     conn: Connection = Depends(get_db),
 ) -> AssistantRuntimeStatusResponse:
-    _ = _parse_access_token_for_local_desktop(credentials, conn, request)
+    if credentials is not None:
+        try:
+            _ = _parse_access_token_for_local_desktop(credentials, conn, request)
+        except HTTPException:
+            pass
     return AssistantRuntimeStatusResponse(ok=True, **assistant_service.runtime_status())
 
 

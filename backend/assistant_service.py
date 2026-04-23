@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import ctypes
+import os
 import socket
 import json
 import re
@@ -40,6 +41,15 @@ from .settings import (
     OPENCLAW_TIMEOUT_MS,
     OPENCLAW_WORKSPACE_DIR,
 )
+
+
+def _read_json_if_exists(path: Path) -> Optional[Dict[str, Any]]:
+    try:
+        if path.exists():
+            return json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+    return None
 
 
 def _now_ms() -> int:
@@ -138,6 +148,8 @@ class AssistantService:
             device_id=device_id,
             sender_id=sender_id,
         )
+        direct_provider_config = self._load_direct_provider_chat_config()
+        prefer_direct_provider = self._should_prefer_direct_provider_chat(direct_provider_config)
         tool_results = await self._run_explicit_tools(
             conn,
             user_id,
@@ -150,7 +162,20 @@ class AssistantService:
             reply = self._compose_tool_only_reply(tool_results)
         else:
             try:
-                if exact_reply_target and not tool_results and not attachments:
+                if prefer_direct_provider:
+                    reply = await self._send_message_via_direct_provider(
+                        conn=conn,
+                        user_id=user_id,
+                        session_key=resolved_session_key,
+                        text=text,
+                        tool_results=tool_results,
+                        attachments=attachments,
+                        metadata=metadata,
+                        assistant_mode=assistant_mode,
+                        exact_reply_target=exact_reply_target,
+                        provider_config=direct_provider_config,
+                    )
+                elif exact_reply_target and not tool_results and not attachments:
                     reply = await self.gateway.send_message(
                         f"{resolved_session_key}:exact:{_now_ms()}",
                         self._compose_exact_reply_message(exact_reply_target),
@@ -169,43 +194,118 @@ class AssistantService:
                     reply = await self.gateway.send_message(resolved_session_key, message)
                 reply = self._sanitize_gateway_reply(reply)
                 if not tool_results and not str(reply or "").strip():
-                    reply = await self.gateway.send_message(
-                        f"{resolved_session_key}:rewrite:{_now_ms()}",
-                        self._compose_retry_message(
-                            text,
-                            normalized_surface,
-                            assistant_mode,
-                            native_control_enabled,
-                        ),
-                    )
+                    if prefer_direct_provider:
+                        reply = await self._send_message_via_direct_provider(
+                            conn=conn,
+                            user_id=user_id,
+                            session_key=resolved_session_key,
+                            text=self._compose_retry_message(
+                                text,
+                                normalized_surface,
+                                assistant_mode,
+                                native_control_enabled,
+                            ),
+                            tool_results=tool_results,
+                            attachments=attachments,
+                            metadata=metadata,
+                            assistant_mode="product",
+                            exact_reply_target=None,
+                            provider_config=direct_provider_config,
+                            include_history=False,
+                        )
+                    else:
+                        reply = await self.gateway.send_message(
+                            f"{resolved_session_key}:rewrite:{_now_ms()}",
+                            self._compose_retry_message(
+                                text,
+                                normalized_surface,
+                                assistant_mode,
+                                native_control_enabled,
+                            ),
+                        )
                     reply = self._sanitize_gateway_reply(reply)
                 if exact_reply_target and reply != exact_reply_target:
-                    reply = await self.gateway.send_message(
-                        f"{resolved_session_key}:exact-retry:{_now_ms()}",
-                        self._compose_exact_reply_message(exact_reply_target),
-                    )
+                    if prefer_direct_provider:
+                        reply = await self._send_message_via_direct_provider(
+                            conn=conn,
+                            user_id=user_id,
+                            session_key=resolved_session_key,
+                            text=text,
+                            tool_results=tool_results,
+                            attachments=attachments,
+                            metadata=metadata,
+                            assistant_mode=assistant_mode,
+                            exact_reply_target=exact_reply_target,
+                            provider_config=direct_provider_config,
+                            include_history=False,
+                        )
+                    else:
+                        reply = await self.gateway.send_message(
+                            f"{resolved_session_key}:exact-retry:{_now_ms()}",
+                            self._compose_exact_reply_message(exact_reply_target),
+                        )
                     reply = self._sanitize_gateway_reply(reply)
                 if not tool_results and self._reply_is_false_heartbeat(reply, text):
-                    reply = await self.gateway.send_message(
-                        f"{resolved_session_key}:retry:{_now_ms()}",
-                        self._compose_retry_message(
-                            text,
-                            normalized_surface,
-                            assistant_mode,
-                            native_control_enabled,
-                        ),
-                    )
+                    if prefer_direct_provider:
+                        reply = await self._send_message_via_direct_provider(
+                            conn=conn,
+                            user_id=user_id,
+                            session_key=resolved_session_key,
+                            text=self._compose_retry_message(
+                                text,
+                                normalized_surface,
+                                assistant_mode,
+                                native_control_enabled,
+                            ),
+                            tool_results=tool_results,
+                            attachments=attachments,
+                            metadata=metadata,
+                            assistant_mode="product",
+                            exact_reply_target=None,
+                            provider_config=direct_provider_config,
+                            include_history=False,
+                        )
+                    else:
+                        reply = await self.gateway.send_message(
+                            f"{resolved_session_key}:retry:{_now_ms()}",
+                            self._compose_retry_message(
+                                text,
+                                normalized_surface,
+                                assistant_mode,
+                                native_control_enabled,
+                            ),
+                        )
                     reply = self._sanitize_gateway_reply(reply)
                 if assistant_mode == "agent" and self._looks_like_setup_or_internal_reply(reply):
-                    reply = await self.gateway.send_message(
-                        f"{resolved_session_key}:repair:{_now_ms()}",
-                        self._compose_retry_message(
-                            text,
-                            normalized_surface,
-                            assistant_mode,
-                            native_control_enabled,
-                        ),
-                    )
+                    if prefer_direct_provider:
+                        reply = await self._send_message_via_direct_provider(
+                            conn=conn,
+                            user_id=user_id,
+                            session_key=resolved_session_key,
+                            text=self._compose_retry_message(
+                                text,
+                                normalized_surface,
+                                assistant_mode,
+                                native_control_enabled,
+                            ),
+                            tool_results=tool_results,
+                            attachments=attachments,
+                            metadata=metadata,
+                            assistant_mode="product",
+                            exact_reply_target=None,
+                            provider_config=direct_provider_config,
+                            include_history=False,
+                        )
+                    else:
+                        reply = await self.gateway.send_message(
+                            f"{resolved_session_key}:repair:{_now_ms()}",
+                            self._compose_retry_message(
+                                text,
+                                normalized_surface,
+                                assistant_mode,
+                                native_control_enabled,
+                            ),
+                        )
                     reply = self._sanitize_gateway_reply(reply)
                 if assistant_mode == "agent" and (
                     self._looks_like_setup_or_internal_reply(reply)
@@ -229,7 +329,41 @@ class AssistantService:
                     if fallback_results:
                         tool_results = fallback_results
                         reply = self._compose_tool_only_reply(tool_results)
-            except OpenClawGatewayError:
+            except OpenClawGatewayError as exc:
+                if self._is_context_overflow_error(exc):
+                    try:
+                        await self.gateway.reset_session(resolved_session_key)
+                        retry_message = self._compose_openclaw_message(
+                            text,
+                            normalized_surface,
+                            resolved_session_key,
+                            tool_results,
+                            attachments,
+                            metadata,
+                            assistant_mode,
+                            native_control_enabled,
+                        )
+                        reply = await self.gateway.send_message(resolved_session_key, retry_message)
+                        reply = self._sanitize_gateway_reply(reply)
+                    except OpenClawGatewayError:
+                        reply = ""
+                elif self._should_fallback_to_direct_provider(exc, direct_provider_config):
+                    try:
+                        reply = await self._send_message_via_direct_provider(
+                            conn=conn,
+                            user_id=user_id,
+                            session_key=resolved_session_key,
+                            text=text,
+                            tool_results=tool_results,
+                            attachments=attachments,
+                            metadata=metadata,
+                            assistant_mode=assistant_mode,
+                            exact_reply_target=exact_reply_target,
+                            provider_config=direct_provider_config,
+                        )
+                        reply = self._sanitize_gateway_reply(reply)
+                    except OpenClawGatewayError:
+                        reply = ""
                 if not tool_results and assistant_mode == "agent":
                     tool_results = await self._run_explicit_tools(
                         conn,
@@ -250,6 +384,21 @@ class AssistantService:
             "tool_results": [result.__dict__ for result in tool_results],
             "timestamp_ms": _now_ms(),
         }
+
+    def _is_context_overflow_error(self, error: Exception) -> bool:
+        detail = str(error or "").strip().lower()
+        if not detail:
+            return False
+        return any(
+            marker in detail
+            for marker in (
+                "context overflow",
+                "prompt too large",
+                "max_model_len",
+                "max_total_tokens",
+                "maximum context length",
+            )
+        )
 
     async def reset_session(
         self,
@@ -339,7 +488,14 @@ class AssistantService:
         try:
             state_dir = discover_openclaw_state_dir(OPENCLAW_STATE_DIR, self.workspace_dir)
             gateway_runtime = self.gateway._load_runtime()
-            gateway_ready, gateway_error = self._probe_gateway_socket(str(gateway_runtime.get("url") or ""))
+            gateway_url = str(gateway_runtime.get("url") or OPENCLAW_GATEWAY_URL or "").strip()
+            gateway_ready, gateway_error = self._probe_gateway_socket(gateway_url)
+            if not gateway_ready and str(OPENCLAW_GATEWAY_URL or "").strip():
+                fallback_ready, fallback_error = self._probe_gateway_socket(str(OPENCLAW_GATEWAY_URL or "").strip())
+                if fallback_ready:
+                    gateway_ready, gateway_error = fallback_ready, ""
+                elif not gateway_error:
+                    gateway_error = fallback_error
             resolved_state_dir = str(state_dir)
         except OpenClawGatewayError as exc:
             gateway_ready = False
@@ -376,6 +532,269 @@ class AssistantService:
             ],
             "robot_bridge_ready": True,
         }
+
+    def _load_direct_provider_chat_config(self) -> Optional[Dict[str, Any]]:
+        try:
+            state_dir = discover_openclaw_state_dir(OPENCLAW_STATE_DIR, self.workspace_dir)
+        except Exception:
+            return None
+        auth_candidates = [
+            state_dir / "agents" / "main" / "agent" / "auth-profiles.json",
+            state_dir / "auth-profiles.json",
+        ]
+        profile_payload: Optional[Dict[str, Any]] = None
+        for candidate in auth_candidates:
+            payload = _read_json_if_exists(candidate)
+            if isinstance(payload, dict) and isinstance(payload.get("profiles"), dict):
+                profile_payload = payload
+                break
+        if profile_payload is None:
+            return None
+        profiles = profile_payload.get("profiles") if isinstance(profile_payload.get("profiles"), dict) else {}
+        last_good = profile_payload.get("lastGood") if isinstance(profile_payload.get("lastGood"), dict) else {}
+        profile_id = ""
+        for provider_name in ("zai", "openai", "custom-openai"):
+            candidate = str(last_good.get(provider_name) or "").strip()
+            if candidate:
+                profile_id = candidate
+                break
+        if not profile_id and profiles:
+            profile_id = next(iter(profiles.keys()))
+        profile = profiles.get(profile_id) if profile_id else None
+        if not isinstance(profile, dict):
+            return None
+        base_url = str(profile.get("baseUrl") or "").strip()
+        api_key = str(profile.get("key") or profile.get("apiKey") or "").strip()
+        model = str(profile.get("model") or "").strip()
+        endpoint = str(profile.get("endpoint") or "").strip().lower()
+        provider = str(profile.get("provider") or "").strip().lower() or "zai"
+        if not base_url or not api_key or not model:
+            return None
+
+        model_info: Dict[str, Any] = {}
+        model_candidates = [
+            state_dir / "agents" / "main" / "agent" / "models.json",
+            state_dir / "agents" / "default" / "agent" / "models.json",
+        ]
+        for candidate in model_candidates:
+            payload = _read_json_if_exists(candidate)
+            if not isinstance(payload, dict):
+                continue
+            providers = payload.get("providers") if isinstance(payload.get("providers"), dict) else {}
+            provider_entry = providers.get(provider) if isinstance(providers.get(provider), dict) else {}
+            models = provider_entry.get("models") if isinstance(provider_entry.get("models"), list) else []
+            for item in models:
+                if isinstance(item, dict) and str(item.get("id") or "").strip() == model:
+                    model_info = item
+                    break
+            if model_info:
+                break
+        return {
+            "base_url": base_url.rstrip("/"),
+            "api_key": api_key,
+            "model": model,
+            "endpoint": endpoint,
+            "provider": provider,
+            "context_window": int(model_info.get("contextWindow") or 0),
+            "max_tokens": int(model_info.get("maxTokens") or 512),
+        }
+
+    def _should_prefer_direct_provider_chat(self, provider_config: Optional[Dict[str, Any]]) -> bool:
+        if not isinstance(provider_config, dict):
+            return False
+        endpoint = str(provider_config.get("endpoint") or "").strip().lower()
+        context_window = int(provider_config.get("context_window") or 0)
+        return endpoint == "custom-openai" or (0 < context_window <= 8192)
+
+    def _should_fallback_to_direct_provider(
+        self,
+        error: Exception,
+        provider_config: Optional[Dict[str, Any]],
+    ) -> bool:
+        if not isinstance(provider_config, dict):
+            return False
+        detail = str(error or "").strip().lower()
+        if not detail:
+            return False
+        return any(
+            marker in detail
+            for marker in (
+                "timed out",
+                "timeout",
+                "fetch failed",
+                "network_error",
+                "gateway closed",
+            )
+        )
+
+    async def _send_message_via_direct_provider(
+        self,
+        conn: Connection,
+        user_id: int,
+        session_key: str,
+        text: str,
+        tool_results: List[ToolExecutionResult],
+        attachments: Optional[List[dict]],
+        metadata: Optional[Dict[str, object]],
+        assistant_mode: str,
+        exact_reply_target: Optional[str],
+        provider_config: Optional[Dict[str, Any]],
+        *,
+        include_history: bool = True,
+    ) -> str:
+        if not isinstance(provider_config, dict):
+            raise OpenClawGatewayError("Direct provider config unavailable")
+        messages = self._build_direct_provider_messages(
+            conn=conn,
+            user_id=user_id,
+            session_key=session_key,
+            text=text,
+            tool_results=tool_results,
+            attachments=attachments,
+            metadata=metadata,
+            assistant_mode=assistant_mode,
+            exact_reply_target=exact_reply_target,
+            include_history=include_history,
+        )
+        max_tokens = max(128, min(int(provider_config.get("max_tokens") or 512), 768))
+        payload = {
+            "model": str(provider_config.get("model") or "").strip(),
+            "messages": messages,
+            "temperature": 0.35,
+            "max_tokens": max_tokens,
+        }
+        headers = {
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {str(provider_config.get('api_key') or '').strip()}",
+        }
+        timeout = httpx.Timeout(45.0, connect=10.0)
+        try:
+            async with httpx.AsyncClient(timeout=timeout) as client:
+                response = await client.post(
+                    f"{str(provider_config.get('base_url') or '').rstrip('/')}/chat/completions",
+                    headers=headers,
+                    json=payload,
+                )
+                response.raise_for_status()
+                data = response.json()
+        except Exception as exc:
+            raise OpenClawGatewayError(f"Direct provider chat failed: {exc}") from exc
+
+        choices = data.get("choices") if isinstance(data, dict) else None
+        if not isinstance(choices, list) or not choices:
+            raise OpenClawGatewayError("Direct provider chat returned no choices")
+        first = choices[0] if isinstance(choices[0], dict) else {}
+        message = first.get("message") if isinstance(first.get("message"), dict) else {}
+        content = str(message.get("content") or "").strip()
+        if not content:
+            raise OpenClawGatewayError("Direct provider chat returned empty content")
+        return content
+
+    def _build_direct_provider_messages(
+        self,
+        conn: Connection,
+        user_id: int,
+        session_key: str,
+        text: str,
+        tool_results: List[ToolExecutionResult],
+        attachments: Optional[List[dict]],
+        metadata: Optional[Dict[str, object]],
+        assistant_mode: str,
+        exact_reply_target: Optional[str],
+        *,
+        include_history: bool,
+    ) -> List[Dict[str, str]]:
+        messages: List[Dict[str, str]] = [
+            {
+                "role": "system",
+                "content": self._compose_direct_provider_system_prompt(
+                    assistant_mode=assistant_mode,
+                    care_channel=str((metadata or {}).get("care_channel") or "").strip().lower(),
+                    exact_reply_target=exact_reply_target,
+                ),
+            }
+        ]
+        context_lines: List[str] = []
+        memory_summary = str((metadata or {}).get("memory_summary") or "").strip()
+        if memory_summary:
+            context_lines.append("长期记忆摘要：")
+            context_lines.append(memory_summary[:1200])
+        user_profile = (metadata or {}).get("user_profile")
+        if isinstance(user_profile, dict):
+            profile_name = str(user_profile.get("display_name") or user_profile.get("nickname") or "").strip()
+            if profile_name:
+                context_lines.append(f"当前用户称呼：{profile_name}")
+        if tool_results:
+            context_lines.append("已完成的工具结果：")
+            for item in tool_results[:4]:
+                context_lines.append(f"- {item.name}: {item.detail}")
+        if attachments:
+            context_lines.append(f"附件信息：{json.dumps(attachments[:3], ensure_ascii=False)}")
+        if context_lines:
+            messages.append({"role": "system", "content": "\n".join(context_lines).strip()})
+
+        if include_history:
+            for row in self._fetch_recent_session_history(conn, user_id, session_key, limit=8):
+                sender = str(row.get("sender") or "").strip().lower()
+                message_text = str(row.get("text") or "").strip()
+                if not message_text:
+                    continue
+                role = "assistant" if sender == "assistant" else "user"
+                messages.append({"role": role, "content": message_text[:1200]})
+        messages.append({"role": "user", "content": str(text or "").strip()})
+        return messages
+
+    def _compose_direct_provider_system_prompt(
+        self,
+        assistant_mode: str,
+        care_channel: str,
+        exact_reply_target: Optional[str],
+    ) -> str:
+        if exact_reply_target:
+            return f"你必须只输出下面这段文字，不能多也不能少：{exact_reply_target}"
+        if care_channel == "proactive_care":
+            return (
+                "你是“心念双灵”的中文主动关怀助手。"
+                "回复要短、自然、有温度，先接住情绪，再给一个很小的当下建议。"
+                "默认使用简洁中文回复。"
+                "不要输出内部说明、工具、JSON、链接列表。"
+            )
+        if str(assistant_mode or "").strip().lower() == "agent":
+            return (
+                "你是“心念双灵”的中文助手。当前处于精简直连模式。"
+                "默认使用简洁中文回复。"
+                "优先直接回答用户，不要提及内部系统、工具、工作区、日志或配置。"
+                "如果无法真正执行某个动作，就诚实说明并给出下一步建议。"
+            )
+        return (
+            "你是“心念双灵”的中文陪伴助手。"
+            "默认使用简洁中文回复。"
+            "默认先解决用户当前问题，再决定是否补一句轻量关怀。"
+            "语气自然、简洁、有温度，不说教，不输出内部状态。"
+        )
+
+    def _fetch_recent_session_history(
+        self,
+        conn: Connection,
+        user_id: int,
+        session_key: str,
+        limit: int = 8,
+    ) -> List[Dict[str, Any]]:
+        try:
+            rows = conn.execute(
+                """
+                SELECT sender, text, timestamp_ms
+                FROM chat_messages
+                WHERE user_id = ? AND session_key = ?
+                ORDER BY timestamp_ms DESC
+                LIMIT ?
+                """,
+                (int(user_id), str(session_key or "").strip() or None, max(1, min(int(limit), 20))),
+            ).fetchall()
+        except Exception:
+            return []
+        ordered = list(reversed([dict(row) for row in rows]))
+        return ordered
 
     def list_wechat_mirror_messages(self, session_key: str, limit: int = 200) -> List[Dict[str, object]]:
         try:
@@ -503,6 +922,54 @@ class AssistantService:
         return stripped
 
     def _probe_provider_network(self) -> Tuple[bool, str]:
+        provider_key = str(
+            os.environ.get("ZAI_API_KEY")
+            or os.environ.get("Z_AI_API_KEY")
+            or os.environ.get("OPENAI_API_KEY")
+            or ""
+        ).strip()
+        provider_host = "open.bigmodel.cn"
+        provider_port = 443
+
+        if not provider_key:
+            candidate_paths = [
+                Path(self.workspace_dir).parent / "app windows" / "openclaw-provider.json",
+                Path(os.environ.get("APPDATA") or "") / "emoresonance---dual-robot-companion" / "openclaw-provider.json",
+                Path(os.environ.get("APPDATA") or "") / "EmoResonance" / "openclaw-provider.json",
+                Path.home() / ".openclaw" / "agents" / "main" / "agent" / "auth-profiles.json",
+            ]
+            for candidate in candidate_paths:
+                payload = _read_json_if_exists(candidate)
+                if not isinstance(payload, dict):
+                    continue
+                if str(payload.get("apiKey") or "").strip():
+                    provider_key = str(payload.get("apiKey") or "").strip()
+                    base_url = str(payload.get("baseUrl") or "").strip()
+                    if base_url:
+                        parsed = urlparse(base_url)
+                        provider_host = parsed.hostname or provider_host
+                        provider_port = parsed.port or (443 if parsed.scheme == "https" else 80)
+                    break
+                profiles = payload.get("profiles")
+                if isinstance(profiles, dict):
+                    for profile in profiles.values():
+                        if not isinstance(profile, dict):
+                            continue
+                        key = str(profile.get("key") or profile.get("apiKey") or "").strip()
+                        if key:
+                            provider_key = key
+                            base_url = str(profile.get("baseUrl") or "").strip()
+                            if base_url:
+                                parsed = urlparse(base_url)
+                                provider_host = parsed.hostname or provider_host
+                                provider_port = parsed.port or (443 if parsed.scheme == "https" else 80)
+                            break
+                if provider_key:
+                    break
+
+        if not provider_key:
+            return False, "本地 provider 未配置 API key"
+
         proxy_url = resolve_openclaw_proxy_url()
         if proxy_url:
             parsed = urlparse(proxy_url)
@@ -515,7 +982,7 @@ class AssistantService:
                     return True, f"provider traffic routed via proxy: {proxy_url}"
             except OSError as exc:
                 return False, f"configured proxy unreachable: {proxy_url} ({exc})"
-        targets = [("api.openai.com", 443), ("chatgpt.com", 443)]
+        targets = [(provider_host, int(provider_port))]
         errors: List[str] = []
         for host, port in targets:
             try:
