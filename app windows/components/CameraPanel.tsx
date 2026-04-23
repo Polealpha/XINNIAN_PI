@@ -169,6 +169,17 @@ export const CameraPanel: React.FC<CameraPanelProps> = ({
     };
   }, [active, robotRuntimeHost]);
 
+  useEffect(() => {
+    if (!active) return;
+    if (!robotRuntimeHost) return;
+    if (!robotOnline || !robotCameraReady) return;
+    setRobotPreviewError("");
+    setRobotPreviewOk(false);
+    setRobotTransportMode("stream");
+    setRobotStreamNonce(Date.now());
+    setSnapshotNonce(Date.now());
+  }, [active, robotRuntimeHost, robotOnline, robotCameraReady]);
+
   const refreshVideoBox = () => {
     const stage = localStageRef.current;
     const video = videoRef.current;
