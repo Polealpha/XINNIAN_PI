@@ -21,6 +21,14 @@ build/
 *.jpeg
 *.png
 *.mp4
+.tmp_*
+reports/
+runtime_backups/
+backend/uploads/
+backend/*.db-journal
+backend/*.sqlite-journal
+app windows/vendor/python-site-packages/**/__pycache__/
+app windows/vendor/python-site-packages/**/*.pyc
 app windows/node_modules/
 app windows/dist/
 app windows/release/

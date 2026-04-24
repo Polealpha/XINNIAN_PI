@@ -168,13 +168,24 @@ const buildAuthHeadersOnly = async (path: string, withAuth: boolean) => {
   return headers;
 };
 
-const fetchWithTimeout = async (url: string, init: RequestInit, timeoutMs = REQUEST_TIMEOUT_MS) => {
+const fetchWithTimeout = async (
+  url: string,
+  init: RequestInit,
+  timeoutMs = REQUEST_TIMEOUT_MS,
+  externalSignal?: AbortSignal,
+) => {
   const controller = new AbortController();
+  const abort = () => controller.abort();
+  if (externalSignal?.aborted) {
+    abort();
+  }
+  externalSignal?.addEventListener("abort", abort, { once: true });
   const timer = window.setTimeout(() => controller.abort(), timeoutMs);
   try {
     return await fetch(url, { ...init, signal: controller.signal });
   } finally {
     window.clearTimeout(timer);
+    externalSignal?.removeEventListener("abort", abort);
   }
 };
 
@@ -228,6 +239,30 @@ export const apiPost = async (path: string, body: unknown, withAuth = true, retr
     throw await buildHttpError(response, "POST", path);
   }
   return response.json();
+};
+
+export const apiPostStream = async (
+  path: string,
+  body: unknown,
+  withAuth = true,
+  retried = false,
+  timeoutMs?: number,
+  signal?: AbortSignal,
+) => {
+  const base = resolveBaseForPath(path);
+  const response = await fetchWithTimeout(`${base}${path}`, {
+    method: "POST",
+    headers: await buildHeaders(path, withAuth),
+    body: body === undefined ? undefined : JSON.stringify(body),
+  }, resolveTimeoutForPath(path, timeoutMs), signal);
+  if (response.status === 401 && withAuth && !retried) {
+    await refreshAccessToken(path);
+    return apiPostStream(path, body, withAuth, true, timeoutMs, signal);
+  }
+  if (!response.ok) {
+    throw await buildHttpError(response, "POST", path);
+  }
+  return response;
 };
 
 export const apiPostForm = async (path: string, body: FormData, withAuth = true, retried = false, timeoutMs?: number) => {

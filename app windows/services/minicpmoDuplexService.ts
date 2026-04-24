@@ -4,6 +4,7 @@
   connectAssistantSessionEvents,
   interruptAssistantSession,
   startAssistantSession,
+  streamAssistantSpeech,
   stopAssistantSession,
 } from "./assistantService";
 
@@ -41,6 +42,8 @@ const BARGE_IN_FRAMES = 2;
 const LISTEN_FINALIZE_IDLE_MS = 1400;
 const BARGE_IN_COOLDOWN_MS = 900;
 const OFFICIAL_DUPLEX_OWNS_REPLY = true;
+const USE_MICROSOFT_EDGE_TTS_OUTPUT = true;
+const MICROSOFT_EDGE_TTS_VOICE = "zh-CN-XiaoyiNeural";
 
 const STATE_DETAIL: Record<DuplexRuntimeState, string> = {
   idle: "full duplex stopped",
@@ -97,6 +100,30 @@ const base64ToFloat32 = (audioBase64: string): Float32Array => {
   return new Float32Array(bytes.buffer);
 };
 
+const pickPreferredZhFemaleVoice = (): SpeechSynthesisVoice | null => {
+  if (!("speechSynthesis" in window)) return null;
+  const voices = window.speechSynthesis.getVoices();
+  if (!voices.length) return null;
+  const exactPreferred = [
+    /yaoyao/i,
+    /huihui/i,
+    /xiaoyi/i,
+    /xiaoxiao/i,
+    /zira/i,
+  ];
+  const femaleHints = /(huihui|yaoyao|xiaoxiao|xiaoyi|xiaobei|xiaoni|female|zira)/i;
+  const maleHints = /(kangkang|yunjian|yunxi|yunyang|yunxia|male|david|mark)/i;
+  const zhVoices = voices.filter((voice) => /^zh/i.test(String(voice.lang || "")) || /zh[-_]?cn/i.test(String(voice.name || "")) || /zh[-_]?cn/i.test(String(voice.voiceURI || "")));
+  for (const pattern of exactPreferred) {
+    const hit = zhVoices.find((voice) => pattern.test(String(voice.name || "")) || pattern.test(String(voice.voiceURI || "")));
+    if (hit) return hit;
+  }
+  const preferred = zhVoices.find((voice) => femaleHints.test(String(voice.name || "")) || femaleHints.test(String(voice.voiceURI || "")));
+  if (preferred) return preferred;
+  const safeZh = zhVoices.find((voice) => !maleHints.test(String(voice.name || "")) && !maleHints.test(String(voice.voiceURI || "")));
+  return safeZh || zhVoices[0] || voices[0] || null;
+};
+
 export class MiniCpmDuplexService {
   private callbacks: MiniCpmDuplexCallbacks;
   private ws: WebSocket | null = null;
@@ -125,6 +152,13 @@ export class MiniCpmDuplexService {
   private listenFinalizeTimer: number | null = null;
   private ttsSequence = 0;
   private lastInterruptAtMs = 0;
+  private cloudTtsAudio: HTMLAudioElement | null = null;
+  private cloudTtsMediaSource: MediaSource | null = null;
+  private cloudTtsSourceBuffer: SourceBuffer | null = null;
+  private cloudTtsObjectUrl: string | null = null;
+  private cloudTtsAbortController: AbortController | null = null;
+  private cloudTtsChunkQueue: Uint8Array[] = [];
+  private cloudTtsDrainPending = false;
 
   constructor(callbacks: MiniCpmDuplexCallbacks = {}) {
     this.callbacks = callbacks;
@@ -309,6 +343,10 @@ export class MiniCpmDuplexService {
           this.lastCommittedAssistantText = text;
           this.callbacks.onAssistantPartial?.(text);
           this.callbacks.onAssistantFinal?.(text);
+          if (USE_MICROSOFT_EDGE_TTS_OUTPUT) {
+            void this.speakFallbackText(text);
+            break;
+          }
         }
         if (this.state !== "speaking") {
           this.emitState("listening", "waiting for next user turn");
@@ -486,7 +524,7 @@ export class MiniCpmDuplexService {
     this.emitState("speaking");
 
     const audioData = String(msg.audio_data || "").trim();
-    if (audioData) {
+    if (audioData && !USE_MICROSOFT_EDGE_TTS_OUTPUT) {
       void this.playAudioChunk(audioData);
     }
 
@@ -501,6 +539,11 @@ export class MiniCpmDuplexService {
       if (finalText) {
         this.lastCommittedAssistantText = finalText;
         this.callbacks.onAssistantFinal?.(finalText);
+        if (USE_MICROSOFT_EDGE_TTS_OUTPUT) {
+          void this.speakFallbackText(finalText);
+          this.assistantText = "";
+          return;
+        }
       }
       this.assistantText = "";
       if (!this.openClawPending) {
@@ -567,38 +610,114 @@ export class MiniCpmDuplexService {
 
   private cancelFallbackSpeech() {
     this.ttsSequence += 1;
-    if (!("speechSynthesis" in window)) return;
-    try {
-      window.speechSynthesis.cancel();
-    } catch {
-      // ignore
+    this.cloudTtsDrainPending = false;
+    this.cloudTtsChunkQueue = [];
+    if (this.cloudTtsAbortController) {
+      this.cloudTtsAbortController.abort();
+      this.cloudTtsAbortController = null;
+    }
+    if (this.cloudTtsAudio) {
+      try {
+        this.cloudTtsAudio.pause();
+        this.cloudTtsAudio.removeAttribute("src");
+        this.cloudTtsAudio.load();
+      } catch {
+        // ignore
+      }
+      this.cloudTtsAudio = null;
+    }
+    this.cloudTtsSourceBuffer = null;
+    this.cloudTtsMediaSource = null;
+    if (this.cloudTtsObjectUrl) {
+      try {
+        URL.revokeObjectURL(this.cloudTtsObjectUrl);
+      } catch {
+        // ignore
+      }
+      this.cloudTtsObjectUrl = null;
+    }
+    if ("speechSynthesis" in window) {
+      try {
+        window.speechSynthesis.cancel();
+      } catch {
+        // ignore
+      }
     }
   }
 
-  private speakFallbackText(text: string) {
+  private flushCloudTtsQueue() {
+    const sourceBuffer = this.cloudTtsSourceBuffer;
+    const mediaSource = this.cloudTtsMediaSource;
+    if (!sourceBuffer || !mediaSource) return;
+    if (sourceBuffer.updating) return;
+    if (this.cloudTtsChunkQueue.length > 0) {
+      const next = this.cloudTtsChunkQueue.shift();
+      if (!next) return;
+      try {
+        sourceBuffer.appendBuffer(next);
+      } catch (error) {
+        console.warn("[duplex-cloud-tts-append-failed]", error);
+        this.emitError("microsoft_tts_append_failed");
+      }
+      return;
+    }
+    if (this.cloudTtsDrainPending && mediaSource.readyState === "open") {
+      try {
+        mediaSource.endOfStream();
+      } catch {
+        // ignore
+      }
+    }
+  }
+
+  private async playCloudTtsBlob(blob: Blob, seq: number) {
+    if (seq !== this.ttsSequence) return;
+    const audio = new Audio();
+    const objectUrl = URL.createObjectURL(blob);
+    this.cloudTtsAudio = audio;
+    this.cloudTtsObjectUrl = objectUrl;
+    audio.src = objectUrl;
+    audio.preload = "auto";
+    audio.onended = () => {
+      if (seq === this.ttsSequence && !this.openClawPending) {
+        this.emitState("listening", "waiting for next user turn");
+      }
+    };
+    await audio.play().catch((error) => {
+      console.warn("[duplex-cloud-tts-play-failed]", error);
+      throw error;
+    });
+  }
+
+  private async speakFallbackText(text: string) {
     const trimmed = String(text || "").trim();
-    if (!trimmed || !("speechSynthesis" in window)) return;
+    if (!trimmed) return;
+    if (!USE_MICROSOFT_EDGE_TTS_OUTPUT) {
+      console.warn("[duplex-cloud-tts-disabled]", trimmed);
+      return;
+    }
+    this.cancelFallbackSpeech();
     const seq = ++this.ttsSequence;
+    const abortController = new AbortController();
+    this.cloudTtsAbortController = abortController;
     try {
-      window.speechSynthesis.cancel();
-      const utter = new SpeechSynthesisUtterance(trimmed);
-      utter.lang = "zh-CN";
-      utter.rate = 1;
-      utter.pitch = 1;
-      utter.volume = 1;
-      utter.onstart = () => {
-        if (seq === this.ttsSequence) {
-          this.emitState("speaking", "browser tts fallback");
-        }
-      };
-      utter.onend = () => {
-        if (seq === this.ttsSequence && !this.openClawPending) {
-          this.emitState("listening", "waiting for next user turn");
-        }
-      };
-      window.speechSynthesis.speak(utter);
-    } catch {
-      // ignore
+      const response = await streamAssistantSpeech({
+        text: trimmed,
+        voice: MICROSOFT_EDGE_TTS_VOICE,
+      }, 2 * 60 * 1000, abortController.signal);
+      if (seq !== this.ttsSequence) return;
+      const blob = await response.blob();
+      if (seq !== this.ttsSequence) return;
+      await this.playCloudTtsBlob(blob, seq);
+    } catch (error) {
+      console.warn("[duplex-cloud-tts-failed]", error);
+      if (seq === this.ttsSequence) {
+        this.emitError(error instanceof Error ? error.message : "microsoft_tts_failed");
+      }
+    } finally {
+      if (this.cloudTtsAbortController === abortController) {
+        this.cloudTtsAbortController = null;
+      }
     }
   }
 

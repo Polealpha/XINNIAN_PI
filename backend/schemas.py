@@ -522,6 +522,14 @@ class AssistantDuplexConfigResponse(BaseModel):
     preferred_voice: str = "sweet_cn_female"
 
 
+class AssistantTtsRequest(BaseModel):
+    text: str
+    voice: str = "zh-CN-XiaoyiNeural"
+    rate: str = "+0%"
+    pitch: str = "+0Hz"
+    volume: str = "+0%"
+
+
 class AssistantMemorySearchResponse(BaseModel):
     ok: bool
     query: str

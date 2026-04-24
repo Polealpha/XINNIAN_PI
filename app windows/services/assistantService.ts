@@ -1,4 +1,4 @@
-import { apiGet, apiPost, getWsBase } from "./apiClient";
+import { apiGet, apiPost, apiPostStream, getWsBase } from "./apiClient";
 
 export interface AssistantTodoItem {
   id: string;
@@ -116,6 +116,14 @@ export interface AssistantSendResponse {
   timestamp_ms: number;
 }
 
+export interface AssistantTtsPayload {
+  text: string;
+  voice?: string;
+  rate?: string;
+  pitch?: string;
+  volume?: string;
+}
+
 export interface AssistantSessionEvent {
   type: string;
   timestamp_ms: number;
@@ -170,6 +178,14 @@ export const sendAssistantMessage = async (
   payload: AssistantSendPayload,
 ): Promise<AssistantSendResponse> => {
   return apiPost("/api/assistant/send", payload, true);
+};
+
+export const streamAssistantSpeech = async (
+  payload: AssistantTtsPayload,
+  timeoutMs = 2 * 60 * 1000,
+  signal?: AbortSignal,
+): Promise<Response> => {
+  return apiPostStream("/api/assistant/tts", payload, true, false, timeoutMs, signal);
 };
 
 export const connectAssistantSessionEvents = (

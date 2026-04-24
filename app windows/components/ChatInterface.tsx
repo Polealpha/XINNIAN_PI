@@ -193,20 +193,25 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
     }
   };
 
+  const pickPreferredZhFemaleVoice = () => {
+    if (!("speechSynthesis" in window)) return null;
+    const voices = window.speechSynthesis.getVoices();
+    if (!voices.length) return null;
+    const femaleHints = /(huihui|yaoyao|xiaoxiao|xiaoyi|xiaobei|xiaoni|female|zira)/i;
+    const maleHints = /(kangkang|yunjian|yunxi|yunyang|yunxia|male|david|mark)/i;
+    const zhVoices = voices.filter((voice) => /^zh/i.test(String(voice.lang || "")) || /zh[-_]?cn/i.test(String(voice.name || "")) || /zh[-_]?cn/i.test(String(voice.voiceURI || "")));
+    return (
+      zhVoices.find((voice) => femaleHints.test(String(voice.name || "")) || femaleHints.test(String(voice.voiceURI || ""))) ||
+      zhVoices.find((voice) => !maleHints.test(String(voice.name || "")) && !maleHints.test(String(voice.voiceURI || ""))) ||
+      zhVoices[0] ||
+      voices[0] ||
+      null
+    );
+  };
+
   const speakBrowserSpeech = (text: string) => {
-    const safe = String(text || "").trim();
-    if (!audioEnabled || !safe || !("speechSynthesis" in window)) return;
-    try {
-      window.speechSynthesis.cancel();
-      const utter = new SpeechSynthesisUtterance(safe);
-      utter.lang = "zh-CN";
-      utter.rate = 1;
-      utter.pitch = 1;
-      utter.volume = 1;
-      window.speechSynthesis.speak(utter);
-    } catch {
-      // ignore
-    }
+    void text;
+    // Disable browser TTS for text chat to avoid confusing it with duplex audio output.
   };
 
   useEffect(() => {

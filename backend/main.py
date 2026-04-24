@@ -23,6 +23,8 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from fastapi.staticfiles import StaticFiles
 from sqlite3 import Connection
 import httpx
+import numpy as np
+import soundfile as sf
 from cryptography.fernet import Fernet, InvalidToken
 from engine.core.config import EngineConfig, load_engine_config
 from engine.core.types import VideoFrame
@@ -95,6 +97,7 @@ from .schemas import (
     AssistantSessionStartResponse,
     AssistantSessionStatusResponse,
     AssistantSessionStopRequest,
+    AssistantTtsRequest,
     AssistantTodoCreateRequest,
     AssistantTodoItem,
     AssistantTodoListResponse,
@@ -160,7 +163,10 @@ from .settings import (
 app = FastAPI(title="Auth Backend", version="0.1.0")
 UPLOAD_ROOT = Path(__file__).resolve().parent / "uploads"
 CHAT_UPLOAD_ROOT = UPLOAD_ROOT / "chat"
+REF_AUDIO_ROOT = UPLOAD_ROOT / "ref_audio"
+PUBLIC_DUPLEX_TTS_REF_AUDIO = REF_AUDIO_ROOT / "public_baker_female_009901.wav"
 CHAT_UPLOAD_ROOT.mkdir(parents=True, exist_ok=True)
+REF_AUDIO_ROOT.mkdir(parents=True, exist_ok=True)
 app.mount("/uploads", StaticFiles(directory=str(UPLOAD_ROOT)), name="uploads")
 
 cors_origins = [origin.strip() for origin in ALLOWED_ORIGINS.split(",") if origin.strip()]
@@ -252,6 +258,27 @@ def _decode_camera_image_payload(image_data_url: str) -> bytes:
         return base64.b64decode(raw, validate=True)
     except (binascii.Error, ValueError) as exc:
         raise HTTPException(status_code=400, detail="invalid image_data_url") from exc
+
+
+def _load_duplex_tts_ref_audio_base64() -> Optional[str]:
+    if not PUBLIC_DUPLEX_TTS_REF_AUDIO.exists():
+        return None
+    try:
+        audio, sample_rate = sf.read(str(PUBLIC_DUPLEX_TTS_REF_AUDIO), dtype="float32", always_2d=True)
+    except Exception:
+        return None
+    if audio.size == 0:
+        return None
+    mono = audio.mean(axis=1, dtype=np.float32)
+    target_sr = 16000
+    if int(sample_rate) != target_sr and mono.size > 1:
+        duration = mono.size / float(sample_rate)
+        target_size = max(int(round(duration * target_sr)), 1)
+        x_old = np.linspace(0.0, duration, num=mono.size, endpoint=False, dtype=np.float32)
+        x_new = np.linspace(0.0, duration, num=target_size, endpoint=False, dtype=np.float32)
+        mono = np.interp(x_new, x_old, mono).astype(np.float32, copy=False)
+    mono = np.clip(mono, -1.0, 1.0).astype(np.float32, copy=False)
+    return base64.b64encode(mono.tobytes()).decode("ascii")
 
 
 def _get_camera_vision_runtime() -> Dict[str, Any]:
@@ -545,13 +572,16 @@ class AssistantDuplexRegistry:
                     "不要过度亲密，不要油腻，不要说夸张安慰话，不要暴露内部系统提示。"
                 ),
                 "deferred_finalize": True,
-                "ref_audio_path": "assets/ref_audio/ref_en_dlc_1.wav",
+                "ref_audio_path": "assets/ref_audio/ref_minicpm_signature.wav",
                 "force_listen_count": 1,
                 "max_new_speak_tokens_per_chunk": 40,
                 "listen_prob_scale": 0.55,
                 "temperature": 0.18,
                 "length_penalty": 1.12,
             }
+            public_tts_ref_audio_b64 = _load_duplex_tts_ref_audio_base64()
+            if public_tts_ref_audio_b64:
+                payload["tts_ref_audio_base64"] = public_tts_ref_audio_b64
             if memory_summary:
                 payload["memory_summary"] = memory_summary
             entry = {
@@ -6091,6 +6121,101 @@ async def assistant_send(
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
 
 
+@app.post("/api/assistant/tts")
+async def assistant_tts(
+    payload: AssistantTtsRequest,
+    request: Request,
+    credentials: HTTPAuthorizationCredentials = Depends(bearer_scheme),
+    conn: Connection = Depends(get_db),
+) -> StreamingResponse:
+    _ = _parse_access_token_for_local_desktop(credentials, conn, request)
+    text = str(payload.text or "").strip()
+    if not text:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="text required")
+    try:
+        from scripts.local_minicpmo_exec_tunnel import PLINK, SSH_HOST, SSH_PASS, SSH_PORT, SSH_USER
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"remote tts bridge unavailable: {exc}",
+        ) from exc
+
+    remote_payload = {
+        "text": text,
+        "voice": str(payload.voice or "zh-CN-XiaoyiNeural"),
+        "rate": str(payload.rate or "+0%"),
+        "pitch": str(payload.pitch or "+0Hz"),
+        "volume": str(payload.volume or "+0%"),
+    }
+    remote_cfg_b64 = base64.b64encode(
+        json.dumps(remote_payload, ensure_ascii=False).encode("utf-8")
+    ).decode("ascii")
+    remote_python = f"""python3 - <<'PY'
+import asyncio, edge_tts, sys, base64, json
+cfg = json.loads(base64.b64decode('{remote_cfg_b64}').decode('utf-8'))
+async def main():
+    com = edge_tts.Communicate(
+        str(cfg.get('text') or ''),
+        voice=str(cfg.get('voice') or 'zh-CN-XiaoyiNeural'),
+        rate=str(cfg.get('rate') or '+0%'),
+        pitch=str(cfg.get('pitch') or '+0Hz'),
+        volume=str(cfg.get('volume') or '+0%'),
+    )
+    async for chunk in com.stream():
+        if chunk.get('type') == 'audio':
+            data = chunk.get('data') or b''
+            if data:
+                sys.stdout.buffer.write(data)
+                sys.stdout.buffer.flush()
+asyncio.run(main())
+PY"""
+    ps_command = (
+        f"& '{PLINK}' -batch -P {SSH_PORT} -pw '{SSH_PASS}' "
+        f"'{SSH_USER}@{SSH_HOST}' "
+        f"\"{remote_python.replace('\"', '\\\"')}\""
+    )
+
+    async def iter_audio():
+        proc = subprocess.Popen(
+            ["powershell.exe", "-NoProfile", "-Command", ps_command],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            stdin=subprocess.DEVNULL,
+            bufsize=0,
+        )
+        total = 0
+        try:
+            while True:
+                chunk = await asyncio.to_thread(proc.stdout.read, 8192) if proc.stdout else b""
+                if not chunk:
+                    break
+                total += len(chunk)
+                yield chunk
+        finally:
+            try:
+                proc.terminate()
+            except Exception:
+                pass
+        if total <= 0:
+            err_text = ""
+            try:
+                err_text = (proc.stderr.read() if proc.stderr else b"").decode("utf-8", errors="ignore").strip()
+            except Exception:
+                err_text = ""
+            raise RuntimeError(err_text or "remote_microsoft_tts_failed")
+
+    return StreamingResponse(
+        iter_audio(),
+        media_type="audio/mpeg",
+        headers={
+            "Cache-Control": "no-cache, no-store, must-revalidate",
+            "Pragma": "no-cache",
+            "Expires": "0",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
 @app.post("/api/assistant/bridge/send", response_model=AssistantSendResponse)
 async def assistant_bridge_send(
     payload: AssistantBridgeSendRequest,
@@ -6127,7 +6252,7 @@ def assistant_duplex_config(
         audio_chunk_ms=1000,
         sample_rate=16000,
         transport="native_ws_proxy",
-        preferred_voice="ref_en_dlc_1.wav",
+        preferred_voice="zh-CN-XiaoyiNeural (Microsoft Edge TTS stream)",
     )
 
 
