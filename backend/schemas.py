@@ -404,6 +404,37 @@ class AssistantSendResponse(BaseModel):
     timestamp_ms: int
 
 
+class AssistantRealtimeTurnSyncRequest(BaseModel):
+    surface: str = "desktop"
+    session_key: Optional[str] = None
+    device_id: Optional[str] = None
+    sender_id: Optional[str] = None
+    user_text: str = ""
+    assistant_text: str = ""
+    tool_events: list[AssistantToolResult] = Field(default_factory=list)
+    source: str = "desktop_realtime"
+
+
+class AssistantRealtimeTurnSyncResponse(BaseModel):
+    ok: bool
+    surface: str
+    session_key: str
+    inserted_messages: int = 0
+    mirrored_to_wechat: bool = False
+    timestamp_ms: int
+
+
+class AssistantWechatStatusResponse(BaseModel):
+    ok: bool = True
+    status: str = "unconfigured"
+    detail: str = ""
+    qr_available: bool = False
+    qr_path: Optional[str] = None
+    linked: bool = False
+    account_id: Optional[str] = None
+    user_id: Optional[str] = None
+
+
 class AssistantSessionStatusResponse(BaseModel):
     ok: bool
     surface: str

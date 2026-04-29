@@ -9,6 +9,15 @@ export default defineConfig(() => {
         port: 3001,
         host: '0.0.0.0',
       },
+      build: {
+        rollupOptions: {
+          input: {
+            main: path.resolve(__dirname, 'index.html'),
+            visualfocusDemo: path.resolve(__dirname, 'visualfocus-demo.html'),
+            qwenRealtimeDemo: path.resolve(__dirname, 'qwen-realtime-demo.html'),
+          },
+        },
+      },
       plugins: [react()],
       resolve: {
         alias: {

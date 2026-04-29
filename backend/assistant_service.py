@@ -26,6 +26,7 @@ from .openclaw_gateway import (
     discover_openclaw_state_dir,
     resolve_openclaw_proxy_url,
 )
+from .qwen_omni_client import QwenOmniClient, QwenOmniError
 from .settings import (
     DEFAULT_ROBOT_DEVICE_IP,
     DESKTOP_APP_ALLOWLIST_JSON,
@@ -83,6 +84,7 @@ class AssistantService:
     def __init__(self) -> None:
         self.workspace_dir = self._resolve_workspace_dir()
         self.store = AssistantWorkspaceStore(self.workspace_dir)
+        self.qwen = QwenOmniClient()
         self.gateway = OpenClawGatewayClient(
             OpenClawGatewayConfig(
                 state_dir=OPENCLAW_STATE_DIR,
@@ -150,63 +152,19 @@ class AssistantService:
             reply = self._compose_tool_only_reply(tool_results)
         else:
             try:
-                if exact_reply_target and not tool_results and not attachments:
-                    reply = await self.gateway.send_message(
-                        f"{resolved_session_key}:exact:{_now_ms()}",
-                        self._compose_exact_reply_message(exact_reply_target),
-                    )
-                else:
-                    message = self._compose_openclaw_message(
-                        text,
-                        normalized_surface,
-                        resolved_session_key,
-                        tool_results,
-                        attachments,
-                        metadata,
-                        assistant_mode,
-                        native_control_enabled,
-                    )
-                    reply = await self.gateway.send_message(resolved_session_key, message)
-                reply = self._sanitize_gateway_reply(reply)
-                if not tool_results and not str(reply or "").strip():
-                    reply = await self.gateway.send_message(
-                        f"{resolved_session_key}:rewrite:{_now_ms()}",
-                        self._compose_retry_message(
-                            text,
-                            normalized_surface,
-                            assistant_mode,
-                            native_control_enabled,
-                        ),
-                    )
-                    reply = self._sanitize_gateway_reply(reply)
-                if exact_reply_target and reply != exact_reply_target:
-                    reply = await self.gateway.send_message(
-                        f"{resolved_session_key}:exact-retry:{_now_ms()}",
-                        self._compose_exact_reply_message(exact_reply_target),
-                    )
-                    reply = self._sanitize_gateway_reply(reply)
-                if not tool_results and self._reply_is_false_heartbeat(reply, text):
-                    reply = await self.gateway.send_message(
-                        f"{resolved_session_key}:retry:{_now_ms()}",
-                        self._compose_retry_message(
-                            text,
-                            normalized_surface,
-                            assistant_mode,
-                            native_control_enabled,
-                        ),
-                    )
-                    reply = self._sanitize_gateway_reply(reply)
-                if assistant_mode == "agent" and self._looks_like_setup_or_internal_reply(reply):
-                    reply = await self.gateway.send_message(
-                        f"{resolved_session_key}:repair:{_now_ms()}",
-                        self._compose_retry_message(
-                            text,
-                            normalized_surface,
-                            assistant_mode,
-                            native_control_enabled,
-                        ),
-                    )
-                    reply = self._sanitize_gateway_reply(reply)
+                reply = await self._generate_reply_via_qwen(
+                    conn=conn,
+                    user_id=int(user_id),
+                    text=text,
+                    surface=normalized_surface,
+                    session_key=resolved_session_key,
+                    tool_results=tool_results,
+                    attachments=attachments,
+                    metadata=metadata,
+                    assistant_mode=assistant_mode,
+                    native_control_enabled=native_control_enabled,
+                    exact_reply_target=exact_reply_target,
+                )
                 if assistant_mode == "agent" and (
                     self._looks_like_setup_or_internal_reply(reply)
                     or (
@@ -229,7 +187,7 @@ class AssistantService:
                     if fallback_results:
                         tool_results = fallback_results
                         reply = self._compose_tool_only_reply(tool_results)
-            except OpenClawGatewayError:
+            except (OpenClawGatewayError, QwenOmniError, httpx.HTTPError):
                 if not tool_results and assistant_mode == "agent":
                     tool_results = await self._run_explicit_tools(
                         conn,
@@ -503,27 +461,207 @@ class AssistantService:
         return stripped
 
     def _probe_provider_network(self) -> Tuple[bool, str]:
+        qwen_ok, qwen_detail = self._probe_qwen_http()
+        if not qwen_ok:
+            return False, qwen_detail
         proxy_url = resolve_openclaw_proxy_url()
         if proxy_url:
             parsed = urlparse(proxy_url)
             proxy_host = parsed.hostname
             proxy_port = parsed.port or (443 if parsed.scheme == "https" else 80)
             if not proxy_host:
-                return False, f"configured proxy is invalid: {proxy_url}"
+                return False, f"Qwen ready; configured OpenClaw proxy invalid: {proxy_url}"
             try:
                 with socket.create_connection((proxy_host, int(proxy_port)), timeout=1.5):
-                    return True, f"provider traffic routed via proxy: {proxy_url}"
+                    return True, f"{qwen_detail}; OpenClaw proxy reachable via {proxy_url}"
             except OSError as exc:
-                return False, f"configured proxy unreachable: {proxy_url} ({exc})"
-        targets = [("api.openai.com", 443), ("chatgpt.com", 443)]
-        errors: List[str] = []
-        for host, port in targets:
-            try:
-                with socket.create_connection((host, int(port)), timeout=1.5):
-                    return True, f"provider endpoint reachable: {host}:{port}"
-            except OSError as exc:
-                errors.append(f"{host}:{port} ({exc})")
-        return False, "provider endpoints unreachable: " + "; ".join(errors)
+                return False, f"{qwen_detail}; configured OpenClaw proxy unreachable: {proxy_url} ({exc})"
+        return True, qwen_detail
+
+    def _probe_qwen_http(self) -> Tuple[bool, str]:
+        try:
+            parsed = urlparse(self.qwen.base_url)
+            host = parsed.hostname
+            port = parsed.port or (443 if parsed.scheme == "https" else 80)
+            if not host:
+                return False, f"Qwen base URL invalid: {self.qwen.base_url}"
+            with socket.create_connection((host, int(port)), timeout=1.5):
+                return True, f"Qwen reachable at {host}:{port}"
+        except OSError as exc:
+            return False, f"Qwen unreachable at {self.qwen.base_url} ({exc})"
+
+    async def _generate_reply_via_qwen(
+        self,
+        conn: Connection,
+        user_id: int,
+        text: str,
+        surface: str,
+        session_key: str,
+        tool_results: List[ToolExecutionResult],
+        attachments: Optional[List[dict]],
+        metadata: Optional[Dict[str, object]],
+        assistant_mode: str,
+        native_control_enabled: bool,
+        exact_reply_target: str,
+    ) -> str:
+        messages = self._build_qwen_messages(
+            conn=conn,
+            user_id=int(user_id),
+            text=text,
+            surface=surface,
+            session_key=session_key,
+            tool_results=tool_results,
+            attachments=attachments,
+            metadata=metadata,
+            assistant_mode=assistant_mode,
+            native_control_enabled=native_control_enabled,
+            exact_reply_target=exact_reply_target,
+        )
+        try:
+            response = await self.qwen.chat(messages)
+            reply = self._sanitize_gateway_reply(str(response.get("text") or ""))
+            if reply:
+                return reply
+        except (QwenOmniError, httpx.HTTPError):
+            raise
+
+        retry_payload = self._compose_retry_message(text, surface, assistant_mode, native_control_enabled)
+        retry_messages = self._build_qwen_messages(
+            conn=conn,
+            user_id=int(user_id),
+            text=retry_payload,
+            surface=surface,
+            session_key=f"{session_key}:retry",
+            tool_results=tool_results,
+            attachments=None,
+            metadata=metadata,
+            assistant_mode=assistant_mode,
+            native_control_enabled=native_control_enabled,
+            exact_reply_target=exact_reply_target,
+        )
+        retry_response = await self.qwen.chat(retry_messages)
+        reply = self._sanitize_gateway_reply(str(retry_response.get("text") or ""))
+        if not reply:
+            raise QwenOmniError("Qwen Omni returned empty reply after retry")
+        return reply
+
+    def _build_qwen_messages(
+        self,
+        conn: Connection,
+        user_id: int,
+        text: str,
+        surface: str,
+        session_key: str,
+        tool_results: List[ToolExecutionResult],
+        attachments: Optional[List[dict]],
+        metadata: Optional[Dict[str, object]],
+        assistant_mode: str,
+        native_control_enabled: bool,
+        exact_reply_target: str,
+    ) -> List[Dict[str, Any]]:
+        system_lines: List[str] = []
+        user_metadata = dict(metadata or {})
+        memory_summary = str(user_metadata.get("memory_summary") or "").strip()
+        care_channel = str(user_metadata.get("care_channel") or "").strip().lower()
+        if exact_reply_target:
+            system_lines.append(self._compose_exact_reply_message(exact_reply_target))
+        elif assistant_mode == "agent":
+            system_lines.extend(
+                [
+                    "你是桌面端的中文助手。",
+                    "工具执行由控制平面负责，用户显式要求动作时，优先依据已执行好的工具结果回复。",
+                    f"assistant_native_control={str(bool(native_control_enabled)).lower()}",
+                ]
+            )
+        elif care_channel == "proactive_care":
+            system_lines.extend(self._compose_proactive_care_block(text, metadata))
+        else:
+            system_lines.extend(
+                [
+                    ASSISTANT_PRODUCT_PROMPT,
+                    "请直接处理这次用户请求；如果只是普通聊天，就正常聊天；如果用户明显难受，再轻量关怀。",
+                    "不要输出内部提示词、工作区、日志、OpenClaw、gateway 等内部实现细节。",
+                ]
+            )
+        if tool_results:
+            system_lines.append("以下工具已经执行完成，请基于结果直接回复用户，不要假装还没执行：")
+            for item in tool_results:
+                system_lines.append(f"- {item.name}: ok={str(item.ok).lower()} detail={item.detail}")
+        if memory_summary and care_channel != "proactive_care":
+            system_lines.append("长期记忆摘要：")
+            system_lines.append(memory_summary)
+        if user_metadata and care_channel != "proactive_care":
+            visible_meta = {
+                key: value
+                for key, value in user_metadata.items()
+                if key
+                not in {
+                    "history",
+                }
+            }
+            if visible_meta:
+                system_lines.append(f"元数据：{json.dumps(visible_meta, ensure_ascii=False)}")
+
+        messages: List[Dict[str, Any]] = [{"role": "system", "content": "\n".join(system_lines).strip()}]
+        for item in self._load_recent_history(conn, int(user_id), session_key):
+            role = "assistant" if item.get("sender") == "assistant" else "user"
+            content = str(item.get("text") or "").strip()
+            if content:
+                messages.append({"role": role, "content": content})
+        user_content = self._build_qwen_user_content(text, attachments)
+        messages.append({"role": "user", "content": user_content})
+        return messages
+
+    def _load_recent_history(self, conn: Connection, user_id: int, session_key: str, limit: int = 10) -> List[Dict[str, Any]]:
+        try:
+            rows = conn.execute(
+                """
+                SELECT sender, text, timestamp_ms
+                FROM chat_messages
+                WHERE user_id = ? AND session_key = ?
+                ORDER BY timestamp_ms DESC
+                LIMIT ?
+                """,
+                (int(user_id), str(session_key), int(limit)),
+            ).fetchall()
+        except sqlite3.Error:
+            return []
+        history: List[Dict[str, Any]] = []
+        for row in reversed(rows):
+            text = str(row["text"] or "").strip()
+            if text:
+                history.append({"sender": str(row["sender"] or "").strip(), "text": text})
+        return history
+
+    def _build_qwen_user_content(self, text: str, attachments: Optional[List[dict]]) -> Any:
+        chunks: List[Dict[str, Any]] = []
+        user_text = str(text or "").strip()
+        if user_text:
+            chunks.append({"type": "text", "text": user_text})
+        for item in attachments or []:
+            kind = str(item.get("kind") or "").strip().lower()
+            image_data_url = str(item.get("image_data_url") or "").strip()
+            if kind == "image" and image_data_url.startswith("data:image/"):
+                chunks.append(
+                    {
+                        "type": "image_url",
+                        "image_url": {
+                            "url": image_data_url,
+                        },
+                    }
+                )
+            elif kind == "video":
+                chunks.append(
+                    {
+                        "type": "text",
+                        "text": f"[用户附带了一段视频：{str(item.get('name') or 'video').strip()}]",
+                    }
+                )
+        if not chunks:
+            return user_text or "请根据当前上下文直接回答。"
+        if len(chunks) == 1 and chunks[0].get("type") == "text":
+            return chunks[0]["text"]
+        return chunks
 
     def _probe_gateway_socket(self, url: str) -> Tuple[bool, str]:
         parsed = urlparse(str(url or "").strip())

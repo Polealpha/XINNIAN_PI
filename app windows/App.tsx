@@ -161,6 +161,20 @@ const mergeChatHistory = (local: ChatMessage[], incoming: ChatMessage[]): ChatMe
   return merged.sort((a, b) => a.timestamp.getTime() - b.timestamp.getTime());
 };
 
+const normalizeAssistantRuntimeError = (value: unknown): string => {
+  const message = String(value || "").trim();
+  if (!message) return "";
+  const lowered = message.toLowerCase();
+  if (
+    lowered.includes("signal is aborted without reason") ||
+    lowered.includes("aborterror") ||
+    lowered.includes("aborted")
+  ) {
+    return "";
+  }
+  return message;
+};
+
 const THEME_OPTIONS: ThemeOption[] = [
   {
     id: "midnight",
@@ -573,6 +587,7 @@ const clearStoredSessionState = () => {
   for (const key of [
     "auth_token",
     "refresh_token",
+    "local_backend_token",
     "guest_mode",
     "activation_required",
     "activation_path",
@@ -627,6 +642,8 @@ const App: React.FC = () => {
   const wakeActiveUntilRef = useRef<number>(0);
   const assistantStatusLoggedRef = useRef(false);
   const seenReminderIdsRef = useRef<Set<string>>(new Set());
+  const lastHealthyAssistantRuntimeRef = useRef<AssistantRuntimeStatus | null>(null);
+  const assistantRuntimeFailureCountRef = useRef(0);
 
   useEffect(() => {
     if (!isAuthenticated || isGuest) return;
@@ -1799,6 +1816,7 @@ const App: React.FC = () => {
     } finally {
       localStorage.removeItem("auth_token");
       localStorage.removeItem("refresh_token");
+      localStorage.removeItem("local_backend_token");
       localStorage.removeItem("guest_mode");
       localStorage.removeItem("activation_required");
       localStorage.removeItem("activation_path");
@@ -2043,6 +2061,8 @@ const App: React.FC = () => {
 
   useEffect(() => {
     if (!isAuthenticated || isGuest || activationRequired) {
+      lastHealthyAssistantRuntimeRef.current = null;
+      assistantRuntimeFailureCountRef.current = 0;
       setAssistantRuntime(null);
       setAssistantRuntimeError("");
       setRuntimeChecked(false);
@@ -2055,6 +2075,10 @@ const App: React.FC = () => {
       try {
         const status = await getAssistantRuntimeStatus();
         if (!active) return;
+        assistantRuntimeFailureCountRef.current = 0;
+        if (status.gateway_ready && status.provider_network_ok) {
+          lastHealthyAssistantRuntimeRef.current = status;
+        }
         setAssistantRuntime(status);
         setAssistantRuntimeError(
           status.gateway_ready
@@ -2067,9 +2091,22 @@ const App: React.FC = () => {
         nextReady = Boolean(status.gateway_ready && status.provider_network_ok);
       } catch (err) {
         if (!active) return;
-        const detail = err instanceof Error ? err.message : String(err || "本地 backend 未就绪");
-        setAssistantRuntime(null);
-        setAssistantRuntimeError(detail || "本地 backend 未就绪");
+        const detail = normalizeAssistantRuntimeError(
+          err instanceof Error ? err.message : String(err || "本地 backend 未就绪")
+        );
+        assistantRuntimeFailureCountRef.current += 1;
+        const lastHealthy = lastHealthyAssistantRuntimeRef.current;
+        const shouldKeepHealthyRuntime = Boolean(
+          lastHealthy &&
+            assistantRuntimeFailureCountRef.current < 3 &&
+            lastHealthy.gateway_ready &&
+            lastHealthy.provider_network_ok
+        );
+        setAssistantRuntime(shouldKeepHealthyRuntime ? lastHealthy : null);
+        setAssistantRuntimeError(
+          shouldKeepHealthyRuntime ? "" : detail || "本地 backend 未就绪"
+        );
+        nextReady = shouldKeepHealthyRuntime;
         setRuntimeChecked(true);
       } finally {
         if (!active) return;
@@ -2089,12 +2126,21 @@ const App: React.FC = () => {
     applyTheme(uiTheme);
     const option = THEME_OPTIONS.find((item) => item.id === uiTheme) || THEME_OPTIONS[0];
     const token = THEME_TOKENS[uiTheme] || THEME_TOKENS.midnight;
-    (window as any)?.desktop?.setTitleBarTheme?.({
-      color: option.titleBarColor,
-      symbolColor: option.symbolColor,
-      backgroundColor: token.bg,
-    });
-  }, [applyTheme, uiTheme]);
+    const activationTheme = {
+      color: "#09111d",
+      symbolColor: "#e2e8f0",
+      backgroundColor: "#09111d",
+    };
+    (window as any)?.desktop?.setTitleBarTheme?.(
+      activationRequired && !isGuest
+        ? activationTheme
+        : {
+            color: token.bg,
+            symbolColor: option.symbolColor,
+            backgroundColor: token.bg,
+          },
+    );
+  }, [activationRequired, applyTheme, isGuest, uiTheme]);
 
   useEffect(() => {
     if (typeof document === "undefined") return;
@@ -2693,6 +2739,8 @@ const App: React.FC = () => {
                 expressionLabel={expressionLabelForChat}
                 expressionConfidence={expressionConfidenceForChat}
                 audioEnabled={mediaState.audioEnabled}
+                videoEnabled={mediaState.videoEnabled}
+                deviceStatus={deviceStatus}
               />
             </div>
           )}
@@ -3177,10 +3225,14 @@ const App: React.FC = () => {
                   initialMessages={messages}
                   onSendMessage={handleChatUpdate}
                   isGuest={isGuest}
+                  assistantRuntime={assistantRuntime}
+                  assistantRuntimeError={assistantRuntimeError}
                   voiceState={voiceState}
                   expressionLabel={expressionLabelForChat}
                   expressionConfidence={expressionConfidenceForChat}
                   audioEnabled={mediaState.audioEnabled}
+                  videoEnabled={mediaState.videoEnabled}
+                  deviceStatus={deviceStatus}
                 />
               </div>
             </div>

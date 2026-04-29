@@ -1,10 +1,12 @@
-﻿import React, { useEffect, useRef, useState } from "react";
-import { ChatAttachment, ChatMessage, EmotionType } from "../types";
-import { Send, Sparkles, User, Bot, Activity, Paperclip, X, Mic, Square, LoaderCircle, Volume2 } from "lucide-react";
-import { generateAssistantMessage, generateAssistantMessageStream } from "../services/llmService";
+﻿import React, { useEffect, useMemo, useRef, useState } from "react";
+import { ChatAttachment, ChatMessage, DeviceStatus, EmotionType } from "../types";
+import { Send, Sparkles, User, Bot, Activity, Paperclip, X, Mic, Square, LoaderCircle } from "lucide-react";
 import { uploadChatAttachment } from "../services/chatService";
-import { createDesktopVoiceRecorder, transcribeDesktopAudio } from "../services/desktopVoiceService";
-import { AssistantRuntimeStatus, getAssistantRuntimeStatus } from "../services/assistantService";
+import { AssistantRuntimeStatus, AssistantSendResult, sendAssistantMessage, syncRealtimeTurn } from "../services/assistantService";
+import { getLocalApiBase } from "../services/apiClient";
+import { probeQwenReady } from "../services/qwenOmniService";
+import { QwenRealtimeState, QwenRealtimeVideoService } from "../services/qwenRealtimeVideoService";
+
 
 interface ChatInterfaceProps {
   currentEmotion: EmotionType;
@@ -15,7 +17,11 @@ interface ChatInterfaceProps {
   voiceState?: "idle" | "detecting" | "listening" | "thinking" | "speaking";
   expressionLabel?: string;
   expressionConfidence?: number;
+  assistantRuntime?: AssistantRuntimeStatus | null;
+  assistantRuntimeError?: string;
   audioEnabled?: boolean;
+  videoEnabled?: boolean;
+  deviceStatus?: DeviceStatus | null;
 }
 
 const DEFAULT_WELCOME: ChatMessage = {
@@ -28,20 +34,47 @@ const DEFAULT_WELCOME: ChatMessage = {
 };
 
 const hasRenderableText = (text: unknown): boolean => typeof text === "string" && text.trim().length > 0;
-const CHAT_DEDUP_WINDOW_MS = 15000;
-const normalizeChatText = (value: unknown): string => String(value || "").replace(/\s+/g, " ").trim();
+const ROBOT_PROXY_BASE = `${getLocalApiBase().replace(/\/+$/, "")}/api/device`;
+const DEFAULT_DEVICE_RUNTIME_PORT = 8090;
+const DEFAULT_ASSISTANT_SESSION_KEY = "agent:main:main";
+const REALTIME_PLACEHOLDER_USER_TEXT = "【实时语音 + 实时画面】";
+const TOOL_COMMAND_PATTERNS = [
+  /打开.*网易云/,
+  /网易云/,
+  /打开.*b站/,
+  /打开.*哔哩哔哩/,
+  /播放.*音乐/,
+  /放点歌/,
+  /听歌/,
+  /下一首/,
+  /暂停/,
+  /继续播放/,
+  /搜一下/,
+  /搜索/,
+];
 
-const cleanSpeechText = (text: unknown): string => {
-  const raw = String(text || "").trim();
-  if (!raw) return "";
-  return raw
-    .replace(/```[\s\S]*?```/g, " ")
-    .replace(/`([^`]+)`/g, "$1")
-    .replace(/<[^>]+>/g, " ")
-    .replace(/\[([^\]]+)\]\(([^)]+)\)/g, "$1")
-    .replace(/https?:\/\/\S+/g, " ")
-    .replace(/\s+/g, " ")
-    .trim();
+const looksLikeToolCommand = (raw: string): boolean => {
+  const text = String(raw || "").trim();
+  if (!text) return false;
+  return TOOL_COMMAND_PATTERNS.some((pattern) => pattern.test(text));
+};
+
+const buildRealtimeToolFollowupPrompt = (spokenText: string): string => {
+  const safe = String(spokenText || "").trim();
+  if (!safe) return "请用中文简短说明刚刚的工具执行结果。";
+  return [
+    "请用中文自然口语化地把刚刚的工具执行结果说给用户听。",
+    "不要重复系统术语，不要提及 JSON 或结构化字段。",
+    `工具结果：${safe}`,
+  ].join("\n");
+};
+
+const normalizeRuntimeHost = (value?: string | null) => {
+  const text = String(value || "").trim();
+  if (!text) return "";
+  const normalized = text.replace(/^https?:\/\//i, "").replace(/\/+$/, "");
+  if (!normalized) return "";
+  return normalized.includes(":") ? normalized : `${normalized}:${DEFAULT_DEVICE_RUNTIME_PORT}`;
 };
 
 const hasRenderableContent = (msg: ChatMessage): boolean => {
@@ -61,17 +94,17 @@ const mergeChatMessages = (local: ChatMessage[], incoming: ChatMessage[]): ChatM
       continue;
     }
 
-    const msgText = normalizeChatText(msg.text);
+    const msgText = String(msg.text || "").trim();
     const msgAttachKey = JSON.stringify(msg.attachments || []);
     const msgTs = msg.timestamp.getTime();
     const dupIndex = merged.findIndex((item) => {
-      const itemText = normalizeChatText(item.text);
+      const itemText = String(item.text || "").trim();
       const itemAttachKey = JSON.stringify(item.attachments || []);
       return (
         item.sender === msg.sender &&
         itemText === msgText &&
         itemAttachKey === msgAttachKey &&
-        Math.abs(item.timestamp.getTime() - msgTs) <= CHAT_DEDUP_WINDOW_MS
+        Math.abs(item.timestamp.getTime() - msgTs) <= 4000
       );
     });
     if (dupIndex >= 0) {
@@ -117,6 +150,20 @@ const buildMemorySummary = (items: ChatMessage[], keepTail = 6, maxChars = 420):
   return compact.slice(compact.length - maxChars);
 };
 
+const normalizeRuntimeError = (value: unknown): string => {
+  const message = String(value || "").trim();
+  if (!message) return "";
+  const lowered = message.toLowerCase();
+  if (
+    lowered.includes("signal is aborted without reason") ||
+    lowered.includes("aborterror") ||
+    lowered.includes("aborted")
+  ) {
+    return "";
+  }
+  return message;
+};
+
 const compressImageToDataUrl = async (file: File, maxWidth = 1024, quality = 0.78): Promise<string> => {
   const dataUrl = await new Promise<string>((resolve, reject) => {
     const reader = new FileReader();
@@ -154,7 +201,11 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
   voiceState = "idle",
   expressionLabel = "unknown",
   expressionConfidence = 0,
+  assistantRuntime = null,
+  assistantRuntimeError = "",
   audioEnabled = true,
+  videoEnabled = true,
+  deviceStatus = null,
 }) => {
   const compact = variant === "compact";
   const initialRenderable = initialMessages.filter((msg) => hasRenderableContent(msg));
@@ -173,19 +224,50 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
   const streamAbortRef = useRef<AbortController | null>(null);
   const streamFlushTimerRef = useRef<number | null>(null);
   const streamPendingTextRef = useRef("");
-  const streamLastFlushMsRef = useRef(0);
   const historyHydratedRef = useRef(false);
-  const voiceRecorderRef = useRef<{ stop: () => Promise<Blob> } | null>(null);
-  const speechSynthesisRef = useRef<SpeechSynthesis | null>(null);
-  const activeSpeechIdRef = useRef<string | null>(null);
-  const speechVoicesLoadedRef = useRef(false);
+  const duplexServiceRef = useRef<QwenRealtimeVideoService | null>(null);
+  const duplexAssistantDraftIdRef = useRef<string | null>(null);
+  const duplexUserDraftIdRef = useRef<string | null>(null);
+  const realtimeTranscriptRef = useRef("");
+  const realtimeToolTurnRef = useRef<AssistantSendResult | null>(null);
+  const realtimeSkipSyncRef = useRef(false);
+  const duplexVideoRef = useRef<HTMLVideoElement | null>(null);
   const [voiceRecording, setVoiceRecording] = useState(false);
   const [voiceBusy, setVoiceBusy] = useState(false);
   const [voiceError, setVoiceError] = useState("");
-  const [speechSupported, setSpeechSupported] = useState(false);
-  const [speakingMessageId, setSpeakingMessageId] = useState<string | null>(null);
-  const [assistantRuntime, setAssistantRuntime] = useState<AssistantRuntimeStatus | null>(null);
-  const [assistantRuntimeError, setAssistantRuntimeError] = useState("");
+  const [duplexState, setDuplexState] = useState<QwenRealtimeState>("idle");
+  const [qwenReady, setQwenReady] = useState(false);
+  const [qwenReadyDetail, setQwenReadyDetail] = useState("?????? Qwen3-Omni");
+
+  const stopBrowserSpeech = () => {
+    if (!("speechSynthesis" in window)) return;
+    try {
+      window.speechSynthesis.cancel();
+    } catch {
+      // ignore
+    }
+  };
+
+  const pickPreferredZhFemaleVoice = () => {
+    if (!("speechSynthesis" in window)) return null;
+    const voices = window.speechSynthesis.getVoices();
+    if (!voices.length) return null;
+    const femaleHints = /(huihui|yaoyao|xiaoxiao|xiaoyi|xiaobei|xiaoni|female|zira)/i;
+    const maleHints = /(kangkang|yunjian|yunxi|yunyang|yunxia|male|david|mark)/i;
+    const zhVoices = voices.filter((voice) => /^zh/i.test(String(voice.lang || "")) || /zh[-_]?cn/i.test(String(voice.name || "")) || /zh[-_]?cn/i.test(String(voice.voiceURI || "")));
+    return (
+      zhVoices.find((voice) => femaleHints.test(String(voice.name || "")) || femaleHints.test(String(voice.voiceURI || ""))) ||
+      zhVoices.find((voice) => !maleHints.test(String(voice.name || "")) && !maleHints.test(String(voice.voiceURI || ""))) ||
+      zhVoices[0] ||
+      voices[0] ||
+      null
+    );
+  };
+
+  const speakBrowserSpeech = (text: string) => {
+    void text;
+    // Disable browser TTS for text chat to avoid confusing it with duplex audio output.
+  };
 
   useEffect(() => {
     const next = initialMessages.filter((msg) => hasRenderableContent(msg));
@@ -216,139 +298,67 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
   useEffect(() => {
     const rafId = window.requestAnimationFrame(() => scrollToBottom("auto"));
     const timer = window.setTimeout(() => scrollToBottom("auto"), 120);
-    const speech = typeof window !== "undefined" ? window.speechSynthesis : undefined;
-    speechSynthesisRef.current = speech || null;
-    setSpeechSupported(Boolean(speech));
     return () => {
-      streamAbortRef.current?.abort();
-      if (streamFlushTimerRef.current != null) {
-        window.clearTimeout(streamFlushTimerRef.current);
-      }
-      streamPendingTextRef.current = "";
-      speechSynthesisRef.current?.cancel();
       window.cancelAnimationFrame(rafId);
       window.clearTimeout(timer);
     };
   }, [assistantRuntime?.gateway_ready, assistantRuntime?.provider_network_ok]);
 
   useEffect(() => {
-    let active = true;
-    const refreshRuntime = async () => {
-      try {
-        const runtime = await getAssistantRuntimeStatus();
-        if (!active) return;
-        setAssistantRuntime(runtime);
-        setAssistantRuntimeError("");
-      } catch (err) {
-        if (!active) return;
-        setAssistantRuntime(null);
-        setAssistantRuntimeError(err instanceof Error ? err.message : String(err));
-      }
-    };
-
-    void refreshRuntime();
-    const timer = window.setInterval(() => {
-      void refreshRuntime();
-    }, assistantRuntime?.gateway_ready && assistantRuntime?.provider_network_ok ? 15000 : 3000);
-
     return () => {
-      active = false;
-      window.clearInterval(timer);
+      streamAbortRef.current?.abort();
+      if (streamFlushTimerRef.current != null) {
+        window.clearTimeout(streamFlushTimerRef.current);
+      }
+      streamPendingTextRef.current = "";
+      void duplexServiceRef.current?.stop();
+      stopBrowserSpeech();
     };
   }, []);
 
-  const assistantReady = Boolean(
-    assistantRuntime?.gateway_ready && assistantRuntime?.provider_network_ok
+  useEffect(() => {
+    let disposed = false;
+    let timer: number | null = null;
+    const poll = async () => {
+      const status = await probeQwenReady();
+      if (disposed) return;
+      setQwenReady(status.ok);
+      setQwenReadyDetail(status.detail);
+      timer = window.setTimeout(poll, status.ok ? 12000 : 4000);
+    };
+    void poll();
+    return () => {
+      disposed = true;
+      if (timer != null) {
+        window.clearTimeout(timer);
+      }
+    };
+  }, []);
+
+  const assistantReady = Boolean(qwenReady);
+  const assistantBooting = Boolean(!isGuest && !qwenReady);
+  const assistantDetail = normalizeRuntimeError(
+    qwenReady
+      ? ""
+      : qwenReadyDetail || assistantRuntimeError || assistantRuntime?.provider_network_detail || assistantRuntime?.gateway_error || ""
   );
-  const assistantBooting = Boolean(
-    !isGuest &&
-      assistantRuntime &&
-      !assistantRuntime.gateway_ready &&
-      assistantRuntime.provider_network_ok
-  );
-  const assistantDetail = assistantRuntimeError
-    ? assistantRuntimeError
-    : assistantRuntime?.provider_network_detail || assistantRuntime?.gateway_error || "";
   const chatInputDisabled = Boolean(!isGuest && !assistantReady);
   const chatInputPlaceholder = assistantBooting
-    ? "本地 OpenClaw 正在启动，大约需要几十秒…"
+    ? "?? Qwen3-Omni ??????"
     : !isGuest && !assistantReady
-    ? "OpenClaw 未就绪，暂时不能发送消息"
-    : "和你的伙伴聊聊…";
+    ? "Qwen3-Omni ????????????"
+    : "????????";
 
-  const stopSpeaking = () => {
-    speechSynthesisRef.current?.cancel();
-    activeSpeechIdRef.current = null;
-    setSpeakingMessageId(null);
-  };
-
-  const pickSpeechVoice = () => {
-    const synth = speechSynthesisRef.current;
-    if (!synth) return null;
-    const voices = synth.getVoices();
-    if (!voices.length) return null;
-    return (
-      voices.find((voice) => /zh[-_](CN|Hans)/i.test(voice.lang) || /chinese/i.test(voice.name)) ||
-      voices.find((voice) => /^zh/i.test(voice.lang)) ||
-      voices[0] ||
-      null
-    );
-  };
-
-  const speakReply = (messageId: string, text: string) => {
-    const synth = speechSynthesisRef.current;
-    const spokenText = cleanSpeechText(text);
-    if (!audioEnabled || !synth || !spokenText) return;
-
-    stopSpeaking();
-    const utterance = new SpeechSynthesisUtterance(spokenText);
-    const attachVoiceAndSpeak = () => {
-      const voice = pickSpeechVoice();
-      if (voice) {
-        utterance.voice = voice;
-        utterance.lang = voice.lang || "zh-CN";
-      } else {
-        utterance.lang = "zh-CN";
-      }
-      utterance.rate = 1.02;
-      utterance.pitch = 1.02;
-      utterance.volume = 1;
-      activeSpeechIdRef.current = messageId;
-      setSpeakingMessageId(messageId);
-      utterance.onend = () => {
-        if (activeSpeechIdRef.current === messageId) {
-          activeSpeechIdRef.current = null;
-          setSpeakingMessageId(null);
-        }
-      };
-      utterance.onerror = () => {
-        if (activeSpeechIdRef.current === messageId) {
-          activeSpeechIdRef.current = null;
-          setSpeakingMessageId(null);
-        }
-      };
-      synth.speak(utterance);
-    };
-
-    if (!speechVoicesLoadedRef.current && synth.getVoices().length === 0) {
-      const handleVoicesChanged = () => {
-        speechVoicesLoadedRef.current = true;
-        synth.removeEventListener("voiceschanged", handleVoicesChanged);
-        attachVoiceAndSpeak();
-      };
-      synth.addEventListener("voiceschanged", handleVoicesChanged);
-      window.setTimeout(() => {
-        synth.removeEventListener("voiceschanged", handleVoicesChanged);
-        if (!activeSpeechIdRef.current) {
-          attachVoiceAndSpeak();
-        }
-      }, 300);
-      return;
-    }
-
-    speechVoicesLoadedRef.current = true;
-    attachVoiceAndSpeak();
-  };
+  const robotSnapshotUrl = useMemo(() => {
+    const statusRecord = deviceStatus?.status as Record<string, unknown> | undefined;
+    const host =
+      normalizeRuntimeHost(deviceStatus?.device_ip) ||
+      normalizeRuntimeHost(statusRecord?.ip as string | undefined) ||
+      normalizeRuntimeHost(window.localStorage.getItem("robot_runtime_host"));
+    if (!host) return "";
+    const params = new URLSearchParams({ device_ip: host });
+    return `${ROBOT_PROXY_BASE}/snapshot?${params.toString()}`;
+  }, [deviceStatus]);
 
   const pickAttachments = () => {
     if (uploading || chatInputDisabled) return;
@@ -387,7 +397,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
   };
 
   const onAttachmentPicked = async (event: React.ChangeEvent<HTMLInputElement>) => {
-    const files = Array.from(event.target.files || []);
+    const files = Array.from(event.target.files || []) as File[];
     event.target.value = "";
     await addAttachmentsFromFiles(files);
   };
@@ -412,12 +422,12 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
   const onRootDrop = async (event: React.DragEvent<HTMLDivElement>) => {
     event.preventDefault();
     setDragActive(false);
-    const files = Array.from(event.dataTransfer?.files || []);
+    const files = Array.from(event.dataTransfer?.files || []) as File[];
     await addAttachmentsFromFiles(files);
   };
 
   const onInputPaste = async (event: React.ClipboardEvent<HTMLInputElement>) => {
-    const files = Array.from(event.clipboardData?.files || []);
+    const files = Array.from(event.clipboardData?.files || []) as File[];
     if (!files.length) return;
     event.preventDefault();
     await addAttachmentsFromFiles(files);
@@ -437,7 +447,6 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
     }));
 
     const hasText = trimmed.length > 0;
-    const hasImage = outgoingAttachments.some((a) => a.kind === "image" && String(a.image_data_url || "").startsWith("data:image/"));
     const contentType: ChatMessage["contentType"] = hasText
       ? attachmentsForStorage.length
         ? "mixed"
@@ -468,7 +477,6 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
     setAttachmentError("");
     setVoiceError("");
     setIsTyping(true);
-    stopSpeaking();
     streamAbortRef.current?.abort();
     const abortCtrl = new AbortController();
     streamAbortRef.current = abortCtrl;
@@ -488,13 +496,13 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
       return;
     }
 
-    if (!assistantRuntime || !assistantReady) {
+    if (!assistantReady) {
       const botMsg: ChatMessage = {
         id: `bot-${Date.now()}`,
         sender: "bot",
         text: assistantBooting
-          ? "本地 OpenClaw 正在启动，请稍等几十秒后再发消息。"
-          : `OpenClaw 当前未连接，暂时不能给出真实 AI 回答。${assistantDetail ? ` 原因：${assistantDetail}` : assistantRuntime ? "" : " 原因：本地助手运行态暂未就绪。"}`,
+          ? "?? Qwen3-Omni ??????????????"
+          : `Qwen3-Omni ?????????????? AI ???${assistantDetail ? ` ???${assistantDetail}` : " ????????????"}`,
         timestamp: new Date(),
         contentType: "text",
         attachments: [],
@@ -529,104 +537,25 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
         ];
       });
     };
-    const flushStreamText = (force = false) => {
-      const pending = streamPendingTextRef.current;
-      if (!hasRenderableText(pending)) return;
-      const now = Date.now();
-      if (!force && now - streamLastFlushMsRef.current < 28) return;
-      streamLastFlushMsRef.current = now;
-      upsertBotMessage(pending);
-    };
-
     try {
       const requestMessages = [...messages, userMsg];
-      const history = requestMessages
-        .slice(-6)
-        .map((m) => ({
-          sender: m.sender,
-          text: messageToHistoryText(m),
-          timestamp_ms: m.timestamp.getTime(),
-        }))
-        .filter((item) => item.text.trim().length > 0);
       const memorySummary = buildMemorySummary(requestMessages, 6, 420);
-
-      const llmAttachments = outgoingAttachments
-        .filter((a) => a.kind === "image")
-        .map((a) => ({
-          kind: a.kind,
-          url: a.url,
-          mime: a.mime,
-          name: a.name,
-          size: a.size,
-          image_data_url: a.image_data_url,
-        }));
-
-      let responseText = "";
-      if (hasImage) {
-        responseText = await generateAssistantMessage(
-          currentEmotion,
-          trimmed || messageToHistoryText(userMsg),
-          history,
-          userMsg.timestamp.getTime(),
-          memorySummary,
-          expressionLabel,
-          expressionConfidence,
-          llmAttachments
-        );
-      } else {
-        responseText = await generateAssistantMessageStream(
-          currentEmotion,
-          trimmed || messageToHistoryText(userMsg),
-          history,
-          userMsg.timestamp.getTime(),
-          {
-            onStart: () => {
-              setIsTyping(true);
-              streamPendingTextRef.current = "";
-              streamLastFlushMsRef.current = 0;
-              upsertBotMessage("…");
-            },
-            onDelta: (_delta, fullText) => {
-              setIsTyping(false);
-              streamPendingTextRef.current = fullText;
-              flushStreamText(false);
-              if (streamFlushTimerRef.current == null) {
-                streamFlushTimerRef.current = window.setTimeout(() => {
-                  flushStreamText(true);
-                  streamFlushTimerRef.current = null;
-                }, 28);
-              }
-            },
-            onDone: (fullText) => {
-              streamPendingTextRef.current = fullText;
-              if (streamFlushTimerRef.current != null) {
-                window.clearTimeout(streamFlushTimerRef.current);
-                streamFlushTimerRef.current = null;
-              }
-              flushStreamText(true);
-            },
-          },
-          abortCtrl.signal,
-          memorySummary,
-          expressionLabel,
-          expressionConfidence,
-          llmAttachments
-        );
-      }
-
-      if (!responseText.trim()) {
-        responseText = await generateAssistantMessage(
-          currentEmotion,
-          trimmed || messageToHistoryText(userMsg),
-          history,
-          userMsg.timestamp.getTime(),
-          memorySummary,
-          expressionLabel,
-          expressionConfidence,
-          llmAttachments
-        );
-      }
+      const response = await sendAssistantMessage({
+        text: trimmed || messageToHistoryText(userMsg),
+        surface: "desktop",
+        session_key: DEFAULT_ASSISTANT_SESSION_KEY,
+        attachments: outgoingAttachments.map((a) => ({ ...a, image_data_url: a.image_data_url })),
+        metadata: {
+          current_emotion: currentEmotion,
+          expression_label: expressionLabel,
+          expression_confidence: expressionConfidence,
+          memory_summary: memorySummary,
+          source: "chat_interface_text",
+        },
+      });
+      const responseText = String(response?.text || "").trim();
       upsertBotMessage(responseText);
+      speakBrowserSpeech(responseText);
 
       if (hasRenderableText(responseText)) {
         const botMsg: ChatMessage = {
@@ -639,7 +568,6 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
         };
         if (onSendMessage) onSendMessage(botMsg);
       }
-      speakReply(botMsgId, responseText);
     } finally {
       if (streamFlushTimerRef.current != null) {
         window.clearTimeout(streamFlushTimerRef.current);
@@ -653,25 +581,98 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
     }
   };
 
+  const upsertDuplexMessage = (id: string, sender: "user" | "bot", text: string) => {
+    const safe = String(text || "").trim();
+    if (!safe) return;
+    setMessages((prev) => {
+      const idx = prev.findIndex((item) => item.id === id);
+      if (idx >= 0) {
+        const cloned = [...prev];
+        cloned[idx] = { ...cloned[idx], text: safe, timestamp: new Date() };
+        return cloned;
+      }
+      return [
+        ...prev,
+        {
+          id,
+          sender,
+          text: safe,
+          timestamp: new Date(),
+          contentType: "text",
+          attachments: [],
+        },
+      ];
+    });
+  };
+
+  const commitDuplexMessage = (idRef: React.MutableRefObject<string | null>, sender: "user" | "bot", text: string) => {
+    const safe = String(text || "").trim();
+    if (!safe) return;
+    const id = idRef.current || `${sender}-${Date.now()}`;
+    idRef.current = id;
+    upsertDuplexMessage(id, sender, safe);
+    onSendMessage?.({
+      id,
+      sender,
+      text: safe,
+      timestamp: new Date(),
+      contentType: "text",
+      attachments: [],
+    });
+    idRef.current = null;
+  };
+
+  const resetRealtimeTurnState = () => {
+    realtimeTranscriptRef.current = "";
+    realtimeToolTurnRef.current = null;
+    realtimeSkipSyncRef.current = false;
+    duplexUserDraftIdRef.current = null;
+  };
+
+  const syncRealtimeConversation = async (assistantText: string) => {
+    if (realtimeSkipSyncRef.current) {
+      resetRealtimeTurnState();
+      return;
+    }
+    const cleanAssistantText = String(assistantText || "").trim();
+    const cleanUserText = String(realtimeTranscriptRef.current || "").trim();
+    if (!cleanAssistantText && !cleanUserText) {
+      resetRealtimeTurnState();
+      return;
+    }
+    try {
+      await syncRealtimeTurn({
+        surface: "desktop",
+        session_key: DEFAULT_ASSISTANT_SESSION_KEY,
+        user_text: cleanUserText || REALTIME_PLACEHOLDER_USER_TEXT,
+        assistant_text: cleanAssistantText,
+        tool_events: realtimeToolTurnRef.current?.tool_results || [],
+        source: realtimeToolTurnRef.current ? "desktop_realtime_tool_followup" : "desktop_realtime",
+      });
+    } catch (error) {
+      console.error("realtime turn sync failed", error);
+    } finally {
+      resetRealtimeTurnState();
+    }
+  };
+
   const handleVoiceToggle = async () => {
     setVoiceError("");
-    if (voiceRecording && voiceRecorderRef.current) {
+    if (voiceRecording && duplexServiceRef.current) {
       setVoiceBusy(true);
       try {
-        const blob = await voiceRecorderRef.current.stop();
-        voiceRecorderRef.current = null;
+        stopBrowserSpeech();
+        await duplexServiceRef.current.stop();
+        resetRealtimeTurnState();
+        duplexServiceRef.current = null;
         setVoiceRecording(false);
-        const result = await transcribeDesktopAudio(blob, "chat");
-        const transcript = String(result.transcript || "").trim();
-        if (!transcript) {
-          setVoiceError("没有识别到有效语音，请重试");
-          return;
-        }
-        await handleSend(transcript);
+        setDuplexState("idle");
       } catch (err) {
         setVoiceError(err instanceof Error ? err.message : String(err));
+        resetRealtimeTurnState();
         setVoiceRecording(false);
-        voiceRecorderRef.current = null;
+        duplexServiceRef.current = null;
+        setDuplexState("idle");
       } finally {
         setVoiceBusy(false);
       }
@@ -680,16 +681,140 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
 
     setVoiceBusy(true);
     try {
-      voiceRecorderRef.current = await createDesktopVoiceRecorder();
+      if (!duplexVideoRef.current) {
+        throw new Error("missing_duplex_video_element");
+      }
+      resetRealtimeTurnState();
+      const service = new QwenRealtimeVideoService({
+        onStateChange: (state, detail) => {
+          setDuplexState(state);
+          if (state === "error" && detail) {
+            setVoiceError(detail);
+            setVoiceRecording(false);
+            duplexServiceRef.current = null;
+          }
+        },
+        onTurnCommitted: (kind) => {
+          if (kind === "voice") {
+            const id = `duplex-user-${Date.now()}`;
+            duplexUserDraftIdRef.current = id;
+            upsertDuplexMessage(id, "user", REALTIME_PLACEHOLDER_USER_TEXT);
+            onSendMessage?.({
+              id,
+              sender: "user",
+              text: REALTIME_PLACEHOLDER_USER_TEXT,
+              timestamp: new Date(),
+              contentType: "text",
+              attachments: [],
+            });
+          }
+        },
+        onUserTranscriptDelta: (text) => {
+          const safe = String(text || "").trim();
+          realtimeTranscriptRef.current = safe;
+          if (!duplexUserDraftIdRef.current) {
+            duplexUserDraftIdRef.current = `duplex-user-${Date.now()}`;
+          }
+          if (safe) {
+            upsertDuplexMessage(duplexUserDraftIdRef.current, "user", safe);
+          }
+        },
+        onUserTranscriptFinal: (text) => {
+          const safe = String(text || "").trim();
+          realtimeTranscriptRef.current = safe;
+          if (!safe) return;
+          commitDuplexMessage(duplexUserDraftIdRef, "user", safe);
+        },
+        onVoiceTurnReady: async ({ transcript, defaultPrompt }) => {
+          const safeTranscript = String(transcript || "").trim();
+          realtimeTranscriptRef.current = safeTranscript;
+          if (!safeTranscript || !looksLikeToolCommand(safeTranscript)) {
+            realtimeToolTurnRef.current = null;
+            realtimeSkipSyncRef.current = false;
+            return { prompt: defaultPrompt };
+          }
+          const toolResponse = await sendAssistantMessage({
+            text: safeTranscript,
+            surface: "desktop",
+            session_key: DEFAULT_ASSISTANT_SESSION_KEY,
+            metadata: {
+              assistant_mode: "agent",
+              assistant_native_control: true,
+              current_emotion: currentEmotion,
+              expression_label: expressionLabel,
+              expression_confidence: expressionConfidence,
+              memory_summary: voiceMemorySummary,
+              source: "chat_interface_realtime_tool",
+            },
+          });
+          realtimeToolTurnRef.current = toolResponse;
+          realtimeSkipSyncRef.current = true;
+          return {
+            handled: true,
+            prompt: buildRealtimeToolFollowupPrompt(toolResponse.text),
+          };
+        },
+        onAssistantTextDelta: (text) => {
+          const id = duplexAssistantDraftIdRef.current || `duplex-bot-${Date.now()}`;
+          duplexAssistantDraftIdRef.current = id;
+          upsertDuplexMessage(id, "bot", text);
+        },
+        onAssistantTextFinal: (text) => {
+          commitDuplexMessage(duplexAssistantDraftIdRef, "bot", text);
+          void syncRealtimeConversation(text);
+        },
+        onError: (message) => {
+          setVoiceError(message);
+        },
+      });
+      const voiceMemorySummary = buildMemorySummary(messages, 8, 720);
+      await service.start({
+        videoElement: duplexVideoRef.current,
+        enableLocalVideo: videoEnabled,
+        robotSnapshotUrl: robotSnapshotUrl || undefined,
+        wsUrl: "ws://127.0.0.1:8091/v1/video/chat/stream",
+        localVideoLabel: "Laptop Camera",
+        robotVideoLabel: "Robot Camera",
+        systemPrompt: [
+          "You are the local Qwen3-Omni realtime assistant for the desktop prototype.",
+          "The composite frame uses laptop camera on the left and robot camera on the right.",
+          "Use both visual streams and the latest speech input to answer in concise Chinese.",
+          `Current emotion: ${currentEmotion}`,
+          `Expression label: ${expressionLabel}, confidence: ${Number(expressionConfidence || 0).toFixed(2)}`,
+          voiceMemorySummary ? `Conversation summary: ${voiceMemorySummary}` : "",
+        ].filter(Boolean).join("\n"),
+        autoQueryTemplate: robotSnapshotUrl
+          ? "Please answer in Chinese using the left laptop view, the right robot view, and the latest speech."
+          : "Please answer in Chinese using the current camera view and the latest speech.",
+      });
+      duplexServiceRef.current = service;
       setVoiceRecording(true);
     } catch (err) {
       setVoiceError(err instanceof Error ? err.message : String(err));
-      voiceRecorderRef.current = null;
+      duplexServiceRef.current = null;
       setVoiceRecording(false);
+      setDuplexState("error");
     } finally {
       setVoiceBusy(false);
     }
   };
+
+  const duplexStatusLabel =
+    duplexState === "connecting"
+      ? "连接中"
+      : duplexState === "preparing"
+      ? "准备中"
+      : duplexState === "listening"
+      ? "聆听中"
+      : duplexState === "thinking"
+      ? "思考中"
+      : duplexState === "speaking"
+      ? "播报中"
+      : duplexState === "interrupted"
+      ? "已打断"
+      : duplexState === "error"
+      ? "异常"
+      : "空闲";
 
   return (
     <div
@@ -700,7 +825,6 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
       onDragLeave={onRootDragLeave}
       onDrop={onRootDrop}
     >
-      <div className="ios-liquid-blob ios-liquid-blob--focus" />
       {dragActive && (
         <div className="absolute inset-0 z-30 border-2 border-dashed border-indigo-300/60 bg-indigo-400/10 backdrop-blur-md pointer-events-none flex items-center justify-center">
           <div className="ios-float-card-soft px-4 py-2 rounded-[1.1rem] text-indigo-100 text-xs font-semibold">
@@ -719,12 +843,12 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
               <div className="flex items-center gap-2">
                 <span className={`w-2 h-2 rounded-full ${assistantReady ? "bg-emerald-300 animate-pulse" : "bg-rose-300"}`}></span>
                 <span className={`text-[10px] font-semibold tracking-[0.16em] ${assistantReady ? "text-indigo-200" : "text-rose-200"}`}>
-                  {assistantReady ? "OpenClaw 已连接" : "OpenClaw 未就绪"}
+                  {assistantReady ? "Qwen3-Omni ???" : "Qwen3-Omni ???"}
                 </span>
               </div>
               {!assistantReady && (
                 <p className="mt-1 text-[10px] font-semibold text-slate-400">
-                  {assistantDetail || "当前回答会被阻塞，等待本地 OpenClaw 恢复后再试。"}
+                  {assistantDetail || "????????????? Qwen3-Omni ??????"}
                 </p>
               )}
             </div>
@@ -733,7 +857,9 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
             <Activity size={14} className="text-indigo-400" />
             <span className="text-[10px] font-semibold text-slate-300 tracking-[0.16em]">
               状态：
-              {voiceState === "detecting"
+              {voiceRecording
+                ? duplexStatusLabel
+                : voiceState === "detecting"
                 ? "待唤醒"
                 : voiceState === "listening"
                 ? "聆听中"
@@ -801,24 +927,6 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
               <span className="text-[9px] font-semibold text-slate-500 px-2 mt-1">
                 {msg.timestamp.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
               </span>
-              {msg.sender !== "user" && hasRenderableText(msg.text) && speechSupported && (
-                <button
-                  type="button"
-                  onClick={() => {
-                    if (speakingMessageId === msg.id) {
-                      stopSpeaking();
-                      return;
-                    }
-                    speakReply(msg.id, msg.text);
-                  }}
-                  className="ios-ghost-chip px-2.5 py-1 mt-1 rounded-full text-[9px] font-semibold tracking-[0.16em] text-slate-300 hover:text-white"
-                >
-                  <span className="inline-flex items-center gap-1">
-                    {speakingMessageId === msg.id ? <Square size={10} fill="currentColor" /> : <Volume2 size={10} />}
-                    {speakingMessageId === msg.id ? "停止朗读" : "朗读回答"}
-                  </span>
-                </button>
-              )}
             </div>
           </div>
         ))}
@@ -878,9 +986,13 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
           <button
             type="button"
             onClick={handleVoiceToggle}
-            disabled={uploading || isTyping || voiceBusy || chatInputDisabled}
-            className={`disabled:opacity-40 transition-colors ${voiceRecording ? "text-rose-300 hover:text-rose-200" : "text-slate-300 hover:text-white"}`}
-            title={voiceRecording ? "结束录音并转写" : "本地语音输入"}
+            disabled={voiceBusy || (!voiceRecording && (uploading || chatInputDisabled))}
+            className={`inline-flex items-center gap-2 rounded-full border px-3 py-2 text-[11px] font-bold tracking-[0.12em] disabled:opacity-40 transition-colors ${
+              voiceRecording
+                ? "border-rose-300/40 bg-rose-400/10 text-rose-200 hover:bg-rose-400/15"
+                : "border-cyan-300/30 bg-cyan-400/10 text-cyan-100 hover:bg-cyan-400/15"
+            }`}
+            title={voiceRecording ? "停止全双工聊天" : "启动全双工聊天"}
           >
             {voiceBusy ? (
               <LoaderCircle size={compact ? 16 : 18} className="animate-spin" />
@@ -889,6 +1001,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
             ) : (
               <Mic size={compact ? 16 : 18} />
             )}
+            <span>{voiceRecording ? "停止全双工聊天" : "启动全双工聊天"}</span>
           </button>
           <input
             type="text"
@@ -914,13 +1027,17 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
         </div>
         {attachmentError && <p className="text-[10px] font-bold text-rose-400 mt-2">{attachmentError}</p>}
         {voiceError && <p className="text-[10px] font-bold text-rose-400 mt-2">{voiceError}</p>}
-        {voiceRecording && <p className="text-[10px] font-bold text-amber-300 mt-2">正在本地录音，再按一次麦克风即可结束并自动发送</p>}
-        {!audioEnabled && <p className="text-[10px] font-bold text-slate-500 mt-2">当前已关闭音频输出，回答不会自动朗读。</p>}
+        {voiceRecording && (
+          <p className="text-[10px] font-bold text-amber-300 mt-2">
+            全双工聊天已开启：直接说话即可，停顿后自动回应；系统播报时再次开口会尝试打断。当前状态：{duplexStatusLabel}。
+          </p>
+        )}
         {!compact && (
           <p className="text-[9px] text-center mt-3 text-slate-500 font-semibold tracking-[0.18em]">
             机器人动作指令（语音/动作/表情）由本地引擎实时处理
           </p>
         )}
+        <video ref={duplexVideoRef} className="hidden" muted playsInline />
       </div>
     </div>
   );

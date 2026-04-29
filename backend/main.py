@@ -18,7 +18,7 @@ from typing import Any, Dict, List, Optional
 
 from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, UploadFile, status, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse, StreamingResponse
+from fastapi.responses import FileResponse, HTMLResponse, StreamingResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from fastapi.staticfiles import StaticFiles
 from sqlite3 import Connection
@@ -85,6 +85,8 @@ from .schemas import (
     ActivationRuntimeStatusResponse,
     ActivationPromptPackResponse,
     AssistantMemorySearchResponse,
+    AssistantRealtimeTurnSyncRequest,
+    AssistantRealtimeTurnSyncResponse,
     AssistantRuntimeStatusResponse,
     AssistantSendRequest,
     AssistantSendResponse,
@@ -94,6 +96,7 @@ from .schemas import (
     AssistantTodoItem,
     AssistantTodoListResponse,
     AssistantTodoUpdateRequest,
+    AssistantWechatStatusResponse,
     CareRequest,
     CareResponse,
     CameraEmotionAnalyzeRequest,
@@ -2292,7 +2295,7 @@ def _insert_chat_message(conn: Connection, user_id: int, payload: ChatMessageReq
 
 
 def _resolve_wechat_mirror_target() -> Optional[Dict[str, str]]:
-    state_dir = Path(__file__).resolve().parents[1] / "assistant_data" / "openclaw_state" / "openclaw-weixin"
+    state_dir = _resolve_wechat_state_dir()
     accounts_index = state_dir / "accounts.json"
     try:
         account_ids = json.loads(accounts_index.read_text(encoding="utf-8"))
@@ -2341,6 +2344,93 @@ def _resolve_wechat_mirror_target() -> Optional[Dict[str, str]]:
         "channel_version": "2.1.1",
         "app_id": "bot",
     }
+
+
+def _resolve_wechat_state_dir() -> Path:
+    return Path(__file__).resolve().parents[1] / "assistant_data" / "openclaw_state" / "openclaw-weixin"
+
+
+def _find_wechat_qr_asset() -> Optional[Path]:
+    state_dir = _resolve_wechat_state_dir()
+    if not state_dir.exists():
+        return None
+    patterns = [
+        "*qr*.png",
+        "*qr*.jpg",
+        "*qr*.jpeg",
+        "*qr*.svg",
+        "*qr*.txt",
+        "*qrcode*.png",
+        "*qrcode*.jpg",
+        "*qrcode*.svg",
+        "*qrcode*.txt",
+    ]
+    for pattern in patterns:
+        matches = sorted(state_dir.rglob(pattern))
+        if matches:
+            return matches[0]
+    return None
+
+
+def _build_wechat_status_payload() -> Dict[str, Any]:
+    state_dir = _resolve_wechat_state_dir()
+    qr_path = _find_wechat_qr_asset()
+    target = _resolve_wechat_mirror_target()
+    if target:
+        return {
+            "ok": True,
+            "status": "linked",
+            "detail": "WeChat / WeCom mirror target is linked.",
+            "qr_available": bool(qr_path and qr_path.exists()),
+            "qr_path": str(qr_path) if qr_path and qr_path.exists() else None,
+            "linked": True,
+            "account_id": target.get("account_id"),
+            "user_id": target.get("user_id"),
+        }
+    if qr_path and qr_path.exists():
+        return {
+            "ok": True,
+            "status": "awaiting_scan",
+            "detail": "QR asset found. Scan required to complete login.",
+            "qr_available": True,
+            "qr_path": str(qr_path),
+            "linked": False,
+            "account_id": None,
+            "user_id": None,
+        }
+    if state_dir.exists():
+        return {
+            "ok": True,
+            "status": "not_linked",
+            "detail": "State directory exists, but no linked account or QR asset is currently available.",
+            "qr_available": False,
+            "qr_path": None,
+            "linked": False,
+            "account_id": None,
+            "user_id": None,
+        }
+    return {
+        "ok": True,
+        "status": "unconfigured",
+        "detail": "WeChat state directory does not exist yet.",
+        "qr_available": False,
+        "qr_path": None,
+        "linked": False,
+        "account_id": None,
+        "user_id": None,
+    }
+
+
+def _compose_tool_event_summary(tool_events: List[Dict[str, Any]]) -> str:
+    lines: List[str] = []
+    for item in tool_events:
+        name = str(item.get("name") or "").strip()
+        detail = str(item.get("detail") or "").strip()
+        if detail:
+            lines.append(detail)
+        elif name:
+            lines.append(f"已执行工具：{name}")
+    return "\n".join(lines).strip()
 
 
 def _build_wechat_client_version(version: str) -> int:
@@ -5522,6 +5612,152 @@ async def assistant_bridge_send(
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc)) from exc
     except RuntimeError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+
+
+@app.post("/api/assistant/realtime-turn-sync", response_model=AssistantRealtimeTurnSyncResponse)
+async def assistant_realtime_turn_sync(
+    payload: AssistantRealtimeTurnSyncRequest,
+    request: Request,
+    credentials: HTTPAuthorizationCredentials = Depends(bearer_scheme),
+    conn: Connection = Depends(get_db),
+) -> AssistantRealtimeTurnSyncResponse:
+    user = _parse_access_token_for_local_desktop(credentials, conn, request)
+    resolved_surface = normalize_surface(payload.surface)
+    resolved_session_key = build_session_key(
+        resolved_surface,
+        user_id=int(user["id"]),
+        explicit=payload.session_key,
+        device_id=payload.device_id,
+        sender_id=payload.sender_id,
+    )
+    timestamp_ms = int(time.time() * 1000)
+    inserted_messages = 0
+
+    user_text = str(payload.user_text or "").strip()
+    assistant_text = _sanitize_outbound_bot_text(str(payload.assistant_text or ""))[0].strip()
+    if not assistant_text:
+        assistant_text = _compose_tool_event_summary(
+            [
+                item.model_dump() if hasattr(item, "model_dump") else {
+                    "name": item.name,
+                    "ok": item.ok,
+                    "detail": item.detail,
+                    "data": item.data,
+                }
+                for item in payload.tool_events
+            ]
+        )
+
+    events_to_broadcast: List[Dict[str, object]] = []
+    user_id_int = int(user["id"])
+
+    if user_text:
+        user_message = ChatMessageRequest(
+            sender="user",
+            text=user_text,
+            content_type="text",
+            attachments=[],
+            timestamp_ms=timestamp_ms - 1,
+            surface=resolved_surface,
+            session_key=resolved_session_key,
+        )
+        user_msg_id = _insert_chat_message(conn, user_id_int, user_message)
+        inserted_messages += 1
+        events_to_broadcast.append(
+            {
+                "type": "ChatMessage",
+                "timestamp_ms": user_message.timestamp_ms,
+                "payload": {
+                    "id": user_msg_id,
+                    "sender": user_message.sender,
+                    "text": user_message.text,
+                    "content_type": user_message.content_type,
+                    "attachments": user_message.attachments,
+                    "timestamp_ms": user_message.timestamp_ms,
+                    "surface": user_message.surface,
+                    "session_key": user_message.session_key,
+                },
+            }
+        )
+
+    mirrored_to_wechat = False
+    if assistant_text:
+        bot_message = ChatMessageRequest(
+            sender="assistant",
+            text=assistant_text,
+            content_type="text",
+            attachments=[],
+            timestamp_ms=timestamp_ms,
+            surface=resolved_surface,
+            session_key=resolved_session_key,
+        )
+        bot_msg_id = _insert_chat_message(conn, user_id_int, bot_message)
+        inserted_messages += 1
+        events_to_broadcast.append(
+            {
+                "type": "ChatMessage",
+                "timestamp_ms": bot_message.timestamp_ms,
+                "payload": {
+                    "id": bot_msg_id,
+                    "sender": bot_message.sender,
+                    "text": bot_message.text,
+                    "content_type": bot_message.content_type,
+                    "attachments": bot_message.attachments,
+                    "timestamp_ms": bot_message.timestamp_ms,
+                    "surface": bot_message.surface,
+                    "session_key": bot_message.session_key,
+                },
+            }
+        )
+        if resolved_surface == "desktop":
+            mirrored_to_wechat = await _mirror_bot_reply_to_wechat(assistant_text)
+
+    for event in events_to_broadcast:
+        await event_manager.broadcast(event)
+
+    return AssistantRealtimeTurnSyncResponse(
+        ok=True,
+        surface=resolved_surface,
+        session_key=resolved_session_key,
+        inserted_messages=inserted_messages,
+        mirrored_to_wechat=mirrored_to_wechat,
+        timestamp_ms=timestamp_ms,
+    )
+
+
+@app.get("/api/assistant/wechat/status", response_model=AssistantWechatStatusResponse)
+def assistant_wechat_status(
+    request: Request,
+    credentials: HTTPAuthorizationCredentials = Depends(bearer_scheme),
+    conn: Connection = Depends(get_db),
+) -> AssistantWechatStatusResponse:
+    _parse_access_token_for_local_desktop(credentials, conn, request)
+    return AssistantWechatStatusResponse(**_build_wechat_status_payload())
+
+
+@app.get("/api/assistant/wechat/qr")
+def assistant_wechat_qr(
+    request: Request,
+    credentials: HTTPAuthorizationCredentials = Depends(bearer_scheme),
+    conn: Connection = Depends(get_db),
+):
+    _parse_access_token_for_local_desktop(credentials, conn, request)
+    payload = _build_wechat_status_payload()
+    qr_path_raw = str(payload.get("qr_path") or "").strip()
+    if not qr_path_raw:
+        return payload
+    qr_path = Path(qr_path_raw)
+    if not qr_path.exists():
+        return payload
+    suffix = qr_path.suffix.lower()
+    if suffix in {".png", ".jpg", ".jpeg", ".svg"}:
+        return FileResponse(str(qr_path))
+    if suffix == ".txt":
+        return {
+            **payload,
+            "qr_text": qr_path.read_text(encoding="utf-8", errors="ignore"),
+        }
+    return payload
 
 
 @app.get("/api/assistant/session/status", response_model=AssistantSessionStatusResponse)
