@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Dict, Optional, Union
+from typing import Any, Dict, Optional, Union
 
 from pydantic import BaseModel, Field
 
@@ -433,6 +433,7 @@ class AssistantWechatStatusResponse(BaseModel):
     linked: bool = False
     account_id: Optional[str] = None
     user_id: Optional[str] = None
+    diagnostics: Dict[str, Any] = Field(default_factory=dict)
 
 
 class AssistantSessionStatusResponse(BaseModel):

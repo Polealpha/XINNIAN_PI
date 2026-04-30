@@ -11,6 +11,7 @@ import base64
 import hashlib
 import secrets
 import binascii
+import os
 from difflib import SequenceMatcher
 from collections import deque
 from pathlib import Path
@@ -151,6 +152,7 @@ from .settings import (
     ALLOW_UNVERIFIED_LOCAL_DESKTOP_TOKENS,
     ASSISTANT_BRIDGE_TOKEN,
     ASSISTANT_BRIDGE_USER_ID,
+    OPENCLAW_REPO_PATH,
     AUTH_SECRET_KEY,
     OPENCLAW_STATE_DIR,
     OPENCLAW_PREFERRED_CODE_MODEL,
@@ -2347,7 +2349,7 @@ def _resolve_wechat_mirror_target() -> Optional[Dict[str, str]]:
     }
 
 
-def _resolve_wechat_state_dir() -> Path:
+def _wechat_state_candidates() -> List[Path]:
     repo_default = Path(__file__).resolve().parents[1] / "assistant_data" / "openclaw_state" / "openclaw-weixin"
     candidates: List[Path] = []
     configured_state = str(OPENCLAW_STATE_DIR or "").strip()
@@ -2359,6 +2361,19 @@ def _resolve_wechat_state_dir() -> Path:
             Path(local_appdata).expanduser().resolve() / "EmoResonance" / "assistant_data" / "openclaw_state" / "openclaw-weixin"
         )
     candidates.append(repo_default)
+    deduped: List[Path] = []
+    seen: set[str] = set()
+    for candidate in candidates:
+        key = str(candidate)
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(candidate)
+    return deduped
+
+
+def _resolve_wechat_state_dir() -> Path:
+    candidates = _wechat_state_candidates()
     for candidate in candidates:
         try:
             if candidate.exists():
@@ -2390,10 +2405,116 @@ def _find_wechat_qr_asset() -> Optional[Path]:
     return None
 
 
+def _list_wechat_qr_assets(state_dir: Path, limit: int = 8) -> List[str]:
+    if not state_dir.exists():
+        return []
+    patterns = [
+        "*qr*.png",
+        "*qr*.jpg",
+        "*qr*.jpeg",
+        "*qr*.svg",
+        "*qr*.txt",
+        "*qrcode*.png",
+        "*qrcode*.jpg",
+        "*qrcode*.svg",
+        "*qrcode*.txt",
+    ]
+    results: List[str] = []
+    seen: set[str] = set()
+    for pattern in patterns:
+        try:
+            matches = sorted(state_dir.rglob(pattern))
+        except Exception:
+            matches = []
+        for match in matches:
+            key = str(match)
+            if key in seen:
+                continue
+            seen.add(key)
+            results.append(key)
+            if len(results) >= limit:
+                return results
+    return results
+
+
+def _read_json_if_exists(path: Path) -> Any:
+    try:
+        if path.exists():
+            return json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+    return None
+
+
+def _wechat_runtime_diagnostics() -> Dict[str, Any]:
+    state_dir = _resolve_wechat_state_dir()
+    candidate_dirs = [str(path) for path in _wechat_state_candidates()]
+    repo_root = Path(__file__).resolve().parents[1]
+    local_appdata = Path(os.environ.get("LOCALAPPDATA") or "")
+    openclaw_state_root = (
+        local_appdata / "EmoResonance" / "assistant_data" / "openclaw_state" if str(local_appdata).strip() else Path()
+    )
+    openclaw_json_path = openclaw_state_root / "openclaw.json" if str(openclaw_state_root).strip() else Path()
+    openclaw_json = _read_json_if_exists(openclaw_json_path)
+    provider_names: List[str] = []
+    auth_profile_names: List[str] = []
+    if isinstance(openclaw_json, dict):
+        providers = (((openclaw_json.get("models") or {}).get("providers")) or {})
+        if isinstance(providers, dict):
+            provider_names = sorted(str(key) for key in providers.keys())
+        auth_profiles = (((openclaw_json.get("auth") or {}).get("profiles")) or {})
+        if isinstance(auth_profiles, dict):
+            auth_profile_names = sorted(str(key) for key in auth_profiles.keys())
+    runtime_hints: List[str] = []
+    for hint_path in [
+        Path(OPENCLAW_REPO_PATH).expanduser() / ".openclaw-workspace" / ".venv39" / "Lib" / "site-packages" / "pywechat" / "WechatAuto.py",
+        Path(OPENCLAW_REPO_PATH).expanduser() / ".openclaw-workspace" / ".venv39" / "Lib" / "site-packages" / "pyweixin" / "WechatAuto.py",
+        Path(OPENCLAW_REPO_PATH).expanduser() / ".openclaw-workspace" / ".trash" / "WeChatSetup.exe",
+        Path(OPENCLAW_REPO_PATH).expanduser() / ".openclaw-workspace" / ".trash" / "WeChatWin_4.1.7.exe",
+        repo_root / "assistant_data" / "openclaw_state" / "openclaw-weixin" / "accounts.json",
+        local_appdata / "Tencent" / "WeChat" / "WeChat.exe" if str(local_appdata).strip() else Path(),
+        Path(r"C:\Program Files\Tencent\WeChat\WeChat.exe"),
+        Path(r"C:\Program Files (x86)\Tencent\WeChat\WeChat.exe"),
+    ]:
+        try:
+            if hint_path.exists():
+                runtime_hints.append(str(hint_path))
+        except Exception:
+            continue
+    state_entries: List[str] = []
+    if state_dir.exists():
+        try:
+            state_entries = sorted(entry.name for entry in state_dir.iterdir())[:20]
+        except Exception:
+            state_entries = []
+    accounts_index = state_dir / "accounts.json"
+    accounts_payload = _read_json_if_exists(accounts_index)
+    return {
+        "state_dir": str(state_dir),
+        "candidate_state_dirs": candidate_dirs,
+        "state_dir_exists": state_dir.exists(),
+        "state_entries": state_entries,
+        "accounts_index_present": accounts_index.exists(),
+        "accounts_index_payload": accounts_payload if isinstance(accounts_payload, list) else [],
+        "qr_assets": _list_wechat_qr_assets(state_dir),
+        "openclaw_state_json_path": str(openclaw_json_path) if str(openclaw_json_path).strip() else None,
+        "openclaw_provider_names": provider_names,
+        "openclaw_auth_profiles": auth_profile_names,
+        "runtime_hints": runtime_hints,
+        "likely_missing_bridge": not state_dir.exists() and "wecom" not in provider_names and "wechat" not in provider_names,
+        "hint": (
+            "当前只有镜像发送代码，未发现真实 openclaw-weixin 状态目录；现有 openclaw.json 里也没有 wechat/wecom provider。"
+            if (not state_dir.exists() and "wecom" not in provider_names and "wechat" not in provider_names)
+            else ""
+        ),
+    }
+
+
 def _build_wechat_status_payload() -> Dict[str, Any]:
     state_dir = _resolve_wechat_state_dir()
     qr_path = _find_wechat_qr_asset()
     target = _resolve_wechat_mirror_target()
+    diagnostics = _wechat_runtime_diagnostics()
     if target:
         return {
             "ok": True,
@@ -2404,6 +2525,7 @@ def _build_wechat_status_payload() -> Dict[str, Any]:
             "linked": True,
             "account_id": target.get("account_id"),
             "user_id": target.get("user_id"),
+            "diagnostics": diagnostics,
         }
     if qr_path and qr_path.exists():
         return {
@@ -2415,6 +2537,7 @@ def _build_wechat_status_payload() -> Dict[str, Any]:
             "linked": False,
             "account_id": None,
             "user_id": None,
+            "diagnostics": diagnostics,
         }
     if state_dir.exists():
         return {
@@ -2426,6 +2549,7 @@ def _build_wechat_status_payload() -> Dict[str, Any]:
             "linked": False,
             "account_id": None,
             "user_id": None,
+            "diagnostics": diagnostics,
         }
     return {
         "ok": True,
@@ -2436,6 +2560,7 @@ def _build_wechat_status_payload() -> Dict[str, Any]:
         "linked": False,
         "account_id": None,
         "user_id": None,
+        "diagnostics": diagnostics,
     }
 
 
