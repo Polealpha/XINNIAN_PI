@@ -152,6 +152,7 @@ from .settings import (
     ASSISTANT_BRIDGE_TOKEN,
     ASSISTANT_BRIDGE_USER_ID,
     AUTH_SECRET_KEY,
+    OPENCLAW_STATE_DIR,
     OPENCLAW_PREFERRED_CODE_MODEL,
     OPENCLAW_PREFERRED_MODE,
 )
@@ -2347,7 +2348,24 @@ def _resolve_wechat_mirror_target() -> Optional[Dict[str, str]]:
 
 
 def _resolve_wechat_state_dir() -> Path:
-    return Path(__file__).resolve().parents[1] / "assistant_data" / "openclaw_state" / "openclaw-weixin"
+    repo_default = Path(__file__).resolve().parents[1] / "assistant_data" / "openclaw_state" / "openclaw-weixin"
+    candidates: List[Path] = []
+    configured_state = str(OPENCLAW_STATE_DIR or "").strip()
+    if configured_state:
+        candidates.append(Path(configured_state).expanduser().resolve() / "openclaw-weixin")
+    local_appdata = os.environ.get("LOCALAPPDATA") or ""
+    if local_appdata:
+        candidates.append(
+            Path(local_appdata).expanduser().resolve() / "EmoResonance" / "assistant_data" / "openclaw_state" / "openclaw-weixin"
+        )
+    candidates.append(repo_default)
+    for candidate in candidates:
+        try:
+            if candidate.exists():
+                return candidate
+        except Exception:
+            continue
+    return candidates[0]
 
 
 def _find_wechat_qr_asset() -> Optional[Path]:
